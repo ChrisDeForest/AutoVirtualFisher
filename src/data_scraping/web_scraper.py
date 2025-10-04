@@ -43,7 +43,7 @@ def process_urls(links: list, path: int) -> list:   # downloading or loading htm
                     soup_objs.append(BeautifulSoup(f.read(), "lxml"))
     return soup_objs
 
-def process_commands(soups_cmds: list) -> bool: # processing commands.html
+def process_and_parse_commands(soups_cmds: list) -> bool: # processing commands.html
     soup = soups_cmds[0]
     subtitles = []
     all_commands = []
@@ -84,23 +84,24 @@ def process_commands(soups_cmds: list) -> bool: # processing commands.html
         json.dump(data, f, ensure_ascii=False, indent=2)
     return True # function succeeded
 
-def process_all_pages(soups_all: list) -> bool: # processing all_pages.html
+def process_all_pages(soups_all: list) -> list: # processing all_pages.html
     soup = soups_all[1]
     lst = soup.select_one(".mw-allpages-chunk")
     page_urls = []
+    useful_urls = ["Artifact_Magnet", "Bait", "Biome", "Boats", "Booster", "Boosts", "Buff", "Charms", "Chest",
+                   "Clan", "Color", "Commands", "Daily", "Event", "Exotic_Fish", "Fish", "Fish_(Bait)", "Leaderboard",
+                   "Leeches", "Level", "Magic_Bait", "Magnet", "Money", "Pet", "Prestige", "Prestige_Shop", "Quests",
+                   "Rods", "Settings", "Shop", "Special", "Support_Bait", "Tip", "Upgrades", "Verify", "Vote",
+                   "Wise_Bait", "Worker", "Worms"]
     for element in lst.select("li a"):
-        page_urls.append("https://virtual-fisher.fandom.com/wiki/" + element.get_text(strip=True).replace(" ", "_"))
+        if element.get_text(strip=True).replace(" ", "_") in useful_urls:   # lil redundant but it does its job
+            page_urls.append("https://virtual-fisher.fandom.com/wiki/" + element.get_text(strip=True).replace(" ", "_"))
     soups_v2 = process_urls(page_urls, 1)
-    # todo from here
-    # - separate out the pages that i actually want (somehow)
-    # - process data on pages in a generic way when possible (will need special cases)
-    # - export all into json in a new folder
-
-    return False
+    return soups_v2
 
 if __name__ == "__main__":
     urls = ["https://virtualfisher.com/commands", "https://virtual-fisher.fandom.com/wiki/Special:AllPages"]
     soups_v1 = process_urls(urls, 0)
-    # print("Commands processed!") if process_commands(soups_v1) else print("Commands not processed!")
-    # print("All pages processed!") if process_all_pages(soups_v1) else print("All pages not processed!")
+    print("Commands processed!") if process_and_parse_commands(soups_v1) else print("Commands not processed!")
+    print("All pages processed!") if process_all_pages(soups_v1) else print("All pages not processed!")
     process_all_pages(soups_v1)
