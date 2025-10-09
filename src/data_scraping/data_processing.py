@@ -179,8 +179,35 @@ def parse_pet(soups_pet):
     pet_data["xp_required"] = xp_dict   # adding xp_dict to overall json
     with open("src/data/json/pet.json", "w") as f:
         json.dump(pet_data, f, ensure_ascii=False, indent=2)
-
-
+# soup 2
+def parse_biome(soups_biome):   # this parses biome related information
+    soup = soups_biome[2]
+    biomes = ["River", "Volcanic", "Ocean", "Sky", "Space", "Alien"]
+    uls = soup.select(".page__main")[0].select("ul")[2:-1]
+    def split_items(s):
+        s = s.replace(" and ", ", ")
+        return [x.strip() for x in s.split(",") if x.strip()]
+    def strip_parens(s):
+        return re.sub(r"\([^)]*\)", "", s).strip()
+    biome = {}
+    for i, ul in enumerate(uls):
+        li = [x.get_text(" ", strip=True) for x in ul.select("li")]
+        lvl = 0 if "Always available" in li[0] else int(re.search(r"\d+", li[0]).group())
+        code = li[1].split()[-1]
+        cd = 0.0 if "Base cooldown" in li[2] else float(li[2].split("s")[0])
+        rods = split_items(li[3].replace("Used with", "").replace("rods", "").strip())
+        can = [strip_parens(x).replace(" fish", "").strip() for x in
+               split_items(li[4].replace("Can catch", "").strip())]
+        if li[5].startswith("No treasure restrictions"): no_treasure_restrictions, cannot = True, []
+        else: no_treasure_restrictions, cannot = False, [strip_parens(x).replace(" fish", "").strip() for x
+                                                         in split_items(li[5].replace("Cannot catch", "")
+                                                                        .replace("lava or","lava,").strip())]
+        mult = float(li[6].split("x")[0])
+        biome[biomes[i]] = {"level_req": lvl, "code": code, "cooldown_s": cd, "rods": rods, "can_catch": can,
+                          "cannot_catch": cannot, "no_treasure_restrictions": no_treasure_restrictions,
+                          "fish_mult": mult}
+    with open("src/data/json/biome.json", "w") as f:
+        json.dump({"biome": biome}, f, ensure_ascii=False, indent=2)
 
 if __name__ == "__main__":
     urls = ["https://virtualfisher.com/commands", "https://virtual-fisher.fandom.com/wiki/Special:AllPages"]
@@ -196,11 +223,13 @@ if __name__ == "__main__":
     print("All levels parsed!")
     parse_pet(soups_v2)
     print("All pets parsed!")
+    parse_biome(soups_v2)
+    print("All biomes parsed!")
 
     # todo from here
     # - separate out the pages that i actually want (somehow) todo DONE
     # - process data on pages in a generic way when possible (will need special cases) todo WIP
     # - export all into json in a new folder todo WIP
-    #   todo next ones to parse: biome (2), boats (3), daily (12), quests (26), rods (27), prestige (24),
+    #   todo next ones to parse: boats (3), daily (12), quests (26), rods (27), prestige (24),
     #   todo prestige shop (25), upgrades (33), boosts (5), special (30), clan (9)
-    # #'s processed - 0 1 15 16 18 19 20 21 23 31 36 38
+    # #'s processed - 0 1 2 15 16 18 19 20 21 23 31 36 38
