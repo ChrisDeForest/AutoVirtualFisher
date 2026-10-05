@@ -4,3 +4,6 @@
 .env/*
 data/
 *__pycache__*
+.claude/
+
+docs/
