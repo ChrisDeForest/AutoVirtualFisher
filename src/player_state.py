@@ -17,7 +17,7 @@ ALIASES = {'current biome': 'biome', 'current bait': 'bait', 'current pet': 'pet
            'xp to next level': 'xp_to_next_level', 'xp': 'xp_multiplier',
            'cooldown': 'fishing_cooldown'}
 NUMBER = r'[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?'
-PET_REFERENCE_PATH = Path(__file__).parent / 'data' / 'json' / 'pet.json'
+PET_REFERENCE_PATH = Path(__file__).parent / 'reference' / 'pet.json'
 PET_STAT_NAMES = {
     'fish_catch_pct': 'Fish catch',
     'fish_quality_pct': 'Fish quality',
