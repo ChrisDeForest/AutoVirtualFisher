@@ -1,0 +1,10 @@
+Prestige Shop
+
+Spend your Azure Fish here. (/prestige buy)
+You have: 0 Azure Fish.
+
+International Ties - 10% boost to every multiplier. - MAXED
+Business Education - 40% sell boost. - MAXED
+Fish Whisperer - 25% more fish caught. - MAXED
+Ancient One - 35% more experience from all sources. - MAXED
+UNLOCKED AT PRESTIGE 5: Virtual Fisher - 40% more high quality fish, and a 20% sell price and XP buff.

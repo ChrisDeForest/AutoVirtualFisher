@@ -1,0 +1,22 @@
+Inventory of BugParticle
+Balance: $2,343,033.
+Level 131, 270,862/477,500 XP to next level.
+Currently using 🎣 Golden Rod.
+Current biome: 🌊 Ocean
+Bait: 🔮 Magic Bait (9,509)
+
+Fish Inventory
+4 🐠 Tropical Fish
+12 🐡 Pufferfish
+2 🦑 Squid
+6 🐢 Turtle
+Fish Value: $137,270
+
+Exotic Fish
+603 🐠 Gold Fish
+54 🐠 Emerald Fish
+70 🐠 Lava Fish
+7 🐠 Diamond Fish
+
+Special
+10 🪝 Hooks

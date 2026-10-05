@@ -1,7 +1,29 @@
-from web_scraper import process_urls, process_and_parse_commands, process_all_pages
-import os, json, math, re
+import json
+import math
+import re
+if __package__:
+    from .web_scraper import process_urls, process_and_parse_commands, process_all_pages
+else:
+    from web_scraper import process_urls, process_and_parse_commands, process_all_pages
+from pathlib import Path
+import argparse
 
-# soups 0 1 16 18 20 21 31 36 38
+
+def require_page(pages, name):
+    try:
+        return pages[name]
+    except KeyError as exc:
+        raise ValueError(f"Missing required wiki page: {name}") from exc
+
+
+def write_json(filename, data):
+    path = Path("src/data/json") / filename
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.replace(path)
+
+
 def parse_all_baits(soups_baits):  # this parses all 8 types of baits as their Wiki pages are similar
     # this ALSO parses the individual 'Bait' that will be a superclass eventually
     def norm_effects(effects):  # this is used to normalize bait features for better json
@@ -44,8 +66,29 @@ def parse_all_baits(soups_baits):  # this parses all 8 types of baits as their W
 
     file_names = ["artifact_magnet", "fish_(bait)", "leeches", "magic_bait",
                   "magnet", "support_bait", "wise_bait", "worms"]
-    soups_baits = [soups_baits[i] for i in [0, 16, 18, 20, 21, 31, 36, 38]]
-    bait_cost = [4, 25, 25, 35, 70, 75, 250, 500]
+    names = ["Artifact_Magnet", "Fish_(Bait)", "Leeches", "Magic_Bait",
+             "Magnet", "Support_Bait", "Wise_Bait", "Worms"]
+    prices = {}
+    for table in require_page(soups_baits, "Bait").select("table"):
+        first_row = table.select_one("tr")
+        if first_row is None:
+            continue
+        headers = [cell.get_text(" ", strip=True).lower() for cell in first_row.select("th, td")]
+        if "bait name" not in headers or "cost" not in headers:
+            continue
+        for row in table.select("tr")[1:]:
+            cells = row.select("td")
+            if len(cells) != len(headers):
+                raise ValueError("Bait: unexpected price table columns")
+            name = cells[headers.index("bait name")].get_text(" ", strip=True).replace(" ", "_")
+            name = "Fish_(Bait)" if name == "Fish" else name
+            price = cells[headers.index("cost")].get_text(strip=True).replace(",", "").replace("$", "").strip()
+            prices[name] = int(price)
+    missing = set(names) - prices.keys()
+    if missing:
+        raise ValueError(f"Bait: missing prices for {', '.join(sorted(missing))}")
+    bait_cost = [prices[name] for name in names]
+    soups_baits = [require_page(soups_baits, name) for name in names]
     num_to_drop = [1, 2, 1, 3, 1, 1, 2, 1]
 
     for i, soup in enumerate(soups_baits):  # creating each bait's json
@@ -61,35 +104,43 @@ def parse_all_baits(soups_baits):  # this parses all 8 types of baits as their W
                 para = para[-4:] + " " + para[:-6]
             para_text.append(para)
         para_text = {**{"cost": bait_cost[i]}, **norm_effects(para_text)}   # dict unpacking magic woah
-        if not os.path.exists("src/data/json/bait"): os.makedirs("src/data/json/bait")
-        with open("src/data/json/bait/" + file_names[i] + ".json", "w") as f:
-            json.dump({f"{file_names[i]}" :para_text}, f, ensure_ascii=False, indent=2)
+        write_json("bait/" + file_names[i] + ".json", {file_names[i]: para_text})
 
     # creating the overall bait json
     bait = {"limit": 1000000, "consumed_on_use": 1, "not_consumed_chance": 5, "not_consumed_chance_limit":45}
-    with open("src/data/json/bait/bait.json", "w") as f:
-        json.dump({"bait": bait}, f, ensure_ascii=False, indent=2)
-# soup 15
-def parse_fish(soups_fish): # this parses information about all fish types
-    soup = soups_fish[15]
-    table_headers = ["Type", "River", "Volcanic", "Ocean", "Sky", "Space", "Alien", "Base XP", "Base Sell Price"]
+    write_json("bait/bait.json", {"bait": bait})
+def parse_fish(soups_fish):
+    soup = require_page(soups_fish, "Fish")
+    headers = ["Type", "River", "Volcanic", "Ocean", "Sky", "Space", "Alien", "Base XP", "Base Sell Price"]
+    table = None
+    for candidate in soup.select("table"):
+        first_row = candidate.select_one("tr")
+        if first_row is None:
+            continue
+        labels = [cell.get_text(" ", strip=True).lower() for cell in first_row.select("th, td")]
+        if labels and labels[0] in ("type", "type / biome") and labels[1:] == [h.lower() for h in headers[1:]]:
+            table = candidate
+            break
+    if table is None:
+        raise ValueError("Fish: expected fish table headers were not found")
     fish = {}
-    for i, tr in enumerate(soup.select("tr")):
-        if i == 0: continue     # skip first entry, is just table headers
-        row, row_dict = [], {}
-        current_fish = ""
-        for td in tr.select("td"):
-            if td.get_text(strip=True) == "": row.append(0)
-            elif td.get_text(strip=True) == "+": row.append(1)
-            else: row.append(td.get_text(strip=True))
-        for j, r in enumerate(row):
-            if j == 0: current_fish = r
-            if j in [7, 8]: row_dict[table_headers[j]] = int(r.replace(",", ""))
-            else: row_dict[table_headers[j]] = r
-        fish[current_fish] = row_dict
-    with open("src/data/json/fish.json", "w") as f:
-        json.dump({"fish": fish}, f, ensure_ascii=False, indent=2)
-# soup 19
+    for tr in table.select("tr")[1:]:
+        cells = tr.select("td")
+        if not cells:
+            continue
+        if len(cells) != len(headers):
+            raise ValueError("Fish: unexpected number of table columns")
+        values = [td.get_text(" ", strip=True) for td in cells]
+        row = dict(zip(headers, values))
+        for header in headers[1:7]:
+            row[header] = 1 if row[header] == "+" else (0 if not row[header] else row[header])
+        for header in headers[7:]:
+            row[header] = int(row[header].replace(",", ""))
+        fish[values[0]] = row
+    if not fish:
+        raise ValueError("Fish: no fish rows found")
+    write_json("fish.json", {"fish": fish})
+
 def parse_level(): # this parses all the information related to leveling (maybe complicated)
     # parsing isn't necessary here as I wanted to expand the information present in the data fully
     def xp_for_level(x):
@@ -137,11 +188,9 @@ def parse_level(): # this parses all the information related to leveling (maybe 
         return {"Levels": levels}
 
     data = build_levels(10000)
-    with open("src/data/json/level.json", "w") as f:
-        json.dump(data, f, separators=(",", ":"), ensure_ascii=False, indent=2)
-# soup 23
+    write_json("level.json", data)
 def parse_pet(soups_pet):
-    soup = soups_pet[23]
+    soup = require_page(soups_pet, "Pet")
     pet_data = {}   # overarching dict for all pet data
     def pct_to_float(s):
         s = s.strip()
@@ -150,8 +199,12 @@ def parse_pet(soups_pet):
     pets = {}
     for tr in soup.select("tbody")[0].select("tr"):
         if tr.find("th"): continue
-        cells = [td.get_text(strip=True) for td in tr.select("td")]
-        if not cells or len(cells) < 2: continue
+        cells = [td.get_text(strip=True) for td in tr.select("td")
+                 for _ in range(int(td.get("colspan", 1)))]
+        if not cells:
+            continue
+        if len(cells) != 7:
+            raise ValueError("Pet: expected seven columns after expanding merged cells")
         name, desc = cells[0], cells[1]
         row = {"description": desc, "fish_catch_pct": pct_to_float(cells[2]) if len(cells) > 2 else 0.0,
                "fish_quality_pct": pct_to_float(cells[3]) if len(cells) > 3 else 0.0,
@@ -177,11 +230,9 @@ def parse_pet(soups_pet):
     for i, xp in enumerate(pet_required_xp):
         xp_dict[i + 2] = xp
     pet_data["xp_required"] = xp_dict   # adding xp_dict to overall json
-    with open("src/data/json/pet.json", "w") as f:
-        json.dump(pet_data, f, ensure_ascii=False, indent=2)
-# soup 2
+    write_json("pet.json", pet_data)
 def parse_biome(soups_biome):   # this parses biome related information
-    soup = soups_biome[2]
+    soup = require_page(soups_biome, "Biome")
     biomes = ["River", "Volcanic", "Ocean", "Sky", "Space", "Alien"]
     uls = soup.select(".page__main")[0].select("ul")[2:-1]
     def split_items(s):
@@ -206,14 +257,16 @@ def parse_biome(soups_biome):   # this parses biome related information
         biome[biomes[i]] = {"level_req": lvl, "code": code, "cooldown_s": cd, "rods": rods, "can_catch": can,
                           "cannot_catch": cannot, "no_treasure_restrictions": no_treasure_restrictions,
                           "fish_mult": mult}
-    with open("src/data/json/biome.json", "w") as f:
-        json.dump({"biome": biome}, f, ensure_ascii=False, indent=2)
+    write_json("biome.json", {"biome": biome})
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Export Virtual Fisher game data")
+    parser.add_argument("--refresh", action="store_true", help="Download fresh HTML instead of using cached pages")
+    args = parser.parse_args()
     urls = ["https://virtualfisher.com/commands", "https://virtual-fisher.fandom.com/wiki/Special:AllPages"]
-    soups_v1 = process_urls(urls, 0)
+    soups_v1 = process_urls(urls, 0, refresh=args.refresh)
     print("Commands processed!") if process_and_parse_commands(soups_v1) else print("Commands not processed!")
-    soups_v2 = process_all_pages(soups_v1)
+    soups_v2 = process_all_pages(soups_v1, refresh=args.refresh)
     print("All pages processed!")
     parse_all_baits(soups_v2)           # done
     print("All baits parsed!")
@@ -230,6 +283,5 @@ if __name__ == "__main__":
     # - separate out the pages that i actually want (somehow) todo DONE
     # - process data on pages in a generic way when possible (will need special cases) todo WIP
     # - export all into json in a new folder todo WIP
-    #   todo next ones to parse: boats (3), daily (12), quests (26), rods (27), prestige (24),
-    #   todo prestige shop (25), upgrades (33), boosts (5), special (30), clan (9)
-    # #'s processed - 0 1 2 15 16 18 19 20 21 23 31 36 38
+    # Next parsers: boats, daily, quests, rods, prestige, prestige shop,
+    # upgrades, boosts, special, and clan.

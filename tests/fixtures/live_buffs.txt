@@ -1,0 +1,8 @@
+bugparticle's current multipliers (including bait):
+Sell price: 4.83x
+Fish catch: 2.25x
+Fish quality: 3.23x
+Treasure chance: 1.95x
+Treasure quality: 1.60x
+XP Multiplier: 1.13x
+Fishing cooldown: 2.8s.

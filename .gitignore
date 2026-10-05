@@ -7,3 +7,6 @@ data/
 .claude/
 
 docs/
+
+.venv
+.uv-cache
