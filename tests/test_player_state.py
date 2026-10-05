@@ -9,6 +9,14 @@ from src.player_state import display_value, parse_responses
 
 
 class PlayerStateTests(unittest.TestCase):
+    def test_profile_heading_records_account_name(self):
+        result = parse_responses(profile='Inventory of BugParticle')
+        self.assertEqual(result['profile']['account_name'], 'BugParticle')
+
+    def test_profile_heading_strips_discord_badge(self):
+        result = parse_responses(profile='Inventory of epicmouse :badge_bronze:')
+        self.assertEqual(result['profile']['account_name'], 'epicmouse')
+
     def test_unknown_values_inside_a_mapping_are_displayed_as_unknown(self):
         self.assertEqual(display_value({'International Ties': None}), 'International Ties: Unknown')
         self.assertEqual(display_value({'International Ties': True, 'Virtual Fisher': False}),
@@ -185,7 +193,9 @@ Fishing cooldown: 3.5 seconds''')
         self.assertIsNone(result['buffs']['fish_catch'])
 
     def test_empty_input_is_reported(self):
-        self.assertTrue(parse_responses()['warnings'])
+        result = parse_responses()
+        self.assertTrue(result['warnings'])
+        self.assertIsNone(result['profile']['account_name'])
 
     def test_cli_json_matches_shared_parser(self):
         with tempfile.TemporaryDirectory() as folder:

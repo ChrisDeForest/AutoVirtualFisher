@@ -7,7 +7,7 @@ import re
 import json
 from pathlib import Path
 
-PROFILE_FIELDS = ('balance', 'level', 'prestige', 'xp_current', 'xp_required',
+PROFILE_FIELDS = ('account_name', 'balance', 'level', 'prestige', 'xp_current', 'xp_required',
                   'xp_to_next_level', 'rod', 'biome', 'bait', 'bait_quantity', 'pet', 'fish_value')
 BUFF_FIELDS = ('sell_price', 'fish_catch', 'fish_quality', 'treasure_chance',
                'treasure_quality', 'xp_multiplier', 'fishing_cooldown')
@@ -110,6 +110,9 @@ def parse_responses(profile='', buffs='', prestige_shop='', pet=''):
                 continue
             if section == 'profile':
                 if line.startswith('Inventory of '):
+                    account_name = line.removeprefix('Inventory of ').strip()
+                    if account_name:
+                        assign(section, 'account_name', account_name)
                     continue
                 headings = {'Fish Inventory': 'fish', 'Exotic Fish': 'exotic_fish', 'Special': 'special'}
                 if line in headings:
