@@ -140,3 +140,75 @@ def save_snapshot(state: dict, root: Path = DEFAULT_SNAPSHOT_ROOT, mode: str = '
         if temporary.exists():
             temporary.unlink()
     return {'status': 'saved', 'snapshot': snapshot, 'warnings': history_warnings}
+
+
+def latest_full_snapshots(account_name: str, root: Path = DEFAULT_SNAPSHOT_ROOT,
+                          count: int = 2) -> tuple[list[dict], list[str]]:
+    history, warnings = load_history(account_name, root)
+    return [item for item in history if item.get('validity') == 'full'][:count], warnings
+
+
+def _scalar_change(older, newer) -> dict:
+    numeric = lambda value: isinstance(value, (int, float)) and not isinstance(value, bool)
+    if not numeric(older) or not numeric(newer):
+        return {'status': 'unknown'}
+    return {'status': 'ok', 'from': older, 'to': newer, 'delta': newer - older}
+
+
+def _inventory_change(older, newer) -> dict:
+    if not isinstance(older, dict) or not isinstance(newer, dict):
+        return {'status': 'unknown'}
+    deltas = {}
+    for item in sorted(older.keys() & newer.keys(), key=str.casefold):
+        change = _scalar_change(older[item], newer[item])
+        if change['status'] == 'ok':
+            deltas[item] = change['delta']
+    return {'status': 'ok', 'deltas': deltas}
+
+
+def _pet_change(older, newer) -> dict:
+    if not isinstance(older, dict) or not isinstance(newer, dict):
+        return {'status': 'unknown'}
+    changes = {}
+    for pet in sorted(older.keys() & newer.keys(), key=str.casefold):
+        if not isinstance(older[pet], dict) or not isinstance(newer[pet], dict):
+            continue
+        changes[pet] = {
+            'level': _scalar_change(older[pet].get('level'), newer[pet].get('level')),
+            'xp_current': _scalar_change(older[pet].get('xp_current'), newer[pet].get('xp_current')),
+        }
+    return changes
+
+
+def compare_latest(account_name: str, root: Path = DEFAULT_SNAPSHOT_ROOT) -> dict:
+    snapshots, warnings = latest_full_snapshots(account_name, root, count=2)
+    newer = snapshots[0] if snapshots else None
+    older = snapshots[1] if len(snapshots) > 1 else None
+    if older is None:
+        return {'status': 'needs_another_full_snapshot', 'older': None, 'newer': newer,
+                'changes': {}, 'warnings': warnings}
+    old_state, new_state = older['state'], newer['state']
+    old_profile, new_profile = old_state.get('profile', {}), new_state.get('profile', {})
+    old_inventory, new_inventory = old_state.get('inventory', {}), new_state.get('inventory', {})
+    old_bait, new_bait = old_profile.get('bait'), new_profile.get('bait')
+    if old_bait is None or new_bait is None:
+        bait = {'status': 'unknown'}
+    elif old_bait != new_bait:
+        bait = {'status': 'changed', 'from': old_bait, 'to': new_bait}
+    else:
+        quantity = _scalar_change(old_profile.get('bait_quantity'), new_profile.get('bait_quantity'))
+        bait = ({'status': 'ok', 'bait': new_bait, 'delta': quantity['delta']}
+                if quantity['status'] == 'ok' else {'status': 'unknown'})
+    changes = {
+        field: _scalar_change(old_profile.get(field), new_profile.get(field))
+        for field in ('balance', 'level', 'xp_current', 'fish_value')
+    }
+    changes['bait'] = bait
+    changes['inventory'] = {
+        category: _inventory_change(old_inventory.get(category), new_inventory.get(category))
+        for category in ('fish', 'exotic_fish', 'special')
+    }
+    changes['pets'] = _pet_change(old_state.get('pets', {}).get('owned'),
+                                  new_state.get('pets', {}).get('owned'))
+    return {'status': 'ok', 'older': older, 'newer': newer, 'changes': changes,
+            'warnings': warnings}

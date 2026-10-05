@@ -1,11 +1,13 @@
 import json
+from copy import deepcopy
 from pathlib import Path
 import tempfile
 import unittest
 
 from src.player_state import parse_responses
-from src.player_snapshots import (account_key, list_accounts, load_history,
-                                  save_snapshot, validate_full_state)
+from src.player_snapshots import (account_key, compare_latest, latest_full_snapshots,
+                                  list_accounts, load_history, save_snapshot,
+                                  validate_full_state)
 
 
 def parsed_state(name='BugParticle', balance=100, level=2):
@@ -111,6 +113,83 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertEqual(len(warnings), 2)
         self.assertTrue(any('bad.json' in warning for warning in warnings))
         self.assertTrue(any('future.json' in warning for warning in warnings))
+
+
+class SnapshotComparisonTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def _state(self, balance, level=10):
+        state = parsed_state(balance=balance, level=level)
+        state['profile'].update({'xp_current': 100, 'fish_value': 1000,
+                                 'bait': 'Worms', 'bait_quantity': 10})
+        state['inventory'] = {'fish': {'Fish': 5}, 'exotic_fish': {'Gold Fish': 1},
+                              'special': {'Hooks': 3}}
+        state['pets']['owned'] = {
+            'Dolphin': {'level': 5, 'description': 'XP', 'xp_current': 20,
+                        'xp_required': 100, 'xp_to_next_level': 80}}
+        return state
+
+    def test_compare_latest_reports_scalar_inventory_and_pet_deltas(self):
+        older = self._state(100)
+        newer = deepcopy(older)
+        newer['profile'].update({'balance': 150, 'level': 11, 'xp_current': 140,
+                                 'fish_value': 1200, 'bait_quantity': 7})
+        newer['inventory']['fish']['Fish'] = 7
+        newer['inventory']['exotic_fish']['Gold Fish'] = 2
+        newer['inventory']['special']['Hooks'] = 1
+        newer['pets']['owned']['Dolphin'].update({'level': 6, 'xp_current': 35})
+        save_snapshot(older, self.root, mode='manual')
+        save_snapshot(newer, self.root, mode='manual')
+
+        result = compare_latest('BugParticle', self.root)
+        self.assertEqual(result['status'], 'ok')
+        self.assertEqual(result['changes']['balance']['delta'], 50)
+        self.assertEqual(result['changes']['level']['delta'], 1)
+        self.assertEqual(result['changes']['xp_current']['delta'], 40)
+        self.assertEqual(result['changes']['fish_value']['delta'], 200)
+        self.assertEqual(result['changes']['bait'], {'status': 'ok', 'bait': 'Worms', 'delta': -3})
+        self.assertEqual(result['changes']['inventory']['fish']['deltas'], {'Fish': 2})
+        self.assertEqual(result['changes']['inventory']['exotic_fish']['deltas'], {'Gold Fish': 1})
+        self.assertEqual(result['changes']['inventory']['special']['deltas'], {'Hooks': -2})
+        self.assertEqual(result['changes']['pets']['Dolphin']['level']['delta'], 1)
+        self.assertEqual(result['changes']['pets']['Dolphin']['xp_current']['delta'], 15)
+
+    def test_compare_keeps_missing_values_unknown_and_reports_bait_change(self):
+        older = self._state(100)
+        newer = self._state(110)
+        older['profile']['fish_value'] = None
+        newer['profile'].update({'bait': 'Magic Bait', 'bait_quantity': 99})
+        newer['inventory']['fish'] = None
+        save_snapshot(older, self.root, mode='manual')
+        save_snapshot(newer, self.root, mode='manual')
+
+        changes = compare_latest('BugParticle', self.root)['changes']
+        self.assertEqual(changes['fish_value'], {'status': 'unknown'})
+        self.assertEqual(changes['bait'], {'status': 'changed', 'from': 'Worms', 'to': 'Magic Bait'})
+        self.assertNotIn('delta', changes['bait'])
+        self.assertEqual(changes['inventory']['fish'], {'status': 'unknown'})
+
+    def test_partial_snapshots_are_excluded(self):
+        save_snapshot(self._state(100), self.root, mode='manual')
+        partial = parse_responses(pet='You have no pets!')
+        save_snapshot(partial, self.root, mode='manual', account_name='BugParticle')
+        save_snapshot(self._state(125), self.root, mode='manual')
+        snapshots, warnings = latest_full_snapshots('BugParticle', self.root)
+        self.assertEqual([item['state']['profile']['balance'] for item in snapshots], [125, 100])
+        self.assertEqual(warnings, [])
+        self.assertEqual(compare_latest('BugParticle', self.root)['changes']['balance']['delta'], 25)
+
+    def test_compare_requires_two_full_snapshots(self):
+        save_snapshot(self._state(100), self.root)
+        result = compare_latest('BugParticle', self.root)
+        self.assertEqual(result['status'], 'needs_another_full_snapshot')
+        self.assertIsNone(result['older'])
+        self.assertIsNotNone(result['newer'])
 
 
 if __name__ == '__main__':
