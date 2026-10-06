@@ -64,25 +64,44 @@ def capture_messages(lines: list[str]) -> list[dict]:
         if not body:
             continue
         kinds = [found for found in (_kind(_clean(line)) for line in body) if found]
-        messages.append({'kind': kinds[0] if kinds else None, 'lines': body})
+        kind = kinds[0] if kinds else None
+        messages.append({'kind': kind, 'lines': body, 'key': (kind, _understood(kind, body))})
     return messages
 
 
-def new_messages(previous: list | None, current: list) -> list | None:
-    """Return messages below the overlap with the previous capture; None when the views do not overlap.
+def _understood(kind, lines):
+    """The lines the parser understands. Matching captures on these ignores stray text such as the message box."""
+    text = '\n'.join(lines)
+    if kind == 'fishing':
+        unknown = {warning.removeprefix('Unrecognized line: ') for warning in parse_fishing(text)['warnings']}
+        return tuple(line for line in lines if _clean(line) not in unknown)
+    if kind is not None:
+        unparsed = set(parse_responses(**{kind: text})['unparsed'].get(kind, []))
+        return tuple(line for line in lines if line not in unparsed)
+    return tuple(lines)
+
+
+def align_start(previous: list | None, current: list) -> int | None:
+    """Index in `current` where messages the previous capture did not show begin; None without overlap.
 
     Matching runs of messages (not individual texts) keeps identical results, such as two equal catches in a
     row, as separate trips. The current top message may be cut off, so alignment may skip it.
     """
     if previous is None:
-        return []
+        return len(current)
     for offset in (0, 1):
         visible = current[offset:]
         for start in range(len(previous)):
             overlap = previous[start:]
             if len(overlap) <= len(visible) and visible[:len(overlap)] == overlap:
-                return visible[len(overlap):]
+                return offset + len(overlap)
     return None
+
+
+def new_messages(previous: list | None, current: list) -> list | None:
+    """Return the messages below the overlap with the previous capture; None when the views do not overlap."""
+    start = align_start(previous, current)
+    return None if start is None else current[start:]
 
 
 def capture_discord() -> dict:
@@ -126,7 +145,7 @@ class LiveCapture:
         self.running = False
         self.account, self.bait = None, NOT_RECORDED
         self.state = 'Stopped.'
-        self.previous, self.misses = None, 0
+        self.previous, self.misses, self.held = None, 0, None
         self.latest = {}
         self.counts = {'trips': 0, 'sessions': 0, 'snapshots': 0, 'flagged': 0, 'ignored': 0}
         self.log = []
@@ -141,7 +160,7 @@ class LiveCapture:
             if self.running:
                 return
             self.account, self.bait = account, bait
-            self.previous, self.misses, self.latest = None, 0, {}
+            self.previous, self.misses, self.latest, self.held = None, 0, {}, None
             self.counts = dict.fromkeys(self.counts, 0)
             self.running, self.state = True, 'Starting: messages already on screen are treated as seen.'
             self._note(f'Started for {account}' + (f' with {bait}' if bait else ''))
@@ -153,6 +172,9 @@ class LiveCapture:
     def stop(self):
         with self.lock:
             if self.running:
+                if self.held is not None:
+                    self._process([self.held])
+                    self.held = None
                 self._note('Stopped')
             self.running, self.state = False, 'Stopped.'
             self.stop_event.set()
@@ -186,8 +208,9 @@ class LiveCapture:
             if not messages:
                 self.state = 'No Virtual Fisher messages visible in Discord.'
                 return
-            fresh = new_messages(self.previous, messages)
-            if fresh is None:
+            keys = [message['key'] for message in messages]
+            start = align_start(self.previous, keys)
+            if start is None:
                 self.misses += 1
                 if self.misses < RESYNC_AFTER:
                     self.state = ('Paused: the chat view moved (scrolled or another channel). Scroll back to the '
@@ -195,18 +218,35 @@ class LiveCapture:
                     return
                 # Messages the old view did not show may be new or may already be saved; let a person decide.
                 unplaced = list(messages)
-                for message in self.previous or []:
-                    if message in unplaced:
-                        unplaced.remove(message)
+                for key in self.previous or []:
+                    match = next((message for message in unplaced if message['key'] == key), None)
+                    if match:
+                        unplaced.remove(match)
                 for message in unplaced:
                     if message['kind']:
                         self._flag(message['kind'], '\n'.join(message['lines']),
                                    ['Seen after the chat view changed; it may already be saved or may be new.'])
                 self._note('View changed for a while; continuing from what is on screen now.')
-                fresh = []
+                self.misses, self.previous, self.held = 0, keys, None
+                self.state = f'Watching. Last capture {self.last_capture}.'
+                return
             self.misses = 0
-            self.previous = messages
-            self._process(fresh)
+            ready = []
+            if self.held is not None and start >= 1:
+                now = messages[start - 1]
+                # Process the held newest message once something follows it or it reads the same twice.
+                if start < len(messages) or now['lines'] == self.held['lines']:
+                    ready.append(now)
+                    self.held = None
+                else:
+                    self.held = now
+            fresh = messages[start:]
+            if fresh:
+                # The newest message may still change (rendering, or the message box below it), so wait.
+                ready += fresh[:-1]
+                self.held = fresh[-1]
+            self.previous = keys
+            self._process(ready)
             self.state = f'Watching. Last capture {self.last_capture}.'
 
     def _flag(self, kind, text, reasons):

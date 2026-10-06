@@ -67,6 +67,11 @@ class CleanupRuleTests(unittest.TestCase):
         self.assertEqual(self.clean('Tuna(Lv114)', 'Dolphin(Lvl 51)', 'Puffer(LvI 30)'),
                          ['Tuna(Lvl 14)', 'Dolphin(Lvl 51)', 'Puffer(Lvl 30)'])
 
+    def test_live_review_misreads(self):
+        # From the user's first live-capture review queue.
+        self.assertEqual(self.clean("5 'cod", 'Message@Virtual Fisher', 'Message @Virtual Fisher', '9 Salmon'),
+                         ['5 Cod', '9 Salmon'])
+
 
 if __name__ == '__main__':
     unittest.main()

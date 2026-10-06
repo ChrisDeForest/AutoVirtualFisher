@@ -75,6 +75,7 @@ def parse_fishing(text: str) -> dict:
                     _add(reward['items'], _name(item[2]), int(item[1]))
                 continue
             mode = None
+        in_catch_list = mode == 'catch'
         if mode == 'catch':
             catch = re.fullmatch(r'(\d{1,3}(?:,\d{3})+|\d+)\s+(.+)', line)
             if catch and _name(catch[2]):
@@ -121,7 +122,12 @@ def parse_fishing(text: str) -> dict:
             tally['bait_ran_out'].append(_name(match[1]))
             event(f'Ran out of {_name(match[1])}')
         elif not any(pattern.fullmatch(line) for pattern in SKIPPED):
-            pending = line
+            if in_catch_list:
+                # An unreadable catch line (e.g. OCR lost the count) must not end the list.
+                unrecognized(line)
+                mode = 'catch'
+            else:
+                pending = line
     if pending is not None:
         unrecognized(pending)
     if not text.strip():

@@ -88,8 +88,12 @@ clicked, or sent to Discord. Needs Windows and the OCR packages above.
   Desktop.
 - Messages already on screen when you start count as seen. Each capture is
   lined up against the previous one, and only messages below the overlap are
-  new, so identical results in a row still count as separate trips. A message
-  whose header is cut off at the top is ignored until it is fully visible.
+  new, so identical results in a row still count as separate trips. Captures
+  are matched on the lines the parsers understand, so stray text such as the
+  message box below the newest message cannot break the matching. The newest
+  message is processed once something follows it or it reads the same in two
+  captures in a row (or when you select **Stop**). A message whose header is
+  cut off at the top is ignored until it is fully visible.
 - Clean fishing results are saved as fishing sessions with your bait (until a
   "You ran out of …" line). Clean profile, buffs, prestige shop, and quests
   replies are saved as snapshots. Shop, boost, and "You don't have enough…"

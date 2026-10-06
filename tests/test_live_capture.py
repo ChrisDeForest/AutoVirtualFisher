@@ -88,21 +88,53 @@ class LiveRunTests(unittest.TestCase):
     def next_screen(self):
         return {'status': 'ok', 'lines': self.screens.pop(0)}
 
-    def run_screens(self, *screens, bait='Worms'):
+    def run_screens(self, *screens, bait='Worms', stop=True):
+        """Run one step per screen, then stop (which processes the held newest message).
+
+        Returns the status from just before stopping; self.states records the state after each step.
+        """
         self.screens = [sum(screen, []) for screen in screens]
+        self.states = []
         self.live.start('epicmouse', bait, thread=False)
         while self.screens:
             self.live.step()
-        return self.live.status()
+            self.states.append(self.live.status()['state'])
+        status = self.live.status()
+        if stop:
+            self.live.stop()
+        return status
+
+    def saved_trips(self):
+        return sum(session['tally']['trips'] for session in load_sessions('epicmouse', self.sessions)[0])
+
+    def test_message_box_text_does_not_break_alignment(self):
+        typing = fish(2, 2, 20)[:-3] + ['fishing is fun']  # newest result with the message box text below it
+        self.run_screens([fish(1, 1, 10)], [fish(1, 1, 10), typing], [fish(1, 1, 10), typing[:-1] + ['/fi']],
+                         [fish(1, 1, 10), fish(2, 2, 20)])
+        self.assertFalse(any(state.startswith('Paused') for state in self.states), self.states)
+        self.assertEqual(self.saved_trips(), 1)
+        self.assertEqual(list_items(self.review)[0], [])
+
+    def test_newest_message_waits_until_it_reads_the_same_twice(self):
+        typing = fish(2, 2, 20)[:-3] + ['fishing is fun']
+        self.run_screens([fish(1, 1, 10)], [fish(1, 1, 10), typing], stop=False)
+        self.assertEqual(self.saved_trips(), 0, 'held while it may still change')
+        self.screens = [sum([fish(1, 1, 10), fish(2, 2, 20)], [])] * 2
+        self.live.step()
+        self.assertEqual(self.saved_trips(), 0, 'it changed, so it is held again')
+        self.live.step()
+        self.assertEqual(self.saved_trips(), 1, 'the same in two captures')
+        self.live.stop()
+        self.assertEqual(self.saved_trips(), 1, 'not saved twice on stop')
 
     def test_baseline_is_not_saved_and_new_fishing_is(self):
-        status = self.run_screens([fish(7, 6, 94)], [fish(7, 6, 94), fish(8, 6, 98), fish(8, 6, 98)])
-        sessions = load_sessions('epicmouse', self.sessions)[0]
-        self.assertEqual(len(sessions), 1)
-        tally = sessions[0]['tally']
-        self.assertEqual(tally['trips'], 2, 'two identical results are two trips')
-        self.assertEqual([trip['bait'] for trip in tally['trip_details']], ['Worms', 'Worms'])
-        self.assertEqual(status['counts']['trips'], 2)
+        self.run_screens([fish(7, 6, 94)], [fish(7, 6, 94), fish(8, 6, 98), fish(8, 6, 98)])
+        trips = [trip for session in load_sessions('epicmouse', self.sessions)[0]
+                 for trip in session['tally']['trip_details']]
+        self.assertEqual(len(trips), 2, 'two identical results are two trips; the baseline is not saved')
+        self.assertEqual([trip['catches'] for trip in trips], [{'Salmon': 8, 'Cod': 6}] * 2)
+        self.assertEqual([trip['bait'] for trip in trips], ['Worms', 'Worms'])
+        self.assertEqual(self.live.status()['counts']['trips'], 2)
 
     def test_bait_stays_off_after_running_out(self):
         self.run_screens([fish(1, 1, 10)], [fish(1, 1, 10), fish(2, 2, 20, 'You ran out of worms.')],
@@ -149,13 +181,13 @@ class LiveRunTests(unittest.TestCase):
     def test_long_view_change_flags_instead_of_saving_or_skipping(self):
         from src.live_capture import RESYNC_AFTER
         moved = [fish(5, 5, 50), PROFILE]
-        self.run_screens([fish(1, 1, 10)], *([moved] * RESYNC_AFTER))
+        status = self.run_screens([fish(1, 1, 10)], *([moved] * RESYNC_AFTER))
         self.assertEqual(load_sessions('epicmouse', self.sessions)[0], [])
         self.assertEqual(load_history('epicmouse', self.snapshots)[0], [])
         items = list_items(self.review)[0]
         self.assertEqual(sorted(item['kind'] for item in items), ['fishing', 'profile'])
         self.assertTrue(all('may already be saved' in item['reasons'][0] for item in items))
-        self.assertIn('Watching', self.live.status()['state'])
+        self.assertIn('Watching', status['state'])
 
     def test_window_problems_are_reported(self):
         self.live = LiveCapture(self.snapshots, self.sessions, self.review,

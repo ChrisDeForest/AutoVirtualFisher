@@ -63,6 +63,12 @@ class FishingEdgeTests(unittest.TestCase):
         self.assertEqual(tally['warnings'], ['Unrecognized line: A strange wave appears',
                                              'Unrecognized line: Trailing mystery'])
 
+    def test_unreadable_catch_line_does_not_end_the_catch_list(self):
+        tally = parse_fishing('epicmouse9925\nYou caught:\nFish\n9 Salmon\n5 Cod\n+93 XP\nGlobal boost by Someone!')
+        self.assertEqual(tally['catches'], {'Salmon': 9, 'Cod': 5})
+        self.assertEqual(tally['fishing_xp'], 93)
+        self.assertEqual(tally['warnings'], ['Unrecognized line: Fish'])
+
     def test_custom_discord_emoji_and_markdown_are_cleaned(self):
         tally = parse_fishing('**You caught:**\n4 <:salmon:123456> Salmon\n+1,200 XP')
         self.assertEqual(tally['catches'], {'Salmon': 4})

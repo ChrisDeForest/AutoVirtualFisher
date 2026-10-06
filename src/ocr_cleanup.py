@@ -13,7 +13,7 @@ TIME = re.compile(r'\d{1,2}:\d{2}\s*[AP]M', re.I)
 # Rejects look-alikes such as the DM title "Virtual Fisher [fish" or the profile panel's "Virtual Fisher#7036".
 MESSAGE_HEADER = re.compile(r'Virtual Fisher(?:\s+[V✓]?\s*A?PP?)?(?:\s+\d{1,2}:\d{2}\s*[AP]M)?', re.I)
 # Discord chrome that can sit inside the chat column: the message box and the slash-command list.
-CHROME = re.compile(r'Message [@#].*|[/\[|]\w+')
+CHROME = re.compile(r'Message\s*[@#].*|[/\[|]\w+')
 
 
 def _pet_names():
@@ -60,6 +60,8 @@ def clean_ocr(lines: list[str], label: str) -> str:
         line = re.sub(r'^(' + '|'.join(map(re.escape, BUFF_LABELS)) + r')[.,;]\s', r'\1: ', line)
         # Emoji leave short lowercase fragments between a count or label and the name ("160 to Hooks").
         line = re.sub(r'^(\d[\d,]*|[^:]+:)\s+[a-z]{1,2}\s+(?=[A-Z])', r'\1 ', line)
+        # ...or punctuation stuck to the name ("5 'cod").
+        line = re.sub(r'^(\d[\d,]*)\s+[^\w\s$]+\s*(?=[A-Za-z])', r'\1 ', line)
         line = re.sub(r'^(\d[\d,]*\s+)([a-z])', lambda match: match[1] + match[2].upper(), line)
         cleaned.append(line)
     return '\n'.join(cleaned)
