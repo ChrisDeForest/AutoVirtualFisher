@@ -109,7 +109,9 @@ Gives you bonus XP and leads you to more treasure.
             urlopen(self.url + '/missing')
         self.assertEqual(error.exception.code, 404)
         with self.assertRaises(HTTPError) as error:
-            urlopen(Request(self.url, data=b'x' * (MAX_FORM_BYTES + 1)))
+            # Declare an oversized body but send one byte: the server rejects on the header alone, and a
+            # real 1 MB upload races the early 413 on Windows (WinError 10053).
+            urlopen(Request(self.url, data=b'x', headers={'Content-Length': str(MAX_FORM_BYTES + 1)}))
         self.assertEqual(error.exception.code, 413)
 
     def test_valid_full_profile_is_saved_automatically_once(self):
@@ -406,3 +408,29 @@ Gives you bonus XP and leads you to more treasure.
         html = self.post(fishing=LIVE_FISHING, action='fishing_read', account='BugParticle')
         self.assertIn('<td>1</td><td>76</td><td>140</td><td>1.84×</td><td>$691</td>', html)
         self.assertIn('Sell value of this batch: $2,995 at your sell price of 4.83× ($620 at wiki base prices).', html)
+
+    def test_fishing_session_records_the_chosen_bait(self):
+        self.post(profile=named_profile())
+        html = self.post(fishing=LIVE_FISHING, action='fishing_save', account='BugParticle', bait='Worms')
+        self.assertIn('<option value="Worms" selected>Worms</option>', html)
+        self.assertIn('<dt>Bait</dt><dd class="known">Worms</dd>', html)
+        stored = json.loads(self.session_files()[0].read_text(encoding='utf-8'))
+        self.assertEqual([trip['bait'] for trip in stored['tally']['trip_details']], ['Worms'] * 6)
+
+    def test_paste_anything_preselects_bait_from_the_profile(self):
+        html = self.post(everything=(FIXTURES / 'live_discord_copy.txt').read_text(encoding='utf-8'), action='sort')
+        bait_select = html[html.index('id="fishing_bait"'):html.index('</select>', html.index('id="fishing_bait"'))]
+        self.assertIn('<option value="Worms" selected>Worms</option>', bait_select)
+
+    def test_history_view_compares_baits(self):
+        self.post(profile=(FIXTURES / 'live_profile.txt').read_text(encoding='utf-8'),
+                  buffs=(FIXTURES / 'live_buffs.txt').read_text(encoding='utf-8'))
+        self.post(fishing=LIVE_FISHING, action='fishing_save', account='BugParticle', bait='Worms')
+        self.post(fishing='You caught:\n4 Cod\n+40 XP', action='fishing_save', account='BugParticle', bait='none')
+        self.post(fishing='You caught:\n9 Cod\n+90 XP', action='fishing_save', account='BugParticle', bait='')
+        html = self.get('/?account=BugParticle')
+        self.assertIn('<h3>Bait comparison</h3>', html)
+        self.assertIn('<td>Worms *</td><td>6 (6 boosted)</td><td>16.83</td><td>1.85×</td><td>$499</td><td>66.67</td>'
+                      '<td>+2 fish, XP −10%</td>', html)
+        self.assertIn('<td>No bait *</td><td>1 (0 boosted)</td><td>4.00</td><td>2.00×</td>', html)
+        self.assertIn('1 trip from sessions saved without a bait is left out.', html)

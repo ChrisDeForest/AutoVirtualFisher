@@ -1,10 +1,11 @@
 """HTML for the fishing-results panel and the all-time fishing card on the local web page."""
 from html import escape
 
+from .bait_compare import NOT_RECORDED, assign_bait, compare_baits, load_bait_reference
 from .catch_check import check_batch, load_fish_reference
 from .fish_value import base_value
 from .fishing_log import fingerprint, parse_fishing
-from .fishing_sessions import fishing_totals, save_session
+from .fishing_sessions import fishing_totals, load_sessions, save_session
 from .player_state import display_value
 
 OVERLAP_NOTE = ('Pasting the exact same batch twice is detected and ignored. Batches that only partly '
@@ -38,12 +39,35 @@ def _warnings(warnings):
             + ''.join(f'<li>{escape(warning)}</li>' for warning in warnings) + '</ul></aside>')
 
 
+def _bait_label(tally):
+    if 'bait' not in tally:
+        return 'Not recorded'
+    return tally['bait'] or 'No bait'
+
+
+def bait_choice(value):
+    """Map the form's bait value to assign_bait(): '' is not recorded, 'none' is no bait."""
+    if value == 'none':
+        return None
+    for known in load_bait_reference() or {}:
+        if known.casefold() == value.casefold():
+            return known
+    return value or NOT_RECORDED
+
+
+def bait_options(selected):
+    choices = [('', 'Not recorded'), ('none', 'No bait')] + [(name, name) for name in load_bait_reference() or {}]
+    return ''.join(f'<option value="{escape(value)}"{" selected" if value == selected else ""}>{escape(label)}</option>'
+                   for value, label in choices)
+
+
 def _batch(tally):
     trips = tally['trips']
     caught = sum(tally['catches'].values())
     level_ups = ', '.join(str(level) for level in tally['level_ups'])
     return _rows([
         ('Trips', display_value(trips)),
+        ('Bait', _bait_label(tally)),
         ('Boosted trips', display_value(tally['boosted_trips'])),
         ('Fish caught', _per_trip(caught, caught / trips if trips else None)),
         ('Catches', _counts(tally['catches'])),
@@ -98,9 +122,9 @@ def _value_summary(base, sell):
             f'(${base:,} at wiki base prices).</p>')
 
 
-def handle_fishing(text, action, account, accounts, root):
+def handle_fishing(text, action, account, accounts, root, bait=''):
     """Parse a pasted batch and save it when asked. Return (tally, status message)."""
-    tally = parse_fishing(text)
+    tally = assign_bait(parse_fishing(text), bait_choice(bait))
     if action != 'fishing_save':
         return tally, ''
     if account and account not in accounts:
@@ -116,7 +140,7 @@ def handle_fishing(text, action, account, accounts, root):
     return tally, f'Not saved: {result["reason"]}'
 
 
-def fishing_panel(text, tally, message, account_options, biome=None, sell=None):
+def fishing_panel(text, tally, message, account_options, biome=None, sell=None, bait=''):
     if tally is None:
         result = '<p class="status">Waiting for fishing results</p>'
     else:
@@ -131,10 +155,63 @@ def fishing_panel(text, tally, message, account_options, biome=None, sell=None):
             f'<textarea id="fishing" name="fishing" spellcheck="false" placeholder="Paste fishing results here…">{escape(text)}</textarea>'
             '<label for="fishing_account">Save to account</label>'
             f'<select id="fishing_account" name="account"><option value="">Choose an account…</option>{account_options}</select>'
+            '<label for="fishing_bait">Bait used</label>'
+            f'<select id="fishing_bait" name="bait">{bait_options(bait)}</select>'
+            '<p class="note">Trips after a "You ran out of …" line count as no bait.</p>'
             '<div class="actions"><button type="submit" name="action" value="fishing_read">Read fishing results</button>'
             '<button class="secondary" type="submit" name="action" value="fishing_save">Save session</button></div>'
             f'<p class="note">Only the tally is saved; your pasted text is not. {escape(OVERLAP_NOTE)}</p>'
             f'</form><article class="result"><h2>This batch</h2>{result}</article></div></section>')
+
+
+WIKI_EFFECTS = (('fish_catch_percent', 'fish catch'), ('fish_quality_percent', 'fish quality'),
+                ('treasure_chance_percent', 'treasure chance'), ('treasure_quality_percent', 'treasure quality'),
+                ('xp_percent', 'XP'), ('pet_catch_chance_percent', 'pet catch chance'),
+                ('pet_effectiveness_percent', 'pet effectiveness'), ('pet_xp_percent', 'pet XP'))
+
+
+def _signed_percent(value):
+    return ('+' if value > 0 else '−') + f'{abs(value):g}%'
+
+
+def _wiki_effects(wiki):
+    if not wiki:
+        return '—'
+    parts = [f'+{wiki["extra_fish"]} fish'] if wiki.get('extra_fish') else []
+    parts += [f'{label} {_signed_percent(wiki[field])}' for field, label in WIKI_EFFECTS if wiki.get(field)]
+    return ', '.join(parts) or 'no listed effect'
+
+
+def bait_card(account, root, sell=None):
+    try:
+        sessions, _ = load_sessions(account, root)
+    except OSError as error:
+        return _warnings([f'Fishing sessions unavailable: {error}'])
+    result = compare_baits(sessions, load_fish_reference(), load_bait_reference())
+    if not result['rows']:
+        return ('<h3>Bait comparison</h3><p class="status">Save fishing sessions with "Bait used" set to compare '
+                'baits.</p>')
+    rows = []
+    for row in result['rows']:
+        ratio = f'{row["xp_ratio"]:.2f}×' if row['xp_ratio'] else '—'
+        value = ('—' if row['base_value_per_trip'] is None
+                 else f'${round(row["base_value_per_trip"] * (sell or 1)):,}')
+        rows.append(f'<tr><td>{escape(row["bait"])}{" *" if row["few_trips"] else ""}</td>'
+                    f'<td>{row["trips"]:,} ({row["boosted_trips"]:,} boosted)</td><td>{row["fish_per_trip"]:.2f}</td>'
+                    f'<td>{ratio}</td><td>{value}</td><td>{row["finds_per_100_trips"]:.2f}</td>'
+                    f'<td>{escape(_wiki_effects(row["wiki"]))}</td></tr>')
+    value_basis = f'at your sell price of {sell:.2f}×' if sell else 'at wiki base prices'
+    notes = [f'Value per trip is {value_basis}. Rows marked * have fewer than 20 trips, so treat them as rough.',
+             'Global boosts, purchased boosts, charms, and pets change these numbers too; compare batches fished '
+             'under similar conditions.']
+    skipped = result['not_recorded_trips']
+    if skipped:
+        notes.append(f'{skipped:,} trip{"" if skipped == 1 else "s"} from sessions saved without a bait '
+                     f'{"is" if skipped == 1 else "are"} left out.')
+    return ('<h3>Bait comparison</h3><div class="table-scroll"><table class="trips"><thead><tr><th>Bait</th>'
+            '<th>Trips</th><th>Fish per trip</th><th>XP ratio</th><th>Value per trip</th><th>Finds per 100 trips</th>'
+            '<th>Wiki says</th></tr></thead><tbody>' + ''.join(rows) + '</tbody></table></div>'
+            + ''.join(f'<p class="note">{escape(note)}</p>' for note in notes))
 
 
 def fishing_card(account, root):

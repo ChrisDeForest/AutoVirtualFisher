@@ -151,6 +151,19 @@ these per-trip catches, XP, and events.
 and XP per trip, finds per 100 trips, chest contents, quest rewards, and
 level-ups.
 
+### Bait comparison
+
+Set **Bait used** when reading or saving a fishing batch (smart paste fills it
+from the profile's `Bait:` line). Each trip records that bait until the trip
+with "You ran out of …"; later trips count as no bait. **Show history** then
+compares baits across saved sessions: trips (and how many were boosted), fish
+per trip, median XP ratio, value per trip at your sell price, and finds per
+100 trips, beside the wiki's listed effects from `src/reference/bait.json`.
+Rows with fewer than 20 trips are marked as rough, and sessions saved without a
+bait are left out. Global boosts, purchased boosts (which do not appear in
+fishing results), charms, and pets also move these numbers, so compare batches
+fished under similar conditions.
+
 ### Planner
 
 **Show history** also opens with a planner. Enter an optional **Target level**

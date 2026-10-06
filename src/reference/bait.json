@@ -1,0 +1,101 @@
+{
+  "source": "Virtual Fisher wiki bait pages (src/data/json/bait/), one entry per bait.",
+  "baits": {
+    "Artifact Magnet": {
+      "cost": 75,
+      "extra_fish": 0,
+      "fish_catch_percent": -30,
+      "fish_quality_percent": -30,
+      "treasure_chance_percent": 40,
+      "treasure_quality_percent": 50,
+      "xp_percent": 30,
+      "pet_catch_chance_percent": 0,
+      "pet_effectiveness_percent": 0,
+      "pet_xp_percent": 0
+    },
+    "Fish": {
+      "cost": 70,
+      "extra_fish": 0,
+      "fish_catch_percent": 50,
+      "fish_quality_percent": 100,
+      "treasure_chance_percent": 0,
+      "treasure_quality_percent": 0,
+      "xp_percent": -30,
+      "pet_catch_chance_percent": 0,
+      "pet_effectiveness_percent": 0,
+      "pet_xp_percent": 0
+    },
+    "Leeches": {
+      "cost": 25,
+      "extra_fish": 3,
+      "fish_catch_percent": 20,
+      "fish_quality_percent": 20,
+      "treasure_chance_percent": 0,
+      "treasure_quality_percent": 0,
+      "xp_percent": -20,
+      "pet_catch_chance_percent": 0,
+      "pet_effectiveness_percent": 0,
+      "pet_xp_percent": 0
+    },
+    "Magic Bait": {
+      "cost": 250,
+      "extra_fish": 2,
+      "fish_catch_percent": 100,
+      "fish_quality_percent": 50,
+      "treasure_chance_percent": 15,
+      "treasure_quality_percent": 15,
+      "xp_percent": -20,
+      "pet_catch_chance_percent": 0,
+      "pet_effectiveness_percent": 0,
+      "pet_xp_percent": 0
+    },
+    "Magnet": {
+      "cost": 25,
+      "extra_fish": 0,
+      "fish_catch_percent": -10,
+      "fish_quality_percent": -10,
+      "treasure_chance_percent": 50,
+      "treasure_quality_percent": 0,
+      "xp_percent": 20,
+      "pet_catch_chance_percent": 0,
+      "pet_effectiveness_percent": 0,
+      "pet_xp_percent": 0
+    },
+    "Support Bait": {
+      "cost": 500,
+      "extra_fish": 0,
+      "fish_catch_percent": 0,
+      "fish_quality_percent": 0,
+      "treasure_chance_percent": 0,
+      "treasure_quality_percent": 0,
+      "xp_percent": 0,
+      "pet_catch_chance_percent": 40,
+      "pet_effectiveness_percent": 35,
+      "pet_xp_percent": 35
+    },
+    "Wise Bait": {
+      "cost": 35,
+      "extra_fish": 1,
+      "fish_catch_percent": 0,
+      "fish_quality_percent": 0,
+      "treasure_chance_percent": 0,
+      "treasure_quality_percent": 0,
+      "xp_percent": 150,
+      "pet_catch_chance_percent": 0,
+      "pet_effectiveness_percent": 0,
+      "pet_xp_percent": 0
+    },
+    "Worms": {
+      "cost": 4,
+      "extra_fish": 2,
+      "fish_catch_percent": 0,
+      "fish_quality_percent": 0,
+      "treasure_chance_percent": 0,
+      "treasure_quality_percent": 0,
+      "xp_percent": -10,
+      "pet_catch_chance_percent": 0,
+      "pet_effectiveness_percent": 0,
+      "pet_xp_percent": 0
+    }
+  }
+}

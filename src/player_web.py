@@ -8,7 +8,7 @@ from string import Template
 from urllib.parse import parse_qs, urlsplit
 
 from .fishing_sessions import DEFAULT_SESSION_ROOT
-from .fishing_web import fishing_card, fishing_panel, handle_fishing
+from .fishing_web import bait_card, bait_choice, fishing_card, fishing_panel, handle_fishing
 from .paste_detect import detect
 from .fish_value import latest_sell_multiplier
 from .planner_web import planner_card
@@ -70,6 +70,14 @@ def _progress(comparison):
     return span + '<dl>' + rows + '</dl>'
 
 
+def _sell(account, root):
+    try:
+        sell = latest_sell_multiplier(load_history(account, root)[0])
+    except OSError:
+        return None
+    return sell[0] if sell else None
+
+
 def _dashboard(account, root, fishing_root=DEFAULT_SESSION_ROOT, target=None, money_target=None):
     """Return (html, latest full snapshot or None) for one account's saved history."""
     if not account:
@@ -96,7 +104,8 @@ def _dashboard(account, root, fishing_root=DEFAULT_SESSION_ROOT, target=None, mo
             + '<div class="layout"><div><h3>Progress between the latest full snapshots</h3>'
             + _progress(comparison)
             + f'</div><div><h3>Recent snapshots</h3><ul class="history">{items}</ul></div></div>'
-            + fishing_card(account, fishing_root) + '</section>')
+            + fishing_card(account, fishing_root) + bait_card(account, fishing_root, _sell(account, root))
+            + '</section>')
     return html, comparison['newer']
 
 
@@ -171,7 +180,7 @@ def handle_save(state, action, selected_account, root):
 
 def render(profile='', buffs='', prestige_shop='', pet='', submitted=False, root=DEFAULT_SNAPSHOT_ROOT,
            account='', action='parse', fishing=None, fishing_root=DEFAULT_SESSION_ROOT, quests='',
-           target=None, everything=None, ocr_ready=False, smart_prefix='', money_target=None):
+           target=None, everything=None, ocr_ready=False, smart_prefix='', money_target=None, bait=''):
     """Render the page. `submitted` means the player form was posted; `fishing` holds a posted fishing batch."""
     page_warnings = []
     try:
@@ -187,13 +196,15 @@ def render(profile='', buffs='', prestige_shop='', pet='', submitted=False, root
         profile, buffs, prestige_shop, pet, quests = (responses[kind] for kind in
                                                       ('profile', 'buffs', 'prestige_shop', 'pet', 'quests'))
         fishing_box = sorted_paste['fishing']
-        detected = parse_responses(profile=profile)['profile']['account_name']
-        fishing_account = detected if detected in accounts else ''
+        detected = parse_responses(profile=profile)['profile']
+        fishing_account = detected['account_name'] if detected['account_name'] in accounts else ''
+        detected_bait = bait_choice(detected['bait']) if detected['bait'] else ''
+        bait = detected_bait if detected_bait not in (None, '') else ''
         smart_message = sort_summary(sorted_paste)
     if smart_prefix:
         smart_message = f'{smart_prefix} {smart_message}'.strip()
     if fishing is not None:
-        fishing_tally, fishing_message = handle_fishing(fishing, action, account, accounts, fishing_root)
+        fishing_tally, fishing_message = handle_fishing(fishing, action, account, accounts, fishing_root, bait)
         if account in accounts:
             try:
                 latest_full, _ = latest_full_snapshots(account, root, count=1)
@@ -201,11 +212,7 @@ def render(profile='', buffs='', prestige_shop='', pet='', submitted=False, root
                 latest_full = []
             if latest_full:
                 fishing_biome = latest_full[0]['state'].get('profile', {}).get('biome')
-            try:
-                sell = latest_sell_multiplier(load_history(account, root)[0])
-            except OSError:
-                sell = None
-            fishing_sell = sell[0] if sell else None
+            fishing_sell = _sell(account, root)
     save_message = ''
     shown_account = account
     if submitted:
@@ -239,7 +246,7 @@ def render(profile='', buffs='', prestige_shop='', pet='', submitted=False, root
         target_value=target or '',
         money_value=money_target or '',
         fishing=fishing_panel(fishing_box, fishing_tally, fishing_message,
-                              _options(accounts, fishing_account), fishing_biome, fishing_sell),
+                              _options(accounts, fishing_account), fishing_biome, fishing_sell, bait),
         smart_status=f'<p class="save-status">{escape(smart_message)}</p>' if smart_message else '',
         screenshot_form=_screenshot_form(ocr_ready),
         dashboard=dashboard)
@@ -344,7 +351,7 @@ class Handler(BaseHTTPRequestHandler):
         elif action in ('fishing_read', 'fishing_save'):
             self.send_content(render(root=self.snapshot_root, account=account, action=action,
                                      fishing=fields.get('fishing', [''])[0], fishing_root=self.fishing_root,
-                                     ocr_ready=self.screenshots_supported()))
+                                     ocr_ready=self.screenshots_supported(), bait=fields.get('bait', [''])[0]))
         elif action == 'json':
             self.send_content(json.dumps(parse_responses(profile, buffs, prestige_shop, pet, quests), indent=2, ensure_ascii=False),
                               'application/json; charset=utf-8', download=True)
