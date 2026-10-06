@@ -6,16 +6,18 @@ import sys
 
 from .player_snapshots import (DEFAULT_SNAPSHOT_ROOT, compare_latest, describe_changes,
                                list_accounts, load_history, save_snapshot, validate_full_state)
-from .player_state import display_value, parse_responses
+from .player_state import display_value, parse_responses, quest_summary
 
 HISTORY_LIMIT = 10
 
 
 def show(state):
     print('\nAutoVirtualFisher | Player logbook')
-    for section in ('profile', 'buffs', 'prestige', 'pets', 'inventory'):
+    for section in ('profile', 'buffs', 'prestige', 'pets', 'inventory', 'quests'):
         print('\n' + section.title())
         for field, value in state[section].items():
+            if section == 'quests' and field in ('daily', 'special'):
+                value = quest_summary(value)
             print(f'  {field.replace("_", " ").capitalize():22} {display_value(value)}')
     for warning in state['warnings']:
         print('  ! ' + warning)
@@ -75,9 +77,10 @@ def run_files(parser, args):
         buffs = args.buffs.read_text(encoding='utf-8-sig') if args.buffs else ''
         prestige_shop = args.prestige_shop.read_text(encoding='utf-8-sig') if args.prestige_shop else ''
         pet = args.pet.read_text(encoding='utf-8-sig') if args.pet else ''
+        quests = args.quests.read_text(encoding='utf-8-sig') if args.quests else ''
     except OSError as error:
         parser.error(str(error))
-    state = parse_responses(profile, buffs, prestige_shop, pet)
+    state = parse_responses(profile, buffs, prestige_shop, pet, quests)
     if args.save and not validate_full_state(state)[0] and not args.account:
         parser.error('this is a partial snapshot; pass --account NAME to save it')
     print(json.dumps(state, indent=2, ensure_ascii=False)) if args.json else show(state)
@@ -120,17 +123,18 @@ def choose_account(root, current):
 
 
 def interactive(root):
-    profile = buffs = prestige_shop = pet = ''
+    profile = buffs = prestige_shop = pet = quests = ''
     account = None
     print('Player logbook — pasted responses only; no Discord connection.')
     print(f'Snapshots are saved in {root}; pasted text itself is never stored.')
     try:
         while True:
             print(f'\nAccount: {account or "from /profile"}')
-            print('[1] Paste profile  [2] Paste buffs  [3] Paste prestige shop  [4] Paste pet  [5] View state  [6] View JSON')
+            print('[1] Paste profile  [2] Paste buffs  [3] Paste prestige shop  [4] Paste pet  [7] Paste quests')
+            print('[5] View state  [6] View JSON')
             print('[a] Choose account  [s] Save snapshot  [h] History  [c] Compare latest  [q] Quit')
             choice = input('Choose: ').strip().lower()
-            state = lambda: parse_responses(profile, buffs, prestige_shop, pet)
+            state = lambda: parse_responses(profile, buffs, prestige_shop, pet, quests)
             if choice == 'q':
                 return 0
             if choice == '1':
@@ -141,6 +145,8 @@ def interactive(root):
                 prestige_shop = paste()
             elif choice == '4':
                 pet = paste()
+            elif choice == '7':
+                quests = paste()
             elif choice == '5':
                 show(state())
             elif choice == '6':
@@ -148,7 +154,7 @@ def interactive(root):
             elif choice == 'a':
                 account = choose_account(root, account)
             elif choice == 's':
-                if not (profile or buffs or prestige_shop or pet).strip():
+                if not (profile or buffs or prestige_shop or pet or quests).strip():
                     print('Paste a response before saving.')
                     continue
                 try:
@@ -165,7 +171,7 @@ def interactive(root):
                 else:
                     print(format_comparison(name, compare_latest(name, root)))
             else:
-                print('Choose 1-6, a, s, h, c, or q.')
+                print('Choose 1-7, a, s, h, c, or q.')
     except (EOFError, KeyboardInterrupt):
         print('\nClosed logbook.')
     return 0
@@ -177,6 +183,7 @@ def main(argv=None):
     parser.add_argument('--buffs', type=Path, help='UTF-8 text file containing /buffs output')
     parser.add_argument('--prestige-shop', type=Path, help='UTF-8 text file containing /prestige shop output')
     parser.add_argument('--pet', type=Path, help='UTF-8 text file containing /pet output')
+    parser.add_argument('--quests', type=Path, help='UTF-8 text file containing /quests output')
     parser.add_argument('--json', action='store_true', help='Print machine-readable JSON')
     parser.add_argument('--save', action='store_true', help='Save the parsed result as a local snapshot')
     parser.add_argument('--account', help='Account for partial saves, --history, and --compare')
@@ -186,7 +193,7 @@ def main(argv=None):
     parser.add_argument('--snapshot-dir', type=Path, default=DEFAULT_SNAPSHOT_ROOT,
                         help='Snapshot folder (default: %(default)s)')
     args = parser.parse_args(argv)
-    has_files = bool(args.profile or args.buffs or args.prestige_shop or args.pet)
+    has_files = bool(args.profile or args.buffs or args.prestige_shop or args.pet or args.quests)
     if args.history or args.compare:
         if not args.account:
             parser.error('--history and --compare require --account NAME')

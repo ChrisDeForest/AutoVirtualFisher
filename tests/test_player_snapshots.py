@@ -75,17 +75,20 @@ class SnapshotStoreTests(unittest.TestCase):
     def test_saved_snapshot_omits_pasted_text(self):
         state = parse_responses(profile='Inventory of BugParticle\nBalance: $100\nLevel: 2\n'
                                         'Secret note: meet at dawn\nFish Inventory\n3 Cod\n3 Cod',
-                                buffs='Mystery buff: whisper-123')
+                                buffs='Mystery buff: whisper-123',
+                                quests='Daily Fishing - 1/500\nCatch 500 fish\nquest-secret-77')
         self.assertTrue(state['unparsed']['profile'])
         result = save_snapshot(state, self.root)
         self.assertEqual(result['status'], 'saved')
         text = next(self.root.rglob('*.json')).read_text(encoding='utf-8')
-        for raw in ('meet at dawn', 'Secret note', 'whisper-123', '3 Cod'):
+        for raw in ('meet at dawn', 'Secret note', 'whisper-123', '3 Cod', 'quest-secret-77'):
             self.assertNotIn(raw, text)
         stored = json.loads(text)
         self.assertNotIn('unparsed', stored['state'])
         self.assertEqual(stored['state']['unparsed_line_counts'],
-                         {'profile': 2, 'buffs': 1, 'prestige_shop': 0, 'pet': 0})
+                         {'profile': 2, 'buffs': 1, 'prestige_shop': 0, 'pet': 0, 'quests': 1})
+        self.assertIn('quests: Unrecognized line (line omitted)', stored['state']['warnings'])
+        self.assertEqual(stored['state']['quests']['daily']['Daily Fishing']['progress'], 1)
         self.assertIn('profile: Unrecognized line (line omitted)', stored['state']['warnings'])
         self.assertEqual(stored['parser_warnings'], stored['state']['warnings'])
         self.assertEqual(stored['state']['inventory']['fish'], {'Cod': 3})

@@ -7,13 +7,17 @@ from pathlib import Path
 from string import Template
 from urllib.parse import parse_qs, urlsplit
 
+from .fishing_sessions import DEFAULT_SESSION_ROOT
+from .fishing_web import fishing_card, fishing_panel, handle_fishing
 from .player_charts import line_chart_svg
 from .player_snapshots import (DEFAULT_SNAPSHOT_ROOT, compare_latest, describe_changes,
                                growth_series, list_accounts, load_history, save_snapshot)
-from .player_state import display_value, parse_responses
+from .player_state import display_value, parse_responses, quest_summary
 
 TEMPLATE = Path(__file__).with_name('player_web.html')
 HISTORY_LIMIT = 10
+# Large enough for several hundred pasted fishing results.
+MAX_FORM_BYTES = 1_048_576
 GROWTH_CHARTS = (
     ('balance', 'Balance', lambda value: '$' + display_value(value)),
     ('level_progress', 'Level progress', lambda value: f'{value:,.2f}'),
@@ -24,10 +28,13 @@ GROWTH_CHARTS = (
 
 def _sections(state):
     sections = []
-    for name in ('profile', 'buffs', 'prestige', 'pets', 'inventory'):
-        values = state[name].copy()
+    for name in ('profile', 'buffs', 'prestige', 'pets', 'inventory', 'quests'):
+        values = state.get(name, {}).copy()
         if name == 'pets' and values['owned'] is not None:
             values['owned'] = ', '.join(values['owned'])
+        if name == 'quests':
+            values = {field: quest_summary(value) if field in ('daily', 'special') else value
+                      for field, value in values.items()}
         rows = ''.join(f'<div class="stat"><dt>{escape(field.replace("_", " ").capitalize())}</dt>'
                        f'<dd class="{"unknown" if value is None else "known"}">{escape(display_value(value))}</dd></div>'
                        for field, value in values.items())
@@ -58,7 +65,7 @@ def _progress(comparison):
     return span + '<dl>' + rows + '</dl>'
 
 
-def _dashboard(account, root):
+def _dashboard(account, root, fishing_root=DEFAULT_SESSION_ROOT):
     """Return (html, latest full snapshot or None) for one account's saved history."""
     if not account:
         return '', None
@@ -82,7 +89,8 @@ def _dashboard(account, root):
             + f'<h3>Growth</h3><div class="charts">{charts}</div>'
             + '<div class="layout"><div><h3>Progress between the latest full snapshots</h3>'
             + _progress(comparison)
-            + f'</div><div><h3>Recent snapshots</h3><ul class="history">{items}</ul></div></div></section>')
+            + f'</div><div><h3>Recent snapshots</h3><ul class="history">{items}</ul></div></div>'
+            + fishing_card(account, fishing_root) + '</section>')
     return html, comparison['newer']
 
 
@@ -112,16 +120,20 @@ def handle_save(state, action, selected_account, root):
 
 
 def render(profile='', buffs='', prestige_shop='', pet='', submitted=False, root=DEFAULT_SNAPSHOT_ROOT,
-           account='', action='parse'):
+           account='', action='parse', fishing=None, fishing_root=DEFAULT_SESSION_ROOT, quests=''):
+    """Render the page. `submitted` means the player form was posted; `fishing` holds a posted fishing batch."""
     page_warnings = []
     try:
         accounts, account_warnings = list_accounts(root)
     except OSError as error:
         accounts, account_warnings = [], [str(error)]
+    fishing_tally, fishing_message = None, ''
+    if fishing is not None:
+        fishing_tally, fishing_message = handle_fishing(fishing, action, account, accounts, fishing_root)
     save_message = ''
     shown_account = account
     if submitted:
-        state = parse_responses(profile, buffs, prestige_shop, pet)
+        state = parse_responses(profile, buffs, prestige_shop, pet, quests)
         save_message, saved_account = handle_save(state, action, account, root)
         shown_account = saved_account or account
         try:
@@ -129,11 +141,11 @@ def render(profile='', buffs='', prestige_shop='', pet='', submitted=False, root
         except OSError:
             pass
         page_warnings = state['warnings']
-        dashboard, _ = _dashboard(shown_account, root)
+        dashboard, _ = _dashboard(shown_account, root, fishing_root)
         status = 'Parsed from your pasted responses'
         sections = _sections(state)
     else:
-        dashboard, latest = _dashboard(account, root)
+        dashboard, latest = _dashboard(account, root, fishing_root)
         if latest:
             status = f'Latest full snapshot for {account}, captured {latest["captured_at"]}'
             sections = _sections(latest['state'])
@@ -142,16 +154,20 @@ def render(profile='', buffs='', prestige_shop='', pet='', submitted=False, root
             sections = _sections(parse_responses())
     return Template(TEMPLATE.read_text(encoding='utf-8')).substitute(
         profile=escape(profile), buffs=escape(buffs), prestige_shop=escape(prestige_shop), pet=escape(pet),
+        quests=escape(quests),
         sections=sections, warnings=_warning_list('Needs a look', page_warnings),
         status=escape(status), save_status=f'<p class="save-status">{escape(save_message)}</p>' if save_message else '',
         save_account_options=_options(accounts, account if submitted else ''),
         view_account_options=_options(accounts, shown_account),
         account_warnings=_warning_list('Some snapshots could not be read', account_warnings),
+        fishing=fishing_panel(fishing or '', fishing_tally, fishing_message,
+                              _options(accounts, account if fishing is not None else '')),
         dashboard=dashboard)
 
 
 class Handler(BaseHTTPRequestHandler):
     snapshot_root = DEFAULT_SNAPSHOT_ROOT
+    fishing_root = DEFAULT_SESSION_ROOT
 
     def log_message(self, format, *args):
         # Pasted account data should not appear in request logs.
@@ -181,7 +197,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(400, 'Invalid query')
             return
         account = query.get('account', [''])[0].strip()
-        self.send_content(render(root=self.snapshot_root, account=account))
+        self.send_content(render(root=self.snapshot_root, account=account, fishing_root=self.fishing_root))
 
     def do_POST(self):
         if self.path != '/':
@@ -189,7 +205,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             length = int(self.headers.get('Content-Length', '0'))
-            if length < 0 or length > 65536:
+            if length < 0 or length > MAX_FORM_BYTES:
                 self.send_error(413, 'Response text is too large')
                 return
             if self.headers.get_content_type() != 'application/x-www-form-urlencoded':
@@ -203,14 +219,19 @@ class Handler(BaseHTTPRequestHandler):
         buffs = fields.get('buffs', [''])[0]
         prestige_shop = fields.get('prestige_shop', [''])[0]
         pet = fields.get('pet', [''])[0]
+        quests = fields.get('quests', [''])[0]
         account = fields.get('account', [''])[0].strip()
         action = fields.get('action', [''])[0] or ('json' if fields.get('format', [''])[0] == 'json' else 'parse')
-        if action == 'json':
-            self.send_content(json.dumps(parse_responses(profile, buffs, prestige_shop, pet), indent=2, ensure_ascii=False),
+        if action in ('fishing_read', 'fishing_save'):
+            self.send_content(render(root=self.snapshot_root, account=account, action=action,
+                                     fishing=fields.get('fishing', [''])[0], fishing_root=self.fishing_root))
+        elif action == 'json':
+            self.send_content(json.dumps(parse_responses(profile, buffs, prestige_shop, pet, quests), indent=2, ensure_ascii=False),
                               'application/json; charset=utf-8', download=True)
         else:
             self.send_content(render(profile, buffs, prestige_shop, pet, submitted=True, root=self.snapshot_root,
-                                     account=account, action='save' if action == 'save' else 'parse'))
+                                     account=account, action='save' if action == 'save' else 'parse',
+                                     fishing_root=self.fishing_root, quests=quests))
 
 
 def main():
@@ -219,7 +240,8 @@ def main():
     args = parser.parse_args()
     with ThreadingHTTPServer(('127.0.0.1', args.port), Handler) as server:
         print(f'Player logbook: http://127.0.0.1:{server.server_port}', flush=True)
-        print(f'Press Ctrl+C to stop. Parsed snapshots are kept in {Handler.snapshot_root}; '
+        print(f'Press Ctrl+C to stop. Parsed snapshots are kept in {Handler.snapshot_root} and fishing '
+              f'sessions in {Handler.fishing_root}; '
               'raw pasted responses are not stored.', flush=True)
         try:
             server.serve_forever()

@@ -9,9 +9,10 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from http.server import ThreadingHTTPServer
 
-from src.player_web import Handler
+from src.player_web import MAX_FORM_BYTES, Handler
 
 FIXTURES = Path(__file__).parent / 'fixtures'
+LIVE_FISHING = (FIXTURES / 'live_fishing.txt').read_text(encoding='utf-8')
 
 
 def named_profile(balance=100, level=2, name='BugParticle', extra=''):
@@ -23,7 +24,9 @@ class WebTests(unittest.TestCase):
     def setUpClass(cls):
         cls.temporary = tempfile.mkdtemp()
         cls.root = Path(cls.temporary) / 'snapshots'
-        cls.handler = type('IsolatedHandler', (Handler,), {'snapshot_root': cls.root})
+        cls.fishing_root = Path(cls.temporary) / 'fishing'
+        cls.handler = type('IsolatedHandler', (Handler,), {'snapshot_root': cls.root,
+                                                           'fishing_root': cls.fishing_root})
         cls.server = ThreadingHTTPServer(('127.0.0.1', 0), cls.handler)
         cls.worker = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.worker.start()
@@ -38,6 +41,7 @@ class WebTests(unittest.TestCase):
 
     def setUp(self):
         shutil.rmtree(self.root, ignore_errors=True)
+        shutil.rmtree(self.fishing_root, ignore_errors=True)
         self.handler.snapshot_root = self.root
 
     def post(self, **fields):
@@ -105,7 +109,7 @@ Gives you bonus XP and leads you to more treasure.
             urlopen(self.url + '/missing')
         self.assertEqual(error.exception.code, 404)
         with self.assertRaises(HTTPError) as error:
-            urlopen(Request(self.url, data=b'x' * 70000))
+            urlopen(Request(self.url, data=b'x' * (MAX_FORM_BYTES + 1)))
         self.assertEqual(error.exception.code, 413)
 
     def test_valid_full_profile_is_saved_automatically_once(self):
@@ -204,3 +208,64 @@ Gives you bonus XP and leads you to more treasure.
         html = self.get('/?account=BugParticle')
         self.assertEqual(html.count('Needs two full snapshots with this value.'), 4)
         self.assertNotIn('<svg', html)
+
+    def session_files(self):
+        return list(self.fishing_root.rglob('*.json')) if self.fishing_root.exists() else []
+
+    def test_reading_fishing_results_shows_tally_without_saving(self):
+        html = self.post(fishing=LIVE_FISHING, action='fishing_read')
+        self.assertIn('Fishing results', html)
+        self.assertIn('<dt>Trips</dt><dd class="known">6</dd>', html)
+        self.assertIn('Salmon 48', html)
+        self.assertIn('631 (105.17 per trip)', html)
+        self.assertIn('Daily Level-ups tier 1', html)
+        self.assertEqual(self.session_files(), [])
+
+    def test_unrecognized_fishing_lines_are_shown_escaped(self):
+        html = self.post(fishing='You caught:\n3 Cod\n<b>odd</b>', action='fishing_read')
+        self.assertIn('Unrecognized line: &lt;b&gt;odd&lt;/b&gt;', html)
+        self.assertNotIn('<b>odd</b>', html)
+
+    def test_saving_fishing_session_requires_an_existing_account(self):
+        html = self.post(fishing=LIVE_FISHING, action='fishing_save')
+        self.assertIn('Choose an account', html)
+        html = self.post(fishing=LIVE_FISHING, action='fishing_save', account='Stranger')
+        self.assertIn('Choose an existing account', html)
+        self.assertEqual(self.session_files(), [])
+
+    def test_saving_fishing_session_once_and_showing_totals(self):
+        self.post(profile=named_profile())
+        html = self.post(fishing=LIVE_FISHING, action='fishing_save', account='BugParticle')
+        self.assertIn('Fishing session saved for BugParticle', html)
+        html = self.post(fishing=LIVE_FISHING, action='fishing_save', account='BugParticle')
+        self.assertIn('already saved', html)
+        self.assertEqual(len(self.session_files()), 1)
+        html = self.get('/?account=BugParticle')
+        self.assertIn('Fishing (all time)', html)
+        self.assertIn('16.83', html)
+        self.assertIn('artifact box 16.67', html)
+        self.assertNotIn('epicmouse9925', html)
+
+    def test_large_fishing_batches_are_accepted(self):
+        html = self.post(fishing=LIVE_FISHING * 80, action='fishing_read')
+        self.assertIn('<dt>Trips</dt><dd class="known">480</dd>', html)
+
+    def test_quests_response_is_parsed_and_saved_with_snapshot(self):
+        quests = (FIXTURES / 'live_quests.txt').read_text(encoding='utf-8')
+        html = self.post(profile=named_profile(), quests=quests)
+        self.assertIn('Daily Level-ups 1/2, Daily Fishing 101/500, Daily Artifact Hunter 1/5', html)
+        self.assertIn('Pet Locator 0/1', html)
+        self.assertIn('Snapshot saved for BugParticle', html)
+        html = self.get('/?account=BugParticle')
+        self.assertIn('Daily Fishing 101/500', html)
+        self.assertNotIn('Quests have multiple tiers', html)
+
+    def test_snapshots_saved_before_quests_existed_still_render(self):
+        self.post(profile=named_profile(balance=777))
+        path = next(self.root.rglob('*.json'))
+        stored = json.loads(path.read_text(encoding='utf-8'))
+        del stored['state']['quests']
+        path.write_text(json.dumps(stored), encoding='utf-8')
+        html = self.get('/?account=BugParticle')
+        self.assertIn('777', html)
+        self.assertIn('<h3>Quests</h3>', html)

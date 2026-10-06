@@ -72,7 +72,46 @@ def _pet_bonuses(pet_name, level):
     return bonuses
 
 
-def parse_responses(profile='', buffs='', prestige_shop='', pet=''):
+def _parse_quests(text, result):
+    quests = result['quests']
+    group, quest = 'daily', None
+    for original in text.splitlines():
+        line = _clean(original).rstrip('.').rstrip()
+        if not line or line == 'Quest List' or line.startswith('Quests have multiple tiers'):
+            continue
+        if line.rstrip(':').upper() == 'SPECIAL DAILY QUEST':
+            group, quest = 'special', None
+            continue
+        reset = re.fullmatch(r'Quests reset in\s*(?:(\d+)d)?\s*(?:(\d+)h)?\s*(?:(\d+)m)?', line, re.I)
+        if reset and any(reset.groups()):
+            days, hours, minutes = (int(part or 0) for part in reset.groups())
+            quests['resets_in_minutes'] = (days * 24 + hours) * 60 + minutes
+            quest = None
+            continue
+        header = re.fullmatch(rf'(.+?)\s+-\s+({NUMBER})/({NUMBER})', line)
+        if header and _name(header[1]):
+            quests[group] = quests[group] or {}
+            quest = {'progress': _number(header[2]), 'goal': _number(header[3]), 'task': None}
+            quests[group][_name(header[1])] = quest
+            continue
+        if quest is not None and quest['task'] is None:
+            quest['task'] = line
+            continue
+        result['unparsed']['quests'].append(original)
+        result['warnings'].append(f'quests: Unrecognized line: {line}')
+    if text.strip() and quests['daily'] is None and quests['special'] is None:
+        result['warnings'].append('quests: No quests were found.')
+
+
+def quest_summary(quests):
+    """Return 'Name progress/goal, ...' for a quest group, or None when the group is unknown."""
+    if quests is None:
+        return None
+    return ', '.join(f'{name} {display_value(quest["progress"])}/{display_value(quest["goal"])}'
+                     for name, quest in quests.items())
+
+
+def parse_responses(profile='', buffs='', prestige_shop='', pet='', quests=''):
     """Return a serializable snapshot. No file writes or network requests."""
     result = {'schema_version': 1,
               'profile': dict.fromkeys(PROFILE_FIELDS),
@@ -86,7 +125,9 @@ def parse_responses(profile='', buffs='', prestige_shop='', pet=''):
                            'source': 'unknown'},
               'pets': {'xp_per_fishing_trip_average': None, 'status': None,
                        'current_pet': None, 'current_pet_bonuses': None, 'owned': None},
-              'warnings': [], 'unparsed': {'profile': [], 'buffs': [], 'prestige_shop': [], 'pet': []}}
+              'quests': {'daily': None, 'special': None, 'resets_in_minutes': None},
+              'warnings': [], 'unparsed': {'profile': [], 'buffs': [], 'prestige_shop': [], 'pet': [],
+                                           'quests': []}}
     seen = {}
     conflicts = set()
 
@@ -278,8 +319,9 @@ def parse_responses(profile='', buffs='', prestige_shop='', pet=''):
         result['prestige']['source'] = 'profile'
     elif result['prestige']['inferred_prestige_minimum'] is not None:
         result['prestige']['source'] = 'inferred minimum'
-    if not profile.strip() and not buffs.strip() and not prestige_shop.strip() and not pet.strip():
-        result['warnings'].append('Paste a profile, buffs, or prestige shop response to begin.')
+    _parse_quests(quests, result)
+    if not any(text.strip() for text in (profile, buffs, prestige_shop, pet, quests)):
+        result['warnings'].append('Paste a profile, buffs, prestige shop, pet, or quests response to begin.')
     return result
 
 

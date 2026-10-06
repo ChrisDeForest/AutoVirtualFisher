@@ -5,7 +5,7 @@ import sys
 import tempfile
 import unittest
 
-from src.player_state import display_value, parse_responses
+from src.player_state import display_value, parse_responses, quest_summary
 
 
 class PlayerStateTests(unittest.TestCase):
@@ -212,6 +212,56 @@ Fishing cooldown: 3.5 seconds''')
                              capture_output=True, text=True)
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertEqual(json.loads(run.stdout)['prestige']['inferred_prestige_minimum'], 4)
+
+    def test_cli_accepts_quests_file(self):
+        fixture = Path(__file__).parent / 'fixtures/live_quests.txt'
+        run = subprocess.run([sys.executable, '-m', 'src.player_cli', '--quests', str(fixture), '--json'],
+                             capture_output=True, text=True)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(json.loads(run.stdout)['quests']['daily']['Daily Fishing']['progress'], 101)
+
+
+class QuestTests(unittest.TestCase):
+    def test_live_quest_list(self):
+        quests = parse_responses(quests=(Path(__file__).parent / 'fixtures/live_quests.txt')
+                                 .read_text(encoding='utf-8'))
+        self.assertEqual(quests['quests'], {
+            'daily': {
+                'Daily Level-ups': {'progress': 1, 'goal': 2, 'task': 'Level up 2 time(s)'},
+                'Daily Fishing': {'progress': 101, 'goal': 500, 'task': 'Catch 500 fish'},
+                'Daily Artifact Hunter': {'progress': 1, 'goal': 5, 'task': 'Find 5 chests'},
+            },
+            'special': {'Pet Locator': {'progress': 0, 'goal': 1, 'task': 'Find a pet'}},
+            'resets_in_minutes': 22 * 60 + 40,
+        })
+        self.assertEqual(quests['warnings'], [])
+        self.assertEqual(quests['unparsed']['quests'], [])
+
+    def test_quests_are_unknown_until_pasted(self):
+        state = parse_responses(profile='Balance: $1')
+        self.assertEqual(state['quests'], {'daily': None, 'special': None, 'resets_in_minutes': None})
+
+    def test_reset_countdown_variants(self):
+        for text, minutes in (('Quests reset in 5m', 5), ('Quests reset in 3h', 180),
+                              ('Quests reset in 1d 2h 3m', 1563)):
+            with self.subTest(text=text):
+                self.assertEqual(parse_responses(quests=text)['quests']['resets_in_minutes'], minutes)
+
+    def test_unrecognized_quest_lines_are_warned(self):
+        state = parse_responses(quests='Daily Fishing - 5/500\nCatch 500 fish\nSomething new here')
+        self.assertEqual(state['quests']['daily']['Daily Fishing']['progress'], 5)
+        self.assertEqual(state['unparsed']['quests'], ['Something new here'])
+        self.assertIn('quests: Unrecognized line: Something new here', state['warnings'])
+
+    def test_quests_alone_count_as_input(self):
+        state = parse_responses(quests='Daily Fishing - 5/500')
+        self.assertFalse(any('to begin' in warning for warning in state['warnings']))
+
+    def test_quest_summary_for_display(self):
+        state = parse_responses(quests=(Path(__file__).parent / 'fixtures/live_quests.txt').read_text(encoding='utf-8'))
+        self.assertEqual(quest_summary(state['quests']['daily']),
+                         'Daily Level-ups 1/2, Daily Fishing 101/500, Daily Artifact Hunter 1/5')
+        self.assertIsNone(quest_summary(None))
 
 
 if __name__ == '__main__':

@@ -1,0 +1,72 @@
+epicmouse9925
+You caught:
+2 :fish: Fish
+7 :salmon: Salmon
+12 :cod: Cod
++140 XP
+Global boost by Wolfs!
+
+:fish: LEVEL UP! :fish: You are now level 30.
+$6,000 received for leveling up.
+UNLOCKED NEW BAIT. Check out the bait shop with /shop bait.
+
+QUEST COMPLETE!
+Daily Level-ups Tier 1
+Reward:
++$430
+1x uncommon chest :crate_uncommon:
+You got 2 Gold Fish from the chest! :gold_fish:
+
+epicmouse9925
+You caught:
+1 :fish: Fish
+7 :salmon: Salmon
+8 :cod: Cod
++102 XP
+Global boost by Wolfs!
+
+You must wait 1.8s before fishing again.
+Your cooldown: 3.5s
+
+epicmouse9925
+You caught:
+9 :salmon: Salmon
+7 :cod: Cod
++97 XP
+Global boost by Wolfs!
+
+epicmouse9925
+You caught:
+1 :fish: Fish
+9 :salmon: Salmon
+5 :cod: Cod
+You found an artifact box :crate_artifact:
+You found an Endurance Charm :charm_pink:!
+You found a Quality Charm :charm_green:!
+You found an Experience Charm :charm_blue:!
+Your Endurance Charm is now level 1!
+Your Quality Charm is now level 1!
+Your Experience Charm is now level 1!
++81 XP
+Global boost by Wolfs!
+
+epicmouse9925
+You caught:
+2 :fish: Fish
+10 :salmon: Salmon
+5 :cod: Cod
++91 XP
+Global boost by Wolfs!
+
+QUEST COMPLETE!
+Daily Fishing Tier 1
+Reward:
++330 XP
+
+epicmouse9925
+You caught:
+6 :salmon: Salmon
+10 :cod: Cod
++120 XP
+Global boost by Wolfs!
+You ran out of :bait_worms: worms.

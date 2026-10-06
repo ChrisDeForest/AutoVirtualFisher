@@ -14,7 +14,7 @@ from .player_state import display_value
 DEFAULT_SNAPSHOT_ROOT = Path(__file__).parent / 'data' / 'player_snapshots'
 SNAPSHOT_SCHEMA_VERSION = 1
 # Parser warnings that quote a pasted line look like "<section>: <reason>: <line>".
-LINE_WARNING = re.compile(r'^(profile|buffs): ([^:]+): .*$', re.DOTALL)
+LINE_WARNING = re.compile(r'^(profile|buffs|quests): ([^:]+): .*$', re.DOTALL)
 
 
 def validate_full_state(state: dict) -> tuple[bool, list[str]]:
@@ -106,6 +106,29 @@ def list_accounts(root: Path = DEFAULT_SNAPSHOT_ROOT) -> tuple[list[str], list[s
     return sorted(accounts.values(), key=str.casefold), warnings
 
 
+def new_record_id() -> tuple[str, str]:
+    """Return (UTC ISO timestamp, sortable collision-resistant record id)."""
+    captured_at = datetime.now(timezone.utc).isoformat(timespec='microseconds').replace('+00:00', 'Z')
+    return captured_at, captured_at.replace(':', '').replace('-', '') + '-' + token_hex(4)
+
+
+def write_json_atomically(folder: Path, record_id: str, document: dict) -> None:
+    """Publish an immutable JSON document as <folder>/<record_id>.json via a flushed temporary file."""
+    folder.mkdir(parents=True, exist_ok=True)
+    destination = folder / f'{record_id}.json'
+    temporary = folder / f'.{record_id}.tmp'
+    try:
+        with temporary.open('x', encoding='utf-8', newline='\n') as handle:
+            json.dump(document, handle, ensure_ascii=False, indent=2)
+            handle.write('\n')
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, destination)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
 def save_snapshot(state: dict, root: Path = DEFAULT_SNAPSHOT_ROOT, mode: str = 'automatic',
                   account_name: str | None = None) -> dict:
     if mode not in ('automatic', 'manual'):
@@ -129,8 +152,7 @@ def save_snapshot(state: dict, root: Path = DEFAULT_SNAPSHOT_ROOT, mode: str = '
         if latest_full and _canonical_state(latest_full['state']) == _canonical_state(state):
             return {'status': 'unchanged', 'snapshot': latest_full, 'warnings': history_warnings}
 
-    captured_at = datetime.now(timezone.utc).isoformat(timespec='microseconds').replace('+00:00', 'Z')
-    snapshot_id = captured_at.replace(':', '').replace('-', '') + '-' + token_hex(4)
+    captured_at, snapshot_id = new_record_id()
     key = account_key(chosen_name)
     snapshot = {
         'schema_version': SNAPSHOT_SCHEMA_VERSION,
@@ -143,20 +165,7 @@ def save_snapshot(state: dict, root: Path = DEFAULT_SNAPSHOT_ROOT, mode: str = '
         'state': state,
         'parser_warnings': list(state.get('warnings', [])),
     }
-    folder = Path(root) / key
-    folder.mkdir(parents=True, exist_ok=True)
-    destination = folder / f'{snapshot_id}.json'
-    temporary = folder / f'.{snapshot_id}.tmp'
-    try:
-        with temporary.open('x', encoding='utf-8', newline='\n') as handle:
-            json.dump(snapshot, handle, ensure_ascii=False, indent=2)
-            handle.write('\n')
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, destination)
-    finally:
-        if temporary.exists():
-            temporary.unlink()
+    write_json_atomically(Path(root) / key, snapshot_id, snapshot)
     return {'status': 'saved', 'snapshot': snapshot, 'warnings': history_warnings}
 
 

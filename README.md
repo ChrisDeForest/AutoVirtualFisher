@@ -6,7 +6,7 @@ data as JSON. Gameplay automation is not implemented yet.
 
 ## Player logbook: terminal and web
 
-The player logbook reads pasted `/profile`, `/buffs`, and `/prestige shop` responses into a shared
+The player logbook reads pasted `/profile`, `/buffs`, `/prestige shop`, `/pet`, and `/quests` responses into a shared
 player-state snapshot. It does not connect to Discord. Tests include text
 transcribed from the user's October 5, 2026 live screenshots, plus synthetic
 edge cases. Screenshot images themselves are not parsed by the application.
@@ -17,7 +17,7 @@ Start the interactive terminal menu:
 .venv/Scripts/python.exe -m src.player_cli
 ```
 
-Choose profile, buffs, or prestige shop, paste the response, then enter `.` on its own line.
+Choose a response type (profile, buffs, prestige shop, pet, or quests), paste it, then enter `.` on its own line.
 The menu can display the state as a readable summary or JSON. Pasted text is
 kept only for the current session. Use **a** to choose an account (or type a new
 name), **s** to save a manual snapshot, **h** for recent history, and **c** to
@@ -79,10 +79,32 @@ From the command line:
 With `--json`, standard output stays a single JSON document and save messages go
 to standard error. `--snapshot-dir PATH` uses a different snapshot folder.
 
+### Fishing results
+
+Paste one or more fishing results into **Fishing results** on the web page, as
+copied from Discord. **Read fishing results** tallies the batch: trips, fish
+caught per type, fishing XP per trip, finds (chests, charms), chest contents,
+charm levels, level-ups and their money, unlocks, completed quests with their
+rewards, and bait running out. Quest XP is kept separate from fishing XP.
+Cooldown replies and the message author line are skipped; anything else the
+parser does not recognize is listed for review.
+
+**Save session** stores the tally for an existing account, chosen explicitly:
+the name on fishing messages (e.g. `epicmouse9925`) is not the same as the
+`/profile` heading, so it cannot pick the account. Sessions are JSON files in
+`src/data/fishing_sessions/`, ignored by Git. Only the tally and a one-way
+fingerprint of the batch are kept, never the pasted text. The fingerprint stops
+the same batch from being counted twice; batches that only partly overlap
+cannot be detected, so paste each fishing run once.
+
+**Show history** adds an all-time fishing card for the account: trips, fish
+and XP per trip, finds per 100 trips, chest contents, quest rewards, and
+level-ups.
+
 For file input and machine-readable output:
 
 ```powershell
-.venv/Scripts/python.exe -m src.player_cli --profile profile.txt --buffs buffs.txt --prestige-shop shop.txt --pet pet.txt --json
+.venv/Scripts/python.exe -m src.player_cli --profile profile.txt --buffs buffs.txt --prestige-shop shop.txt --pet pet.txt --quests quests.txt --json
 ```
 
 Both interfaces use `src/player_state.py`. Missing values are `null` (shown as
@@ -105,8 +127,12 @@ as an inference; a prestige shown in `/profile` remains the authoritative value.
 The live pet command is `/pet` (confirmed by the user), even though the command
 website lists `/pets`. A `/pet` response records the average pet XP per fishing
 trip and distinguishes an explicit no-pets result from missing pet data. Detailed
-pet parsing needs a response that lists at least one pet. Quests, fishing results,
-and action scheduling are future work.
+pet parsing needs a response that lists at least one pet.
+
+A `/quests` response records each daily and special quest's progress, goal, and
+task, plus the reset countdown in minutes. Quests are saved with the snapshot,
+so later snapshots show quest progress as of when they were pasted. Action
+scheduling is future work.
 
 ## Run the scrapers
 

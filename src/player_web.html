@@ -32,6 +32,7 @@ dt { color:var(--muted); } dd { margin:0; text-align:right; overflow-wrap:anywhe
 select { font:inherit; width:100%; max-width:360px; border:1px solid #496575; border-radius:6px; padding:9px 12px; background:#0b1720; color:var(--ink); }
 .viewer { display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; margin:0 0 30px; } .viewer label { margin:0 0 8px; } .viewer div { flex:1 1 240px; }
 .save-status { border-left:3px solid var(--sea); padding:6px 14px; background:#15302a; overflow-wrap:anywhere; }
+.fishing { border-top:1px solid var(--line); margin-top:40px; padding-top:28px; }
 .dashboard { border-top:1px solid var(--line); margin-top:40px; padding-top:28px; overflow-wrap:anywhere; }
 .history { list-style:none; padding:0; margin:0; font-size:14px; } .history li { display:flex; gap:10px; flex-wrap:wrap; padding:8px 0; border-bottom:1px solid #263d4a; font-variant-numeric:tabular-nums; }
 .tag { color:var(--sea); border:1px solid #2f5d50; border-radius:4px; padding:0 7px; font-size:13px; }
@@ -67,6 +68,8 @@ $account_warnings
 <textarea id="prestige_shop" name="prestige_shop" spellcheck="false" placeholder="Paste the text from /prestige shop here…">$prestige_shop</textarea>
 <label for="pet">Pet response</label>
 <textarea id="pet" name="pet" spellcheck="false" placeholder="Paste the text from /pet here…">$pet</textarea>
+<label for="quests">Quests response</label>
+<textarea id="quests" name="quests" spellcheck="false" placeholder="Paste the text from /quests here…">$quests</textarea>
 <label for="save_account">Save to account</label>
 <select id="save_account" name="account"><option value="">Use the account from /profile</option>$save_account_options</select>
 <p class="note">Only needed for Save snapshot when the paste has no profile heading.</p>
@@ -76,6 +79,7 @@ $account_warnings
 </form>
 <article class="result"><h2>Your current setup</h2><p class="status">$status</p>$save_status$warnings$sections</article>
 </div>
+$fishing
 $dashboard
 <footer>Early parser preview. Missing values remain unknown. Unrecognized lines are shown for review. This page does not connect to Discord or send commands.</footer>
 </main>
