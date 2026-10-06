@@ -18,8 +18,10 @@ Start the interactive terminal menu:
 ```
 
 Choose profile, buffs, or prestige shop, paste the response, then enter `.` on its own line.
-The menu can display the state as a readable summary or JSON. It retains input
-only for the current session.
+The menu can display the state as a readable summary or JSON. Pasted text is
+kept only for the current session. Use **a** to choose an account (or type a new
+name), **s** to save a manual snapshot, **h** for recent history, and **c** to
+compare the latest two full snapshots.
 
 Start the local web interface:
 
@@ -27,10 +29,50 @@ Start the local web interface:
 .venv/Scripts/python.exe -m src.player_web
 ```
 
-Open <http://127.0.0.1:8765>, paste either or both responses, and select
-**Read player state**. **Download JSON** exports a snapshot. The server binds
-only to this computer, uses no external assets, and does not persist responses.
-Use `--port 8766` if the default port is occupied; press Ctrl+C to stop it.
+Open <http://127.0.0.1:8765>, paste any of the responses, and select
+**Read player state**. **Download JSON** exports the parsed state without saving
+it. The server binds only to this computer and uses no external assets. Use
+`--port 8766` if the default port is occupied; press Ctrl+C to stop it.
+
+### Snapshot history
+
+The logbook keeps a local history of parsed states for each account, so you can
+see progress between imports.
+
+- **Automatic saves (web):** **Read player state** saves a snapshot when the
+  `/profile` paste contains the `Inventory of <name>` heading, a balance, and a
+  level. If nothing changed since the latest full snapshot, nothing new is
+  written.
+- **Manual saves:** **Save snapshot** always writes a record, including partial
+  ones such as a `/pet` paste on its own. When the paste has no profile heading,
+  choose an existing account under **Save to account**. A chosen account must
+  match the account named in a pasted profile.
+- **Dashboard:** choose a **Saved account** and select **Show history** to see
+  the latest full snapshot, recent saves, and changes between the two most
+  recent full snapshots: balance, level, current XP, fish value, bait stock,
+  inventory counts, and pet levels/XP. Partial snapshots never take part in the
+  comparison, and values missing from either snapshot show as Unknown.
+
+Snapshots are JSON files in `src/data/player_snapshots/`, one folder per
+account. That folder is ignored by Git and never leaves this computer. Only the
+parsed state is saved; the pasted text is not stored or shown again. Lines the
+parser did not recognize are saved only as a count per response, and warnings
+that would quote a line are saved as `(line omitted)`.
+
+From the command line:
+
+```powershell
+# Save a full profile (duplicates of the latest full snapshot are skipped)
+.venv/Scripts/python.exe -m src.player_cli --profile profile.txt --save
+# Save a partial paste to a named account
+.venv/Scripts/python.exe -m src.player_cli --pet pet.txt --save --account BugParticle
+# Show recent snapshots, or progress between the latest two full ones
+.venv/Scripts/python.exe -m src.player_cli --history --account BugParticle
+.venv/Scripts/python.exe -m src.player_cli --compare --account BugParticle
+```
+
+With `--json`, standard output stays a single JSON document and save messages go
+to standard error. `--snapshot-dir PATH` uses a different snapshot folder.
 
 For file input and machine-readable output:
 
@@ -42,7 +84,7 @@ Both interfaces use `src/player_state.py`. Missing values are `null` (shown as
 Unknown), an explicit `Pet: None` stays distinct from missing pet information,
 and conflicting duplicate fields are left unknown. Percentages, multipliers,
 and seconds retain their units. Unrecognized lines appear in warnings and in
-the JSON's `unparsed` section. Imports replace the displayed snapshot rather
+the JSON's `unparsed` section. Imports replace the displayed state rather
 than silently merging older account values.
 
 Currently supported fields: balance, level, prestige, current/required/remaining
@@ -59,7 +101,7 @@ The live pet command is `/pet` (confirmed by the user), even though the command
 website lists `/pets`. A `/pet` response records the average pet XP per fishing
 trip and distinguishes an explicit no-pets result from missing pet data. Detailed
 pet parsing needs a response that lists at least one pet. Quests, fishing results,
-automatic account tracking, and action scheduling are future work.
+and action scheduling are future work.
 
 ## Run the scrapers
 

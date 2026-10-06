@@ -72,6 +72,26 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertEqual(save_snapshot(second, self.root)['status'], 'unchanged')
         self.assertEqual(len(list(self.root.rglob('*.json'))), 1)
 
+    def test_saved_snapshot_omits_pasted_text(self):
+        state = parse_responses(profile='Inventory of BugParticle\nBalance: $100\nLevel: 2\n'
+                                        'Secret note: meet at dawn\nFish Inventory\n3 Cod\n3 Cod',
+                                buffs='Mystery buff: whisper-123')
+        self.assertTrue(state['unparsed']['profile'])
+        result = save_snapshot(state, self.root)
+        self.assertEqual(result['status'], 'saved')
+        text = next(self.root.rglob('*.json')).read_text(encoding='utf-8')
+        for raw in ('meet at dawn', 'Secret note', 'whisper-123', '3 Cod'):
+            self.assertNotIn(raw, text)
+        stored = json.loads(text)
+        self.assertNotIn('unparsed', stored['state'])
+        self.assertEqual(stored['state']['unparsed_line_counts'],
+                         {'profile': 2, 'buffs': 1, 'prestige_shop': 0, 'pet': 0})
+        self.assertIn('profile: Unrecognized line (line omitted)', stored['state']['warnings'])
+        self.assertEqual(stored['parser_warnings'], stored['state']['warnings'])
+        self.assertEqual(stored['state']['inventory']['fish'], {'Cod': 3})
+        self.assertIn('meet at dawn', state['unparsed']['profile'][0], 'caller state is not modified')
+        self.assertEqual(save_snapshot(state, self.root)['status'], 'unchanged')
+
     def test_manual_save_keeps_intentional_duplicates(self):
         state = parsed_state()
         self.assertEqual(save_snapshot(state, self.root, mode='manual')['status'], 'saved')
@@ -156,8 +176,9 @@ class SnapshotComparisonTests(unittest.TestCase):
         self.assertEqual(result['changes']['inventory']['fish']['deltas'], {'Fish': 2})
         self.assertEqual(result['changes']['inventory']['exotic_fish']['deltas'], {'Gold Fish': 1})
         self.assertEqual(result['changes']['inventory']['special']['deltas'], {'Hooks': -2})
-        self.assertEqual(result['changes']['pets']['Dolphin']['level']['delta'], 1)
-        self.assertEqual(result['changes']['pets']['Dolphin']['xp_current']['delta'], 15)
+        self.assertEqual(result['changes']['pets']['status'], 'ok')
+        self.assertEqual(result['changes']['pets']['pets']['Dolphin']['level']['delta'], 1)
+        self.assertEqual(result['changes']['pets']['pets']['Dolphin']['xp_current']['delta'], 15)
 
     def test_compare_keeps_missing_values_unknown_and_reports_bait_change(self):
         older = self._state(100)
@@ -165,6 +186,7 @@ class SnapshotComparisonTests(unittest.TestCase):
         older['profile']['fish_value'] = None
         newer['profile'].update({'bait': 'Magic Bait', 'bait_quantity': 99})
         newer['inventory']['fish'] = None
+        newer['pets']['owned'] = None
         save_snapshot(older, self.root, mode='manual')
         save_snapshot(newer, self.root, mode='manual')
 
@@ -172,6 +194,7 @@ class SnapshotComparisonTests(unittest.TestCase):
         self.assertEqual(changes['fish_value'], {'status': 'unknown'})
         self.assertEqual(changes['bait'], {'status': 'changed', 'from': 'Worms', 'to': 'Magic Bait'})
         self.assertNotIn('delta', changes['bait'])
+        self.assertEqual(changes['pets'], {'status': 'unknown'})
         self.assertEqual(changes['inventory']['fish'], {'status': 'unknown'})
 
     def test_partial_snapshots_are_excluded(self):

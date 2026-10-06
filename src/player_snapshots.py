@@ -8,9 +8,13 @@ from pathlib import Path
 import re
 from secrets import token_hex
 
+from .player_state import display_value
+
 
 DEFAULT_SNAPSHOT_ROOT = Path(__file__).parent / 'data' / 'player_snapshots'
 SNAPSHOT_SCHEMA_VERSION = 1
+# Parser warnings that quote a pasted line look like "<section>: <reason>: <line>".
+LINE_WARNING = re.compile(r'^(profile|buffs): ([^:]+): .*$', re.DOTALL)
 
 
 def validate_full_state(state: dict) -> tuple[bool, list[str]]:
@@ -33,6 +37,19 @@ def account_key(name: str) -> str:
     slug = re.sub(r'[^a-z0-9]+', '-', ascii_name).strip('-') or 'account'
     digest = sha256(canonical.encode('utf-8')).hexdigest()[:8]
     return f'{slug}-{digest}'
+
+
+def _without_pasted_text(state: dict) -> dict:
+    """Copy a parsed state, replacing quoted pasted lines with counts and redacted warnings."""
+    stored = deepcopy(state)
+    unparsed = stored.pop('unparsed', None)
+    if isinstance(unparsed, dict):
+        stored['unparsed_line_counts'] = {section: len(lines) for section, lines in unparsed.items()
+                                          if isinstance(lines, list)}
+    if isinstance(stored.get('warnings'), list):
+        stored['warnings'] = [LINE_WARNING.sub(r'\1: \2 (line omitted)', warning) if isinstance(warning, str) else warning
+                              for warning in stored['warnings']]
+    return stored
 
 
 def _canonical_state(state: dict) -> str:
@@ -101,6 +118,7 @@ def save_snapshot(state: dict, root: Path = DEFAULT_SNAPSHOT_ROOT, mode: str = '
     if not chosen_name:
         return {'status': 'rejected', 'reason': 'Choose an account before saving a partial snapshot.'}
 
+    state = _without_pasted_text(state)
     full, reasons = validate_full_state(state)
     if mode == 'automatic' and not full:
         return {'status': 'rejected', 'reason': ' '.join(reasons)}
@@ -177,7 +195,7 @@ def _pet_change(older, newer) -> dict:
             'level': _scalar_change(older[pet].get('level'), newer[pet].get('level')),
             'xp_current': _scalar_change(older[pet].get('xp_current'), newer[pet].get('xp_current')),
         }
-    return changes
+    return {'status': 'ok', 'pets': changes}
 
 
 def compare_latest(account_name: str, root: Path = DEFAULT_SNAPSHOT_ROOT) -> dict:
@@ -212,3 +230,39 @@ def compare_latest(account_name: str, root: Path = DEFAULT_SNAPSHOT_ROOT) -> dic
                                   new_state.get('pets', {}).get('owned'))
     return {'status': 'ok', 'older': older, 'newer': newer, 'changes': changes,
             'warnings': warnings}
+
+
+def _signed(value) -> str:
+    return f'{value:+,}'
+
+
+def describe_changes(changes: dict) -> list[tuple[str, str | None]]:
+    """Turn compare_latest() changes into (label, text) rows; text is None when unknown."""
+    def scalar(change):
+        if change['status'] != 'ok':
+            return None
+        return f'{_signed(change["delta"])} ({display_value(change["from"])} -> {display_value(change["to"])})'
+
+    rows = [(label, scalar(changes[field])) for field, label in (
+        ('balance', 'Balance'), ('level', 'Level'), ('xp_current', 'Current XP'), ('fish_value', 'Fish value'))]
+    bait = changes['bait']
+    if bait['status'] == 'ok':
+        rows.append(('Bait', f'{bait["bait"]}: {_signed(bait["delta"])}'))
+    elif bait['status'] == 'changed':
+        rows.append(('Bait', f'Changed from {bait["from"]} to {bait["to"]}'))
+    else:
+        rows.append(('Bait', None))
+    for category, change in changes['inventory'].items():
+        label = category.replace('_', ' ').capitalize()
+        if change['status'] != 'ok':
+            rows.append((label, None))
+            continue
+        moved = [f'{item} {_signed(delta)}' for item, delta in change['deltas'].items() if delta]
+        rows.append((label, ', '.join(moved) or 'No change'))
+    if changes['pets']['status'] != 'ok':
+        rows.append(('Pets', None))
+    for pet, change in changes['pets'].get('pets', {}).items():
+        parts = [f'{label} {_signed(change[field]["delta"])}' if change[field]['status'] == 'ok' else f'{label} unknown'
+                 for field, label in (('level', 'Lvl'), ('xp_current', 'XP'))]
+        rows.append((f'Pet: {pet}', ', '.join(parts)))
+    return rows

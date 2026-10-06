@@ -29,15 +29,27 @@ dt { color:var(--muted); } dd { margin:0; text-align:right; overflow-wrap:anywhe
 .unknown { color:#9bafba; font-style:italic; } .known { color:var(--ink); }
 .warnings { border-left:3px solid #ffda8b; padding:1px 18px; margin:24px 0; background:#28302e; overflow-wrap:anywhere; }
 .warnings h3 { color:#ffda8b; } .warnings ul { padding-left:20px; font-size:14px; }
+select { font:inherit; width:100%; max-width:360px; border:1px solid #496575; border-radius:6px; padding:9px 12px; background:#0b1720; color:var(--ink); }
+.viewer { display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; margin:0 0 30px; } .viewer label { margin:0 0 8px; } .viewer div { flex:1 1 240px; }
+.save-status { border-left:3px solid var(--sea); padding:6px 14px; background:#15302a; overflow-wrap:anywhere; }
+.dashboard { border-top:1px solid var(--line); margin-top:40px; padding-top:28px; overflow-wrap:anywhere; }
+.history { list-style:none; padding:0; margin:0; font-size:14px; } .history li { display:flex; gap:10px; flex-wrap:wrap; padding:8px 0; border-bottom:1px solid #263d4a; font-variant-numeric:tabular-nums; }
+.tag { color:var(--sea); border:1px solid #2f5d50; border-radius:4px; padding:0 7px; font-size:13px; }
 footer { border-top:1px solid var(--line); margin-top:32px; padding-top:18px; color:var(--muted); font-size:13px; }
 @media(max-width:800px) { header { padding:18px 20px; font-size:14px; } main { padding:28px 20px; } .layout { grid-template-columns:1fr; gap:30px; } .result { border-left:0; border-top:1px solid var(--line); padding:24px 0 0; } }
 </style>
 </head>
 <body>
-<header><span class="brand">AutoVirtualFisher</span><span class="local">Local workspace · Manual import</span></header>
+<header><span class="brand">AutoVirtualFisher</span><span class="local">Local workspace · Saved on this computer</span></header>
 <main>
 <h1>Player logbook</h1>
 <p class="intro">Bring your current setup into focus. Paste your profile and buffs from Discord to inspect your equipment, balance, and bonuses together.</p>
+<form class="viewer" method="get" action="/">
+<div><label for="view_account">Saved account</label>
+<select id="view_account" name="account"><option value="">Choose an account…</option>$view_account_options</select></div>
+<button class="secondary" type="submit">Show history</button>
+</form>
+$account_warnings
 <div class="layout">
 <form method="post" action="/">
 <h2>Paste your bot responses</h2>
@@ -50,12 +62,16 @@ footer { border-top:1px solid var(--line); margin-top:32px; padding-top:18px; co
 <textarea id="prestige_shop" name="prestige_shop" spellcheck="false" placeholder="Paste the text from /prestige shop here…">$prestige_shop</textarea>
 <label for="pet">Pet response</label>
 <textarea id="pet" name="pet" spellcheck="false" placeholder="Paste the text from /pet here…">$pet</textarea>
-<div class="actions"><button type="submit">Read player state</button><button class="secondary" name="format" value="json" type="submit">Download JSON</button></div>
+<label for="save_account">Save to account</label>
+<select id="save_account" name="account"><option value="">Use the account from /profile</option>$save_account_options</select>
+<p class="note">Only needed for Save snapshot when the paste has no profile heading.</p>
+<div class="actions"><button type="submit" name="action" value="parse">Read player state</button><button class="secondary" name="action" value="save" type="submit">Save snapshot</button><button class="secondary" name="action" value="json" type="submit">Download JSON</button></div>
 <a class="reset" href="/">Clear responses</a>
-<p class="note">Responses stay on this computer and are not saved unless you download them.</p>
+<p class="note">Complete profiles are saved automatically as parsed snapshots on this computer. Your pasted text itself is never stored.</p>
 </form>
-<article class="result"><h2>Your current setup</h2><p class="status">$status</p>$warnings$sections</article>
+<article class="result"><h2>Your current setup</h2><p class="status">$status</p>$save_status$warnings$sections</article>
 </div>
+$dashboard
 <footer>Early parser preview. Missing values remain unknown. Unrecognized lines are shown for review. This page does not connect to Discord or send commands.</footer>
 </main>
 </body>
