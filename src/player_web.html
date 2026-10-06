@@ -29,8 +29,8 @@ dt { color:var(--muted); } dd { margin:0; text-align:right; overflow-wrap:anywhe
 .unknown { color:#9bafba; font-style:italic; } .known { color:var(--ink); }
 .warnings { border-left:3px solid #ffda8b; padding:1px 18px; margin:24px 0; background:#28302e; overflow-wrap:anywhere; }
 .warnings h3 { color:#ffda8b; } .warnings ul { padding-left:20px; font-size:14px; }
-select { font:inherit; width:100%; max-width:360px; border:1px solid #496575; border-radius:6px; padding:9px 12px; background:#0b1720; color:var(--ink); }
-.viewer { display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; margin:0 0 30px; } .viewer label { margin:0 0 8px; } .viewer div { flex:1 1 240px; }
+select, input[type=number] { font:inherit; width:100%; max-width:360px; border:1px solid #496575; border-radius:6px; padding:9px 12px; background:#0b1720; color:var(--ink); }
+.viewer { display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; margin:0 0 30px; } .viewer label { margin:0 0 8px; } .viewer div { flex:1 1 240px; } .viewer .target { flex:0 1 160px; }
 .save-status { border-left:3px solid var(--sea); padding:6px 14px; background:#15302a; overflow-wrap:anywhere; }
 .fishing { border-top:1px solid var(--line); margin-top:40px; padding-top:28px; }
 .dashboard { border-top:1px solid var(--line); margin-top:40px; padding-top:28px; overflow-wrap:anywhere; }
@@ -53,6 +53,8 @@ footer { border-top:1px solid var(--line); margin-top:32px; padding-top:18px; co
 <form class="viewer" method="get" action="/">
 <div><label for="view_account">Saved account</label>
 <select id="view_account" name="account"><option value="">Choose an account…</option>$view_account_options</select></div>
+<div class="target"><label for="target">Target level</label>
+<input id="target" type="number" name="target" min="1" value="$target_value" placeholder="Optional"></div>
 <button class="secondary" type="submit">Show history</button>
 </form>
 $account_warnings

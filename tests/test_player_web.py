@@ -269,3 +269,29 @@ Gives you bonus XP and leads you to more treasure.
         html = self.get('/?account=BugParticle')
         self.assertIn('777', html)
         self.assertIn('<h3>Quests</h3>', html)
+
+    def test_planner_card_uses_live_profile_and_fishing(self):
+        self.post(profile=(FIXTURES / 'live_profile.txt').read_text(encoding='utf-8'))
+        self.post(fishing=LIVE_FISHING, action='fishing_save', account='BugParticle')
+        html = self.get('/?account=BugParticle&target=135')
+        self.assertIn('<h3>Planner</h3>', html)
+        self.assertIn('XP model matches 1 of your snapshots', html)
+        self.assertIn('<dt>Level 132</dt><dd class="known">206,638 XP · about 1,965 trips</dd>', html)
+        self.assertIn('<dt>Level 135</dt>', html)
+        self.assertIn('<dt>Level 136</dt>', html)
+        self.assertIn('name="target" min="1" value="135"', html)
+
+    def test_planner_ignores_invalid_target_and_explains_missing_fishing(self):
+        self.post(profile=(FIXTURES / 'live_profile.txt').read_text(encoding='utf-8'))
+        html = self.get('/?account=BugParticle&target=abc')
+        self.assertIn('<dt>Level 132</dt><dd class="known">206,638 XP · save a fishing session to estimate trips</dd>', html)
+        self.assertIn('value=""', html)
+
+    def test_planner_shows_quest_estimates(self):
+        quests = (FIXTURES / 'live_quests.txt').read_text(encoding='utf-8')
+        self.post(profile=(FIXTURES / 'live_profile.txt').read_text(encoding='utf-8'), quests=quests)
+        self.post(fishing=LIVE_FISHING, action='fishing_save', account='BugParticle')
+        html = self.get('/?account=BugParticle')
+        self.assertIn('<dt>Daily Fishing (101/500)</dt><dd class="known">about 24 trips (399 fish at 16.83 per trip)</dd>', html)
+        self.assertIn('Pet Locator (0/1)', html)
+        self.assertIn('No pet finds in your fishing sessions yet', html)

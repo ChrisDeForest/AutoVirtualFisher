@@ -101,6 +101,27 @@ cannot be detected, so paste each fishing run once.
 and XP per trip, finds per 100 trips, chest contents, quest rewards, and
 level-ups.
 
+### Planner
+
+**Show history** also opens with a planner. Enter an optional **Target level**
+next to the account. Using the latest full snapshot and your saved fishing
+sessions, it estimates:
+
+- XP and fishing trips to the next level, five and ten levels ahead, and the
+  target level;
+- trips to finish each quest from the latest pasted `/quests`: fish caught per
+  trip for fishing quests, chest finds (boxes, chests, crates) per trip for
+  chest quests, and the XP model for level-up quests. Pet quests and unfamiliar
+  quest types say there is not enough data rather than guessing.
+
+The XP needed to advance from level L is the running total of the wiki level
+table through L, shipped as `src/reference/level_xp.json`. This matched a live
+level-131 profile exactly (477,500). The planner checks the model against every
+snapshot that shows current/required XP and, if any disagree, projects only the
+next level, which comes straight from the game's own "XP to next level". The
+wiki's level-up money does not match the game, so money is not projected.
+Estimates count fishing XP only; quest rewards make progress faster.
+
 For file input and machine-readable output:
 
 ```powershell

@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from .fishing_sessions import DEFAULT_SESSION_ROOT
 from .fishing_web import fishing_card, fishing_panel, handle_fishing
+from .planner_web import planner_card
 from .player_charts import line_chart_svg
 from .player_snapshots import (DEFAULT_SNAPSHOT_ROOT, compare_latest, describe_changes,
                                growth_series, list_accounts, load_history, save_snapshot)
@@ -65,7 +66,7 @@ def _progress(comparison):
     return span + '<dl>' + rows + '</dl>'
 
 
-def _dashboard(account, root, fishing_root=DEFAULT_SESSION_ROOT):
+def _dashboard(account, root, fishing_root=DEFAULT_SESSION_ROOT, target=None):
     """Return (html, latest full snapshot or None) for one account's saved history."""
     if not account:
         return '', None
@@ -86,6 +87,7 @@ def _dashboard(account, root, fishing_root=DEFAULT_SESSION_ROOT):
                      for metric, title, format_value in GROWTH_CHARTS)
     html = (f'<section class="dashboard"><h2>History for {escape(account)}</h2>'
             + _warning_list('Some snapshots could not be read', warnings)
+            + planner_card(account, root, fishing_root, target)
             + f'<h3>Growth</h3><div class="charts">{charts}</div>'
             + '<div class="layout"><div><h3>Progress between the latest full snapshots</h3>'
             + _progress(comparison)
@@ -120,7 +122,8 @@ def handle_save(state, action, selected_account, root):
 
 
 def render(profile='', buffs='', prestige_shop='', pet='', submitted=False, root=DEFAULT_SNAPSHOT_ROOT,
-           account='', action='parse', fishing=None, fishing_root=DEFAULT_SESSION_ROOT, quests=''):
+           account='', action='parse', fishing=None, fishing_root=DEFAULT_SESSION_ROOT, quests='',
+           target=None):
     """Render the page. `submitted` means the player form was posted; `fishing` holds a posted fishing batch."""
     page_warnings = []
     try:
@@ -145,7 +148,7 @@ def render(profile='', buffs='', prestige_shop='', pet='', submitted=False, root
         status = 'Parsed from your pasted responses'
         sections = _sections(state)
     else:
-        dashboard, latest = _dashboard(account, root, fishing_root)
+        dashboard, latest = _dashboard(account, root, fishing_root, target)
         if latest:
             status = f'Latest full snapshot for {account}, captured {latest["captured_at"]}'
             sections = _sections(latest['state'])
@@ -160,6 +163,7 @@ def render(profile='', buffs='', prestige_shop='', pet='', submitted=False, root
         save_account_options=_options(accounts, account if submitted else ''),
         view_account_options=_options(accounts, shown_account),
         account_warnings=_warning_list('Some snapshots could not be read', account_warnings),
+        target_value=target or '',
         fishing=fishing_panel(fishing or '', fishing_tally, fishing_message,
                               _options(accounts, account if fishing is not None else '')),
         dashboard=dashboard)
@@ -197,7 +201,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(400, 'Invalid query')
             return
         account = query.get('account', [''])[0].strip()
-        self.send_content(render(root=self.snapshot_root, account=account, fishing_root=self.fishing_root))
+        target = query.get('target', [''])[0].strip()
+        target = int(target) if target.isdigit() and 0 < int(target) <= 10_000 else None
+        self.send_content(render(root=self.snapshot_root, account=account, fishing_root=self.fishing_root,
+                                 target=target))
 
     def do_POST(self):
         if self.path != '/':
