@@ -5,6 +5,8 @@ from math import ceil
 from pathlib import Path
 import re
 
+from .catch_check import load_fish_reference
+from .fish_value import base_value, latest_sell_multiplier, value_check
 from .fishing_sessions import DEFAULT_SESSION_ROOT, fishing_totals
 from .player_snapshots import DEFAULT_SNAPSHOT_ROOT, load_history
 
@@ -86,10 +88,35 @@ def _quest_estimate(quest, totals, level, xp_to_next, xp_per_trip, increments, u
     return 'estimate', _trips(remaining, rate), f'{remaining:,} {unit} at {rate:,.2f} per trip'
 
 
+def _money(history, profile, totals, reference, money_target):
+    """Money per trip at the latest /buffs sell price, and trips until a target balance."""
+    sell = latest_sell_multiplier(history)
+    multiplier, multiplier_as_of = sell if sell else (None, None)
+    base_per_trip = unknown = None
+    if totals['trips'] and reference is not None:
+        base, unknown = base_value(totals['catches'], reference)
+        base_per_trip = base / totals['trips']
+    per_trip = base_per_trip * multiplier if base_per_trip is not None and multiplier is not None else None
+    money = {'multiplier': multiplier, 'multiplier_as_of': multiplier_as_of, 'base_per_trip': base_per_trip,
+             'per_trip': per_trip, 'unknown_fish': unknown or [],
+             'check': value_check(history, reference) if reference is not None else None, 'target': None}
+    balance, fish_value = profile.get('balance'), profile.get('fish_value')
+    if money_target and isinstance(balance, (int, float)):
+        unsold = isinstance(fish_value, (int, float))
+        have = balance + (fish_value if unsold else 0)
+        needed = max(money_target - have, 0)
+        money['target'] = {'amount': money_target, 'have': have, 'needed': needed,
+                           'trips': 0 if not needed else _trips(needed, per_trip),
+                           'includes_unsold_fish': unsold}
+    return money
+
+
 def plan(account_name: str, snapshot_root: Path = DEFAULT_SNAPSHOT_ROOT,
          fishing_root: Path = DEFAULT_SESSION_ROOT, target: int | None = None,
-         now: datetime | None = None, increments: list[int] | None = None) -> dict:
+         now: datetime | None = None, increments: list[int] | None = None,
+         money_target: int | None = None, fish_reference: dict | None = None) -> dict:
     increments = load_level_increments() if increments is None else increments
+    fish_reference = load_fish_reference() if fish_reference is None else fish_reference
     history, warnings = load_history(account_name, snapshot_root)
     full = [item for item in history if item.get('validity') == 'full']
     totals = fishing_totals(account_name, fishing_root)
@@ -130,4 +157,5 @@ def plan(account_name: str, snapshot_root: Path = DEFAULT_SNAPSHOT_ROOT,
     return {'status': 'ok', 'as_of': latest['captured_at'], 'level': level, 'xp_to_next': xp_to_next,
             'xp_per_trip': xp_per_trip, 'fishing_trips': totals['trips'], 'model': model, 'targets': targets,
             'quests': quests, 'quests_as_of': with_quests['captured_at'] if with_quests else None,
-            'quests_reset': quests_reset, 'warnings': warnings}
+            'quests_reset': quests_reset, 'money': _money(history, profile, totals, fish_reference, money_target),
+            'warnings': warnings}

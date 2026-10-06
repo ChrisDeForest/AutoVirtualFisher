@@ -10,6 +10,7 @@ from urllib.parse import parse_qs, urlsplit
 from .fishing_sessions import DEFAULT_SESSION_ROOT
 from .fishing_web import fishing_card, fishing_panel, handle_fishing
 from .paste_detect import detect
+from .fish_value import latest_sell_multiplier
 from .planner_web import planner_card
 from .player_charts import line_chart_svg
 from .player_snapshots import (DEFAULT_SNAPSHOT_ROOT, compare_latest, describe_changes, growth_series,
@@ -69,7 +70,7 @@ def _progress(comparison):
     return span + '<dl>' + rows + '</dl>'
 
 
-def _dashboard(account, root, fishing_root=DEFAULT_SESSION_ROOT, target=None):
+def _dashboard(account, root, fishing_root=DEFAULT_SESSION_ROOT, target=None, money_target=None):
     """Return (html, latest full snapshot or None) for one account's saved history."""
     if not account:
         return '', None
@@ -90,7 +91,7 @@ def _dashboard(account, root, fishing_root=DEFAULT_SESSION_ROOT, target=None):
                      for metric, title, format_value in GROWTH_CHARTS)
     html = (f'<section class="dashboard"><h2>History for {escape(account)}</h2>'
             + _warning_list('Some snapshots could not be read', warnings)
-            + planner_card(account, root, fishing_root, target)
+            + planner_card(account, root, fishing_root, target, money_target)
             + f'<h3>Growth</h3><div class="charts">{charts}</div>'
             + '<div class="layout"><div><h3>Progress between the latest full snapshots</h3>'
             + _progress(comparison)
@@ -170,14 +171,14 @@ def handle_save(state, action, selected_account, root):
 
 def render(profile='', buffs='', prestige_shop='', pet='', submitted=False, root=DEFAULT_SNAPSHOT_ROOT,
            account='', action='parse', fishing=None, fishing_root=DEFAULT_SESSION_ROOT, quests='',
-           target=None, everything=None, ocr_ready=False, smart_prefix=''):
+           target=None, everything=None, ocr_ready=False, smart_prefix='', money_target=None):
     """Render the page. `submitted` means the player form was posted; `fishing` holds a posted fishing batch."""
     page_warnings = []
     try:
         accounts, account_warnings = list_accounts(root)
     except OSError as error:
         accounts, account_warnings = [], [str(error)]
-    fishing_tally, fishing_message, fishing_biome = None, '', None
+    fishing_tally, fishing_message, fishing_biome, fishing_sell = None, '', None, None
     fishing_box, fishing_account = (fishing, account) if fishing is not None else ('', '')
     smart_message = ''
     if everything is not None:
@@ -200,6 +201,11 @@ def render(profile='', buffs='', prestige_shop='', pet='', submitted=False, root
                 latest_full = []
             if latest_full:
                 fishing_biome = latest_full[0]['state'].get('profile', {}).get('biome')
+            try:
+                sell = latest_sell_multiplier(load_history(account, root)[0])
+            except OSError:
+                sell = None
+            fishing_sell = sell[0] if sell else None
     save_message = ''
     shown_account = account
     if submitted:
@@ -215,7 +221,7 @@ def render(profile='', buffs='', prestige_shop='', pet='', submitted=False, root
         status = 'Parsed from your pasted responses'
         sections = _sections(state)
     else:
-        dashboard, latest = _dashboard(account, root, fishing_root, target)
+        dashboard, latest = _dashboard(account, root, fishing_root, target, money_target)
         if latest:
             status = f'Latest full snapshot for {account}, captured {latest["captured_at"]}'
             sections = _sections(latest['state'])
@@ -231,8 +237,9 @@ def render(profile='', buffs='', prestige_shop='', pet='', submitted=False, root
         view_account_options=_options(accounts, shown_account),
         account_warnings=_warning_list('Some snapshots could not be read', account_warnings),
         target_value=target or '',
+        money_value=money_target or '',
         fishing=fishing_panel(fishing_box, fishing_tally, fishing_message,
-                              _options(accounts, fishing_account), fishing_biome),
+                              _options(accounts, fishing_account), fishing_biome, fishing_sell),
         smart_status=f'<p class="save-status">{escape(smart_message)}</p>' if smart_message else '',
         screenshot_form=_screenshot_form(ocr_ready),
         dashboard=dashboard)
@@ -278,8 +285,10 @@ class Handler(BaseHTTPRequestHandler):
         account = query.get('account', [''])[0].strip()
         target = query.get('target', [''])[0].strip()
         target = int(target) if target.isdigit() and 0 < int(target) <= 10_000 else None
+        money = query.get('money', [''])[0].strip()
+        money = int(money) if money.isdigit() and 0 < int(money) <= 10 ** 15 else None
         self.send_content(render(root=self.snapshot_root, account=account, fishing_root=self.fishing_root,
-                                 target=target, ocr_ready=self.screenshots_supported()))
+                                 target=target, ocr_ready=self.screenshots_supported(), money_target=money))
 
     def read_uploaded_screenshots(self):
         try:

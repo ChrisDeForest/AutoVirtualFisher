@@ -42,11 +42,11 @@ class PlannerTests(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
-    def snapshot(self, level=10, current=960, required=None, quests='', mode='automatic'):
+    def snapshot(self, level=10, current=960, required=None, quests='', mode='automatic', extra='', buffs=''):
         required = 100 * level if required is None else required
         profile = (f'Inventory of epicmouse\nBalance: $1,000\n'
-                   f'Level {level}, {current:,}/{required:,} XP to next level')
-        state = parse_responses(profile=profile, quests=quests)
+                   f'Level {level}, {current:,}/{required:,} XP to next level\n{extra}')
+        state = parse_responses(profile=profile, quests=quests, buffs=buffs)
         result = save_snapshot(state, self.snapshots, mode=mode)
         self.assertEqual(result['status'], 'saved', result)
         return result['snapshot']
@@ -123,6 +123,32 @@ class PlannerTests(unittest.TestCase):
                       mode='manual', account_name='epicmouse')
         quests = self.make_plan()['quests']
         self.assertEqual(quests[0]['progress'], 7)
+
+    def test_money_per_trip_uses_sell_multiplier(self):
+        self.snapshot(buffs='Sell price: 2.00x')
+        self.fish('You caught:\n3 Cod\n+30 XP\n\nYou caught:\n2 Cod\n+20 XP')
+        money = self.make_plan(money_target=2_000)['money']
+        self.assertEqual(money['multiplier'], 2.0)
+        self.assertEqual(money['base_per_trip'], 25)
+        self.assertEqual(money['per_trip'], 50)
+        self.assertEqual(money['target'], {'amount': 2_000, 'have': 1_000, 'needed': 1_000, 'trips': 20,
+                                           'includes_unsold_fish': False})
+
+    def test_money_target_counts_unsold_fish(self):
+        self.snapshot(buffs='Sell price: 2.00x', extra='Fish Value: $100')
+        self.fish('You caught:\n3 Cod\n+30 XP\n\nYou caught:\n2 Cod\n+20 XP')
+        target = self.make_plan(money_target=2_000)['money']['target']
+        self.assertEqual((target['have'], target['needed'], target['trips']), (1_100, 900, 18))
+        self.assertTrue(target['includes_unsold_fish'])
+        reached = self.make_plan(money_target=500)['money']['target']
+        self.assertEqual((reached['needed'], reached['trips']), (0, 0))
+
+    def test_money_without_buffs_or_fishing(self):
+        self.snapshot()
+        money = self.make_plan(money_target=2_000)['money']
+        self.assertIsNone(money['multiplier'])
+        self.assertIsNone(money['per_trip'])
+        self.assertIsNone(money['target']['trips'])
 
 
 if __name__ == '__main__':

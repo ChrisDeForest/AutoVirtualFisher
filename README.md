@@ -154,23 +154,34 @@ level-ups.
 ### Planner
 
 **Show history** also opens with a planner. Enter an optional **Target level**
-next to the account. Using the latest full snapshot and your saved fishing
-sessions, it estimates:
+and **Target balance** next to the account. Using the latest full snapshot and
+your saved fishing sessions, it estimates:
 
 - XP and fishing trips to the next level, five and ten levels ahead, and the
   target level;
+- money per trip, and trips until your balance plus unsold fish reach the
+  target balance (assuming you sell everything you catch);
 - trips to finish each quest from the latest pasted `/quests`: fish caught per
   trip for fishing quests, chest finds (boxes, chests, crates) per trip for
   chest quests, and the XP model for level-up quests. Pet quests and unfamiliar
   quest types say there is not enough data rather than guessing.
 
 The XP needed to advance from level L is the running total of the wiki level
-table through L, shipped as `src/reference/level_xp.json`. This matched a live
-level-131 profile exactly (477,500). The planner checks the model against every
-snapshot that shows current/required XP and, if any disagree, projects only the
-next level, which comes straight from the game's own "XP to next level". The
-wiki's level-up money does not match the game, so money is not projected.
-Estimates count fishing XP only; quest rewards make progress faster.
+table through L, shipped as `src/reference/level_xp.json`. This matched live
+profiles exactly at levels 29, 30, and 131. The planner checks the model against
+every snapshot that shows current/required XP and, if any disagree, projects
+only the next level, which comes straight from the game's own "XP to next
+level". The wiki's level-up money does not match the game, so level-up rewards
+are not projected. Estimates count fishing XP only; quest rewards make
+progress faster.
+
+Money uses the wiki base sell prices (`src/reference/fish.json`) times the
+**Sell price** multiplier from your newest `/buffs`: a profile's Fish Value
+equals its fish at base prices times that multiplier (confirmed on two
+accounts, 2.20× and 4.83×). The planner rechecks this on every snapshot that
+has both `/profile` and `/buffs` and warns if a Fish Value disagrees. The XP
+check on a fishing batch also shows each trip's sell value at the chosen
+account's sell price.
 
 For file input and machine-readable output:
 

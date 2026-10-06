@@ -384,3 +384,25 @@ Gives you bonus XP and leads you to more treasure.
                     self.assertIn('Read screenshots', self.post(**fields))
         finally:
             del self.handler.ocr_ready
+
+    def test_planner_shows_money_per_trip_and_target_balance(self):
+        self.post(profile=(FIXTURES / 'live_profile.txt').read_text(encoding='utf-8'),
+                  buffs=(FIXTURES / 'live_buffs.txt').read_text(encoding='utf-8'))
+        self.post(fishing=LIVE_FISHING, action='fishing_save', account='BugParticle')
+        html = self.get('/?account=BugParticle&money=3000000')
+        self.assertIn('<dt>Money per trip</dt><dd class="known">$499.10 ($103.33 at wiki base prices × 4.83 sell price)</dd>', html)
+        self.assertIn('<dt>Reach $3,000,000</dt><dd class="known">$519,697 more (balance + unsold fish: $2,480,303) · about 1,042 trips</dd>', html)
+        self.assertIn('Fish Value matches wiki base prices × your sell price in 1 of your snapshots.', html)
+        self.assertIn('name="money" min="1" value="3000000"', html)
+
+    def test_planner_money_needs_buffs(self):
+        self.post(profile=(FIXTURES / 'live_profile.txt').read_text(encoding='utf-8'))
+        html = self.get('/?account=BugParticle')
+        self.assertIn('Paste /buffs to include your sell price', html)
+
+    def test_xp_check_values_catches_at_the_accounts_sell_price(self):
+        self.post(profile=(FIXTURES / 'live_profile.txt').read_text(encoding='utf-8'),
+                  buffs=(FIXTURES / 'live_buffs.txt').read_text(encoding='utf-8'))
+        html = self.post(fishing=LIVE_FISHING, action='fishing_read', account='BugParticle')
+        self.assertIn('<td>1</td><td>76</td><td>140</td><td>1.84×</td><td>$691</td>', html)
+        self.assertIn('Sell value of this batch: $2,995 at your sell price of 4.83× ($620 at wiki base prices).', html)

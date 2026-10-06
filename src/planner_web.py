@@ -22,9 +22,47 @@ def _model_note(model):
             'to check it.')
 
 
-def planner_card(account, snapshot_root, fishing_root, target=None):
+def _dollars(amount):
+    return f'${round(amount):,}'
+
+
+def _money_rows(money):
+    rows = []
+    if money['multiplier'] is None:
+        rows.append(('Money per trip', 'Paste /buffs to include your sell price', False))
+    elif money['per_trip'] is None:
+        rows.append(('Money per trip', 'Save a fishing session to estimate it', False))
+    else:
+        rows.append(('Money per trip', f'${money["per_trip"]:,.2f} (${money["base_per_trip"]:,.2f} at wiki base '
+                                       f'prices × {money["multiplier"]:.2f} sell price)', True))
+    target = money['target']
+    if target:
+        held = 'balance + unsold fish' if target['includes_unsold_fish'] else 'balance'
+        if not target['needed']:
+            text = f'Already there ({held}: {_dollars(target["have"])})'
+        else:
+            text = (f'{_dollars(target["needed"])} more ({held}: {_dollars(target["have"])}) · '
+                    + (f'about {target["trips"]:,} trips' if target['trips'] is not None
+                       else 'needs money per trip to estimate trips'))
+        rows.append((f'Reach {_dollars(target["amount"])}', text, True))
+    return rows
+
+
+def _value_note(check):
+    if not check:
+        return ''
+    if check['mismatches']:
+        first = check['mismatches'][0]
+        return (f'Fish Value disagrees with wiki base prices × sell price in a snapshot (game showed '
+                f'{_dollars(first["observed"])}, expected {_dollars(first["expected"])}), so money estimates may be off.')
+    if check['matches']:
+        return f'Fish Value matches wiki base prices × your sell price in {check["matches"]} of your snapshots.'
+    return ''
+
+
+def planner_card(account, snapshot_root, fishing_root, target=None, money_target=None):
     try:
-        result = plan(account, snapshot_root, fishing_root, target=target)
+        result = plan(account, snapshot_root, fishing_root, target=target, money_target=money_target)
     except OSError as error:
         return f'<p class="status">Planner unavailable: {escape(str(error))}</p>'
     if result['status'] != 'ok':
@@ -39,7 +77,11 @@ def planner_card(account, snapshot_root, fishing_root, target=None):
                 True) for item in result['targets']]
     html = ('<h3>Planner</h3>'
             f'<p class="note">{escape(basis)} {escape(_model_note(result["model"]))} '
-            'Estimates count fishing XP only; quest rewards make progress faster.</p>' + _rows(targets))
+            'Estimates count fishing XP only; quest rewards make progress faster.</p>' + _rows(targets)
+            + '<h3>Money</h3>'
+            + (f'<p class="note">{escape(_value_note(result["money"]["check"]))} Money assumes you sell every fish '
+               'you catch.</p>')
+            + _rows(_money_rows(result['money'])))
     if result['quests']:
         if result['quests_reset']:
             html += (f'<p class="status">These quests were pasted at {escape(result["quests_as_of"])} and have reset '
