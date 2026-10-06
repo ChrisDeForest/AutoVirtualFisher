@@ -35,10 +35,12 @@ def check_batch(trip_details: list[dict], reference: dict | None, biome: str | N
             base_value += row['base_sell'] * count
             if biome and biome not in row['biomes']:
                 off_biome.append(name)
-        ratio = trip['xp'] / base_xp if trip.get('xp') and base_xp and not unknown else None
+        # The trip's XP line includes chest XP, which does not scale with the catch.
+        xp = trip['xp'] - trip.get('chest_xp', 0) if trip.get('xp') is not None else None
+        ratio = xp / base_xp if xp and base_xp and not unknown else None
         jump = bool(ratio and previous and abs(ratio - previous['ratio']) >
                     1 / base_xp + 1 / previous['base_xp'] + JUMP_ALLOWANCE)
-        entry = {'number': number, 'base_xp': base_xp, 'xp': trip.get('xp'), 'ratio': ratio, 'jump': jump,
+        entry = {'number': number, 'base_xp': base_xp, 'xp': xp, 'ratio': ratio, 'jump': jump,
                  'previous_ratio': previous['ratio'] if jump else None, 'unknown': unknown,
                  'off_biome': off_biome, 'base_value': base_value, 'boosted': trip.get('boosted', False),
                  'events': trip.get('events', [])}

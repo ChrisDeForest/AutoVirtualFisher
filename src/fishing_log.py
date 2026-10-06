@@ -21,7 +21,7 @@ def _add(counts, name, amount):
 
 def parse_fishing(text: str) -> dict:
     tally = {'schema_version': FISHING_SCHEMA_VERSION, 'trips': 0, 'boosted_trips': 0, 'catches': {},
-             'fishing_xp': 0, 'finds': {}, 'chest_contents': {}, 'charm_levels': {}, 'level_ups': [],
+             'fishing_xp': 0, 'chest_xp': 0, 'finds': {}, 'chest_contents': {}, 'charm_levels': {}, 'level_ups': [],
              'level_up_money': 0, 'unlocks': [], 'quests_completed': [], 'bait_ran_out': [],
              'trip_details': [], 'warnings': [], 'unparsed_line_count': 0}
     mode = None
@@ -44,7 +44,7 @@ def parse_fishing(text: str) -> dict:
         if line == 'You caught:':
             pending = None
             tally['trips'] += 1
-            trip = {'catches': {}, 'xp': None, 'boosted': False, 'events': []}
+            trip = {'catches': {}, 'xp': None, 'chest_xp': 0, 'boosted': False, 'events': []}
             tally['trip_details'].append(trip)
             mode = 'catch'
             continue
@@ -102,6 +102,12 @@ def parse_fishing(text: str) -> dict:
             mode = 'quest_name'
         elif line == 'Reward:' and mode == 'await_reward':
             mode = 'reward'
+        elif match := re.fullmatch(rf'You got ({NUMBER}) XP from the chest[.!]?', line, re.I):
+            # Chest XP is already included in the trip's "+N XP" line.
+            tally['chest_xp'] += _number(match[1])
+            if trip is not None:
+                trip['chest_xp'] += _number(match[1])
+            event(f'Chest: {match[1]} XP')
         elif match := re.fullmatch(rf'You got ({NUMBER}) (.+?) from the chest!?', line, re.I):
             _add(tally['chest_contents'], _name(match[2]), _number(match[1]))
             event(f'Chest: {match[1]} {_name(match[2])}')

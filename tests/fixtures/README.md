@@ -19,3 +19,16 @@ as Discord `:name:` codes. The author name differs from the profile heading
 `live_quests.txt` is the user's `/quests` response copied from Discord on
 October 5, 2026, with three daily quests, one special daily quest, and the reset
 countdown.
+
+`live_discord_copy.txt` is a multi-message range the user copied from Discord on
+October 6, 2026, including Discord's message headers (`Virtual Fisher` / `APP` /
+` — <time>`), one of the user's own messages, unrelated bot replies, repeated
+`/profile` and `/buffs` responses, 26 fishing results, and `/quests`. Other
+players' names in "Global boost by" lines are replaced with placeholders.
+
+`ocr_*.txt` are the lines Windows OCR (`src/screenshot_ocr.py`, 1x scale)
+returned on October 6, 2026 for the user's screenshots `2x_fish_msgs.png`,
+`buff_msg.png`, `pet_msg.png`, and `profile_msg.png`, kept verbatim with their
+misreads (e.g. `Lv130` for `Lvl 30`) except that another player's name in a
+"Global boost by" line is replaced with a placeholder. The screenshots
+themselves stay in the ignored `docs/screenshots/` folder.

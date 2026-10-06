@@ -9,11 +9,14 @@ from urllib.parse import parse_qs, urlsplit
 
 from .fishing_sessions import DEFAULT_SESSION_ROOT
 from .fishing_web import fishing_card, fishing_panel, handle_fishing
+from .paste_detect import detect
 from .planner_web import planner_card
 from .player_charts import line_chart_svg
 from .player_snapshots import (DEFAULT_SNAPSHOT_ROOT, compare_latest, describe_changes, growth_series,
                                latest_full_snapshots, list_accounts, load_history, save_snapshot)
 from .player_state import display_value, parse_responses, quest_summary
+from .screenshot_ocr import ocr_available, read_image
+from .screenshot_web import INSTALL_COMMAND, MAX_UPLOAD_BYTES, read_screenshots, uploaded_files
 
 TEMPLATE = Path(__file__).with_name('player_web.html')
 HISTORY_LIMIT = 10
@@ -96,6 +99,50 @@ def _dashboard(account, root, fishing_root=DEFAULT_SESSION_ROOT, target=None):
     return html, comparison['newer']
 
 
+SORTED_NAMES = {'profile': ('profile', 'profiles'), 'buffs': ('buffs response', 'buffs responses'),
+                'prestige_shop': ('prestige shop', 'prestige shops'), 'pet': ('pet response', 'pet responses'),
+                'quests': ('quest list', 'quest lists'), 'fishing': ('fishing result', 'fishing results')}
+
+
+def _plural(count, singular, plural):
+    return f'{count} {singular if count == 1 else plural}'
+
+
+def sort_summary(result):
+    """Describe what detect() found, for the message shown above the boxes."""
+    parts = []
+    for kind, (singular, plural) in SORTED_NAMES.items():
+        count = result['counts'].get(kind)
+        if not count:
+            continue
+        part = _plural(count, singular, plural)
+        if count > 1 and kind != 'fishing':
+            when = result['times'].get(kind)
+            part += ' (using the newest' + (f', from {when}' if when else '') + ')'
+        parts.append(part)
+    skipped = ([_plural(result['skipped_bot'], 'other bot message', 'other bot messages')] if result['skipped_bot'] else []) + \
+              ([_plural(result['skipped_user'], 'of your own messages', 'of your own messages')] if result['skipped_user'] else [])
+    message = ('Found ' + ', '.join(parts) + '.') if parts else 'Nothing recognizable was found in that paste.'
+    if skipped:
+        message += ' Skipped ' + ' and '.join(skipped) + '.'
+    if parts:
+        message += ' Check the boxes below, then select Read player state and Read fishing results.'
+    return message
+
+
+def _screenshot_form(ocr_ready):
+    if not ocr_ready:
+        return ('<p class="note">To read screenshots instead of pasting, install Windows OCR support: '
+                f'<code>{escape(INSTALL_COMMAND)}</code></p>')
+    return ('<form class="upload" method="post" action="/screenshots" enctype="multipart/form-data">'
+            '<label for="screenshots">Or read screenshots</label>'
+            '<input id="screenshots" type="file" name="screenshots" accept=".png,.jpg,.jpeg" multiple>'
+            '<div class="actions"><button class="secondary" type="submit">Read screenshots</button></div>'
+            '<p class="note">Text is read on this computer with Windows OCR, and the images are not kept. Choose '
+            'screenshots in time order: when several show the same kind of response, the last one is used. '
+            'Check the numbers in the boxes before saving; OCR can miss bold numbers such as pet XP.</p></form>')
+
+
 def handle_save(state, action, selected_account, root):
     """Save according to the submitted action. Return (status message, account to show)."""
     parsed_account = state['profile'].get('account_name')
@@ -123,7 +170,7 @@ def handle_save(state, action, selected_account, root):
 
 def render(profile='', buffs='', prestige_shop='', pet='', submitted=False, root=DEFAULT_SNAPSHOT_ROOT,
            account='', action='parse', fishing=None, fishing_root=DEFAULT_SESSION_ROOT, quests='',
-           target=None):
+           target=None, everything=None, ocr_ready=False, smart_prefix=''):
     """Render the page. `submitted` means the player form was posted; `fishing` holds a posted fishing batch."""
     page_warnings = []
     try:
@@ -131,6 +178,19 @@ def render(profile='', buffs='', prestige_shop='', pet='', submitted=False, root
     except OSError as error:
         accounts, account_warnings = [], [str(error)]
     fishing_tally, fishing_message, fishing_biome = None, '', None
+    fishing_box, fishing_account = (fishing, account) if fishing is not None else ('', '')
+    smart_message = ''
+    if everything is not None:
+        sorted_paste = detect(everything)
+        responses = sorted_paste['responses']
+        profile, buffs, prestige_shop, pet, quests = (responses[kind] for kind in
+                                                      ('profile', 'buffs', 'prestige_shop', 'pet', 'quests'))
+        fishing_box = sorted_paste['fishing']
+        detected = parse_responses(profile=profile)['profile']['account_name']
+        fishing_account = detected if detected in accounts else ''
+        smart_message = sort_summary(sorted_paste)
+    if smart_prefix:
+        smart_message = f'{smart_prefix} {smart_message}'.strip()
     if fishing is not None:
         fishing_tally, fishing_message = handle_fishing(fishing, action, account, accounts, fishing_root)
         if account in accounts:
@@ -171,14 +231,22 @@ def render(profile='', buffs='', prestige_shop='', pet='', submitted=False, root
         view_account_options=_options(accounts, shown_account),
         account_warnings=_warning_list('Some snapshots could not be read', account_warnings),
         target_value=target or '',
-        fishing=fishing_panel(fishing or '', fishing_tally, fishing_message,
-                              _options(accounts, account if fishing is not None else ''), fishing_biome),
+        fishing=fishing_panel(fishing_box, fishing_tally, fishing_message,
+                              _options(accounts, fishing_account), fishing_biome),
+        smart_status=f'<p class="save-status">{escape(smart_message)}</p>' if smart_message else '',
+        screenshot_form=_screenshot_form(ocr_ready),
         dashboard=dashboard)
 
 
 class Handler(BaseHTTPRequestHandler):
     snapshot_root = DEFAULT_SNAPSHOT_ROOT
     fishing_root = DEFAULT_SESSION_ROOT
+    ocr_reader = staticmethod(read_image)
+    # None means "check whether the Windows OCR packages are installed".
+    ocr_ready = None
+
+    def screenshots_supported(self):
+        return ocr_available() if self.ocr_ready is None else self.ocr_ready
 
     def log_message(self, format, *args):
         # Pasted account data should not appear in request logs.
@@ -211,9 +279,33 @@ class Handler(BaseHTTPRequestHandler):
         target = query.get('target', [''])[0].strip()
         target = int(target) if target.isdigit() and 0 < int(target) <= 10_000 else None
         self.send_content(render(root=self.snapshot_root, account=account, fishing_root=self.fishing_root,
-                                 target=target))
+                                 target=target, ocr_ready=self.screenshots_supported()))
+
+    def read_uploaded_screenshots(self):
+        try:
+            length = int(self.headers.get('Content-Length', '0'))
+        except ValueError:
+            self.send_error(400, 'Invalid upload')
+            return
+        if length < 0 or length > MAX_UPLOAD_BYTES:
+            self.send_error(413, 'Screenshots are too large')
+            return
+        if self.headers.get_content_type() != 'multipart/form-data':
+            self.send_error(415, 'Expected a file upload')
+            return
+        body = self.rfile.read(length)
+        ready = self.screenshots_supported()
+        if not ready:
+            text, summary = '', f'Screenshot reading needs Windows OCR support: {INSTALL_COMMAND}'
+        else:
+            text, summary = read_screenshots(uploaded_files(self.headers['Content-Type'], body), self.ocr_reader)
+        self.send_content(render(root=self.snapshot_root, fishing_root=self.fishing_root, everything=text,
+                                 smart_prefix=summary, ocr_ready=ready))
 
     def do_POST(self):
+        if self.path == '/screenshots':
+            self.read_uploaded_screenshots()
+            return
         if self.path != '/':
             self.send_error(404)
             return
@@ -236,16 +328,22 @@ class Handler(BaseHTTPRequestHandler):
         quests = fields.get('quests', [''])[0]
         account = fields.get('account', [''])[0].strip()
         action = fields.get('action', [''])[0] or ('json' if fields.get('format', [''])[0] == 'json' else 'parse')
-        if action in ('fishing_read', 'fishing_save'):
+        if action == 'sort':
+            self.send_content(render(root=self.snapshot_root, fishing_root=self.fishing_root,
+                                     everything=fields.get('everything', [''])[0],
+                                     ocr_ready=self.screenshots_supported()))
+        elif action in ('fishing_read', 'fishing_save'):
             self.send_content(render(root=self.snapshot_root, account=account, action=action,
-                                     fishing=fields.get('fishing', [''])[0], fishing_root=self.fishing_root))
+                                     fishing=fields.get('fishing', [''])[0], fishing_root=self.fishing_root,
+                                     ocr_ready=self.screenshots_supported()))
         elif action == 'json':
             self.send_content(json.dumps(parse_responses(profile, buffs, prestige_shop, pet, quests), indent=2, ensure_ascii=False),
                               'application/json; charset=utf-8', download=True)
         else:
             self.send_content(render(profile, buffs, prestige_shop, pet, submitted=True, root=self.snapshot_root,
                                      account=account, action='save' if action == 'save' else 'parse',
-                                     fishing_root=self.fishing_root, quests=quests))
+                                     fishing_root=self.fishing_root, quests=quests,
+                                     ocr_ready=self.screenshots_supported()))
 
 
 def main():

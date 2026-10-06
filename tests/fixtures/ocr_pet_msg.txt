@@ -1,0 +1,30 @@
+epicmouse used
+% pet
+Virtual Fisher 10:23 AM
+Pets are permanent, they are not lost when you prestige. They increase in
+effectiveness as you level them up.
++14 pet XP per fishing trip (average)
+Current pet: Dolphin.
+•V Puffer(Lv130)
+Increases your fish catch.
+XP to next level.
+Dolphin(Lvl 51)
+Gives you bonus XP and leads you to more treasure.
+XP to next level.
+Zebrafish(Lvl 61)
+Increases fish quality.
+XP to next level.
+Axolotl(Lvl 60)
+Increases the quality of treasure you find.
+XP to next level.
+Tuna(Lv114)
+Buffs every stat slightly. Wicked!
+931725 XP to next level.
+Deselect
+Select
+Select
+$ Select
+Select
+Select
+Return
+Back

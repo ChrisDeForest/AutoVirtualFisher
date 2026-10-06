@@ -34,6 +34,45 @@ Open <http://127.0.0.1:8765>, paste any of the responses, and select
 it. The server binds only to this computer and uses no external assets. Use
 `--port 8766` if the default port is occupied; press Ctrl+C to stop it.
 
+### Paste anything
+
+Instead of filling each box, select a stretch of messages in Discord, copy, and
+paste it into **Paste anything**, then select **Sort into boxes**. Discord's
+message headers (`Virtual Fisher` / `APP` / ` — <time>`) split the paste into
+messages; each Virtual Fisher reply is recognized as a profile, buffs, prestige
+shop, pet, quests, or fishing result and placed in its box. When the same kind
+appears more than once, the newest (last) one is used; all fishing results are
+combined into one batch. Your own messages and other bot replies (shop,
+boosts, "You don't have enough…") are skipped and counted. Text pasted without
+headers is split where each response's first line appears. Nothing is saved
+until you select **Read player state** and **Read fishing results** (or **Save
+session**) as usual.
+
+### Screenshots
+
+With Windows OCR support installed, **Read screenshots** next to **Paste
+anything** reads PNG or JPEG screenshots of Virtual Fisher replies and sorts the
+text into the same boxes for review:
+
+```powershell
+uv pip install --python .venv -r requirements-ocr.txt
+```
+
+The repository's `.venv` was created with uv, which does not include pip. In a
+standard `python -m venv` environment, use
+`.venv/Scripts/python.exe -m pip install -r requirements-ocr.txt` instead.
+
+Text recognition uses the OCR engine built into Windows 10/11 (no separate
+program), runs on this computer, and the uploaded images are deleted after
+reading. Discord's buttons, "used /command" lines, timestamps, and tips are
+dropped, and known misreads are corrected (`Lv130` → `Lvl 30`, a period after
+a buff name, emoji fragments such as `160 to Hooks`). Select screenshots in
+time order, since the last of each kind is used. Profiles, buffs, and fishing
+results read reliably; Windows OCR skips bold numbers with commas, so pet XP
+progress from a `/pet` screenshot usually stays Unknown. Copied text remains the
+most accurate input. Without the OCR packages, the page shows the install
+command and everything else works as before.
+
 ### Snapshot history
 
 The logbook keeps a local history of parsed states for each account, so you can

@@ -46,6 +46,13 @@ class CheckBatchTests(unittest.TestCase):
         self.assertIsNone(trip['ratio'])
         self.assertEqual(trip['base_value'], 20)
 
+    def test_chest_xp_is_left_out_of_the_ratio(self):
+        trips = parse_fishing('You caught:\n1 Fish\n8 Salmon\n13 Cod\nYou got 217 XP from the chest.\n+382 XP')
+        trip = check_batch(trips['trip_details'], load_fish_reference())['trips'][0]
+        self.assertEqual(trip['base_xp'], 82)
+        self.assertEqual(trip['xp'], 165)
+        self.assertAlmostEqual(trip['ratio'], 165 / 82)
+
     def test_missing_xp_or_reference(self):
         trips = parse_fishing('You caught:\n2 Cod')['trip_details']
         self.assertIsNone(check_batch(trips, load_fish_reference())['trips'][0]['ratio'])

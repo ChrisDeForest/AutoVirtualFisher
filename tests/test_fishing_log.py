@@ -68,6 +68,15 @@ class FishingEdgeTests(unittest.TestCase):
         self.assertEqual(tally['catches'], {'Salmon': 4})
         self.assertEqual(tally['fishing_xp'], 1200)
 
+    def test_chest_xp_is_recorded_separately(self):
+        tally = parse_fishing('You caught:\n1 Fish\n8 Salmon\n13 Cod\nYou found an uncommon chest :crate_uncommon:\n'
+                              'You got 217 XP from the chest.\n+382 XP')
+        self.assertEqual(tally['chest_contents'], {})
+        self.assertEqual(tally['chest_xp'], 217)
+        self.assertEqual(tally['fishing_xp'], 382, 'the trip line already includes chest XP')
+        self.assertEqual(tally['trip_details'][0]['chest_xp'], 217)
+        self.assertEqual(tally['trip_details'][0]['events'], ['Found uncommon chest', 'Chest: 217 XP'])
+
     def test_empty_input(self):
         tally = parse_fishing('  \n')
         self.assertEqual(tally['trips'], 0)

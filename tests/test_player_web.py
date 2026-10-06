@@ -310,3 +310,77 @@ Gives you bonus XP and leads you to more treasure.
         html = self.post(fishing=LIVE_FISHING, action='fishing_read', account='BugParticle')
         self.assertIn('Biome: Ocean, from the latest snapshot.', html)
         self.assertIn('Wiki says not caught in Ocean: Salmon, Cod', html)
+
+    def test_paste_anything_sorts_into_boxes_without_saving(self):
+        copy = (FIXTURES / 'live_discord_copy.txt').read_text(encoding='utf-8')
+        html = self.post(everything=copy, action='sort')
+        self.assertIn('Found 4 profiles (using the newest, from Yesterday at 5:35 PM)', html)
+        self.assertIn('26 fishing results', html)
+        self.assertIn('Skipped 15 other bot messages and 1 of your own messages.', html)
+        profile_box = html[html.index('id="profile"'):html.index('</textarea>', html.index('id="profile"'))]
+        self.assertIn('Inventory of epicmouse', profile_box)
+        self.assertIn('Bait: :bait_worms: Worms (10)', profile_box)
+        fishing_box = html[html.index('id="fishing"'):html.index('</textarea>', html.index('id="fishing"'))]
+        self.assertEqual(fishing_box.count('You caught:'), 26)
+        self.assertEqual(self.snapshot_files(), [])
+        self.assertEqual(self.session_files(), [])
+
+    def test_paste_anything_preselects_a_known_account_for_fishing(self):
+        self.post(profile=named_profile(name='epicmouse'))
+        html = self.post(everything='Inventory of epicmouse\nBalance: $5\nLevel: 3\n\nepicmouse9925\nYou caught:\n2 Cod\n+5 XP',
+                         action='sort')
+        fishing_select = html[html.index('id="fishing_account"'):html.index('</select>', html.index('id="fishing_account"'))]
+        self.assertIn('<option value="epicmouse" selected>', fishing_select)
+
+    def test_paste_anything_with_nothing_recognized(self):
+        html = self.post(everything='just chatting', action='sort')
+        self.assertIn('Nothing recognizable was found', html)
+
+    def upload(self, files):
+        boundary = 'testboundary'
+        body = b''
+        for name, content in files:
+            body += (f'--{boundary}\r\nContent-Disposition: form-data; name="screenshots"; filename="{name}"\r\n'
+                     f'Content-Type: image/png\r\n\r\n').encode() + content + b'\r\n'
+        body += f'--{boundary}--\r\n'.encode()
+        request = Request(self.url + '/screenshots', data=body,
+                          headers={'Content-Type': f'multipart/form-data; boundary={boundary}'})
+        with urlopen(request) as response:
+            return response.read().decode()
+
+    def test_screenshots_are_read_into_the_boxes(self):
+        def fake_reader(path):
+            fixture = Path(path).read_bytes().decode()
+            return (FIXTURES / f'ocr_{fixture}.txt').read_text(encoding='utf-8').splitlines()
+        self.handler.ocr_reader = staticmethod(fake_reader)
+        self.handler.ocr_ready = True
+        try:
+            html = self.upload([('a.png', b'profile_msg'), ('b.png', b'2x_fish_msgs'), ('notes.txt', b'x')])
+        finally:
+            del self.handler.ocr_reader, self.handler.ocr_ready
+        self.assertIn('Read 2 screenshots; skipped notes.txt (not a PNG or JPEG image).', html)
+        self.assertIn('Found 1 profile, 2 fishing results.', html)
+        profile_box = html[html.index('id="profile"'):html.index('</textarea>', html.index('id="profile"'))]
+        self.assertIn('Inventory of epicmouse', profile_box)
+        self.assertEqual(self.snapshot_files(), [])
+        self.assertEqual(list(Path(self.temporary).rglob('*.png')), [], 'uploaded images are not kept')
+
+    def test_screenshots_need_the_ocr_packages(self):
+        self.handler.ocr_ready = False
+        try:
+            html = self.get()
+            self.assertIn('requirements-ocr.txt', html)
+            html = self.upload([('a.png', b'x')])
+        finally:
+            del self.handler.ocr_ready
+        self.assertIn('Screenshot reading needs', html)
+
+    def test_screenshot_form_stays_after_other_posts(self):
+        self.handler.ocr_ready = True
+        try:
+            for fields in ({'profile': named_profile()}, {'fishing': 'You caught:\n1 Cod', 'action': 'fishing_read'},
+                           {'everything': 'x', 'action': 'sort'}):
+                with self.subTest(fields=fields):
+                    self.assertIn('Read screenshots', self.post(**fields))
+        finally:
+            del self.handler.ocr_ready

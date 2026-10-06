@@ -35,6 +35,8 @@ select, input[type=number] { font:inherit; width:100%; max-width:360px; border:1
 .table-scroll { overflow-x:auto; } .trips { width:100%; border-collapse:collapse; font-size:14px; font-variant-numeric:tabular-nums; }
 .trips th, .trips td { text-align:left; padding:7px 10px 7px 0; border-bottom:1px solid #263d4a; vertical-align:top; }
 .trips th { color:var(--muted); font-weight:600; white-space:nowrap; } .trips tr.jump td { color:#ffda8b; }
+.smart { margin:0 0 36px; max-width:860px; } .upload input[type=file] { color:var(--muted); font:inherit; }
+code { font:14px Consolas,monospace; color:var(--ink); }
 .fishing { border-top:1px solid var(--line); margin-top:40px; padding-top:28px; }
 .dashboard { border-top:1px solid var(--line); margin-top:40px; padding-top:28px; overflow-wrap:anywhere; }
 .history { list-style:none; padding:0; margin:0; font-size:14px; } .history li { display:flex; gap:10px; flex-wrap:wrap; padding:8px 0; border-bottom:1px solid #263d4a; font-variant-numeric:tabular-nums; }
@@ -61,6 +63,13 @@ footer { border-top:1px solid var(--line); margin-top:32px; padding-top:18px; co
 <button class="secondary" type="submit">Show history</button>
 </form>
 $account_warnings
+<section class="smart"><form method="post" action="/">
+<h2>Paste anything</h2>
+<p class="note">Copy a stretch of Discord messages (profiles, buffs, quests, pets, fishing results, all mixed together) and paste it here. Each response is sorted into its box below for you to check; the newest of each kind is used, and other messages are skipped. Nothing is saved until you read the boxes.</p>
+<label for="everything">Discord messages</label>
+<textarea id="everything" name="everything" spellcheck="false" placeholder="Paste copied Discord messages here…"></textarea>
+<div class="actions"><button type="submit" name="action" value="sort">Sort into boxes</button></div>
+</form>$screenshot_form$smart_status</section>
 <div class="layout">
 <form method="post" action="/">
 <h2>Paste your bot responses</h2>
