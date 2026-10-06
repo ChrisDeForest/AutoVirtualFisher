@@ -295,3 +295,18 @@ Gives you bonus XP and leads you to more treasure.
         self.assertIn('<dt>Daily Fishing (101/500)</dt><dd class="known">about 24 trips (399 fish at 16.83 per trip)</dd>', html)
         self.assertIn('Pet Locator (0/1)', html)
         self.assertIn('No pet finds in your fishing sessions yet', html)
+
+    def test_fishing_batch_shows_xp_check(self):
+        html = self.post(fishing=LIVE_FISHING, action='fishing_read')
+        self.assertIn('<h3>XP check</h3>', html)
+        self.assertIn('<td>1</td><td>76</td><td>140</td><td>1.84×</td>', html)
+        self.assertIn('▲ ratio changed from 1.84× to 1.94×', html)
+        self.assertIn('Found Experience Charm', html)
+        self.assertIn('Base sell value of this batch: $620', html)
+        self.assertIn('Choose an account to check catches against its biome.', html)
+
+    def test_xp_check_flags_fish_outside_the_accounts_biome(self):
+        self.post(profile=(FIXTURES / 'live_profile.txt').read_text(encoding='utf-8'))
+        html = self.post(fishing=LIVE_FISHING, action='fishing_read', account='BugParticle')
+        self.assertIn('Biome: Ocean, from the latest snapshot.', html)
+        self.assertIn('Wiki says not caught in Ocean: Salmon, Cod', html)

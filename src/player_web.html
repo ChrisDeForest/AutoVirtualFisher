@@ -32,6 +32,9 @@ dt { color:var(--muted); } dd { margin:0; text-align:right; overflow-wrap:anywhe
 select, input[type=number] { font:inherit; width:100%; max-width:360px; border:1px solid #496575; border-radius:6px; padding:9px 12px; background:#0b1720; color:var(--ink); }
 .viewer { display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; margin:0 0 30px; } .viewer label { margin:0 0 8px; } .viewer div { flex:1 1 240px; } .viewer .target { flex:0 1 160px; }
 .save-status { border-left:3px solid var(--sea); padding:6px 14px; background:#15302a; overflow-wrap:anywhere; }
+.table-scroll { overflow-x:auto; } .trips { width:100%; border-collapse:collapse; font-size:14px; font-variant-numeric:tabular-nums; }
+.trips th, .trips td { text-align:left; padding:7px 10px 7px 0; border-bottom:1px solid #263d4a; vertical-align:top; }
+.trips th { color:var(--muted); font-weight:600; white-space:nowrap; } .trips tr.jump td { color:#ffda8b; }
 .fishing { border-top:1px solid var(--line); margin-top:40px; padding-top:28px; }
 .dashboard { border-top:1px solid var(--line); margin-top:40px; padding-top:28px; overflow-wrap:anywhere; }
 .history { list-style:none; padding:0; margin:0; font-size:14px; } .history li { display:flex; gap:10px; flex-wrap:wrap; padding:8px 0; border-bottom:1px solid #263d4a; font-variant-numeric:tabular-nums; }

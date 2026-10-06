@@ -1,6 +1,7 @@
 """HTML for the fishing-results panel and the all-time fishing card on the local web page."""
 from html import escape
 
+from .catch_check import check_batch, load_fish_reference
 from .fishing_log import fingerprint, parse_fishing
 from .fishing_sessions import fishing_totals, save_session
 from .player_state import display_value
@@ -56,6 +57,38 @@ def _batch(tally):
     ])
 
 
+def _xp_check(tally, biome):
+    result = check_batch(tally.get('trip_details', []), load_fish_reference(), biome)
+    if result is None:
+        return '<h3>XP check</h3><p class="status">The wiki fish table (src/reference/fish.json) is unavailable.</p>'
+    if not result['trips']:
+        return ''
+    rows = []
+    for trip in result['trips']:
+        notes = list(trip['events'])
+        if trip['jump']:
+            notes.insert(0, f'▲ ratio changed from {trip["previous_ratio"]:.2f}× to {trip["ratio"]:.2f}×')
+        if trip['unknown']:
+            notes.append('Not in the wiki fish table: ' + ', '.join(trip['unknown']))
+        if trip['off_biome']:
+            notes.append(f'Wiki says not caught in {biome}: ' + ', '.join(trip['off_biome']))
+        ratio = f'{trip["ratio"]:.2f}×' if trip['ratio'] else '—'
+        xp = display_value(trip['xp']) if trip['xp'] is not None else '—'
+        row_class = ' class="jump"' if trip['jump'] else ''
+        rows.append(f'<tr{row_class}><td>{trip["number"]}</td>'
+                    f'<td>{escape(display_value(trip["base_xp"]))}</td><td>{escape(xp)}</td><td>{ratio}</td>'
+                    f'<td>{escape("; ".join(notes))}</td></tr>')
+    biome_note = (f'Biome: {biome}, from the latest snapshot.' if biome
+                  else 'Choose an account to check catches against its biome.')
+    return ('<h3>XP check</h3><p class="note">Ratio is the XP the game gave divided by the wiki base XP of '
+            'the catch, so a steady ratio is your overall XP multiplier and ▲ marks a change beyond rounding. '
+            f'{escape(biome_note)}</p>'
+            '<div class="table-scroll"><table class="trips"><thead><tr><th>Trip</th><th>Base XP</th><th>XP</th>'
+            '<th>Ratio</th><th>Notes</th></tr></thead><tbody>' + ''.join(rows) + '</tbody></table></div>'
+            f'<p class="note">Base sell value of this batch: ${result["base_value"]:,} at wiki base prices; '
+            'your sale multiplier is not applied.</p>')
+
+
 def handle_fishing(text, action, account, accounts, root):
     """Parse a pasted batch and save it when asked. Return (tally, status message)."""
     tally = parse_fishing(text)
@@ -74,12 +107,13 @@ def handle_fishing(text, action, account, accounts, root):
     return tally, f'Not saved: {result["reason"]}'
 
 
-def fishing_panel(text, tally, message, account_options):
+def fishing_panel(text, tally, message, account_options, biome=None):
     if tally is None:
         result = '<p class="status">Waiting for fishing results</p>'
     else:
         status = f'<p class="save-status">{escape(message)}</p>' if message else ''
-        result = '<p class="status">Tallied from your pasted results</p>' + status + _warnings(tally['warnings']) + _batch(tally)
+        result = ('<p class="status">Tallied from your pasted results</p>' + status + _warnings(tally['warnings'])
+                  + _batch(tally) + _xp_check(tally, biome))
     return ('<section class="fishing"><div class="layout"><form method="post" action="/">'
             '<h2>Fishing results</h2>'
             '<p class="note">Paste one or more fishing results, including any quest completions. '

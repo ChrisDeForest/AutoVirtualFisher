@@ -23,10 +23,15 @@ def parse_fishing(text: str) -> dict:
     tally = {'schema_version': FISHING_SCHEMA_VERSION, 'trips': 0, 'boosted_trips': 0, 'catches': {},
              'fishing_xp': 0, 'finds': {}, 'chest_contents': {}, 'charm_levels': {}, 'level_ups': [],
              'level_up_money': 0, 'unlocks': [], 'quests_completed': [], 'bait_ran_out': [],
-             'warnings': [], 'unparsed_line_count': 0}
+             'trip_details': [], 'warnings': [], 'unparsed_line_count': 0}
     mode = None
+    trip = None
     # A line that is not recognized may be the message author line, which precedes "You caught:".
     pending = None
+
+    def event(text):
+        if trip is not None:
+            trip['events'].append(text)
 
     def unrecognized(line):
         tally['warnings'].append(f'Unrecognized line: {line}')
@@ -39,6 +44,8 @@ def parse_fishing(text: str) -> dict:
         if line == 'You caught:':
             pending = None
             tally['trips'] += 1
+            trip = {'catches': {}, 'xp': None, 'boosted': False, 'events': []}
+            tally['trip_details'].append(trip)
             mode = 'catch'
             continue
         if pending is not None:
@@ -50,6 +57,7 @@ def parse_fishing(text: str) -> dict:
             if quest:
                 tally['quests_completed'].append({'quest': quest[1], 'tier': int(quest[2]),
                                                   'money': 0, 'xp': 0, 'items': {}})
+                event(f'Completed {quest[1]} tier {quest[2]}')
             else:
                 unrecognized(line)
             continue
@@ -71,30 +79,41 @@ def parse_fishing(text: str) -> dict:
             catch = re.fullmatch(r'(\d{1,3}(?:,\d{3})+|\d+)\s+(.+)', line)
             if catch and _name(catch[2]):
                 _add(tally['catches'], _name(catch[2]), _number(catch[1]))
+                _add(trip['catches'], _name(catch[2]), _number(catch[1]))
                 continue
             mode = None
         if match := re.fullmatch(rf'\+({NUMBER}) XP', line, re.I):
             tally['fishing_xp'] += _number(match[1])
+            if trip is not None:
+                trip['xp'] = (trip['xp'] or 0) + _number(match[1])
         elif re.fullmatch(r'Global boost by .+', line, re.I):
             tally['boosted_trips'] += 1
+            if trip is not None:
+                trip['boosted'] = True
         elif match := re.search(r'LEVEL UP!.*You are now level (\d+)', line, re.I):
             tally['level_ups'].append(int(match[1]))
+            event(f'Reached level {match[1]}')
         elif match := re.fullmatch(rf'\$({NUMBER}) received for leveling up\.?', line, re.I):
             tally['level_up_money'] += _number(match[1])
         elif match := re.match(r'UNLOCKED (.+?)\.(?:\s|$)', line):
             tally['unlocks'].append(match[1])
+            event(f'Unlocked {match[1]}')
         elif line == 'QUEST COMPLETE!':
             mode = 'quest_name'
         elif line == 'Reward:' and mode == 'await_reward':
             mode = 'reward'
         elif match := re.fullmatch(rf'You got ({NUMBER}) (.+?) from the chest!?', line, re.I):
             _add(tally['chest_contents'], _name(match[2]), _number(match[1]))
+            event(f'Chest: {match[1]} {_name(match[2])}')
         elif match := re.fullmatch(r'You found (?:an? )?(.+?)\s*!?', line, re.I):
             _add(tally['finds'], _name(match[1]), 1)
+            event(f'Found {_name(match[1])}')
         elif match := re.fullmatch(r'Your (.+?) is now level (\d+)!?', line, re.I):
             tally['charm_levels'][_name(match[1])] = int(match[2])
+            event(f'{_name(match[1])} now level {match[2]}')
         elif match := re.fullmatch(r'You ran out of (.+?)\.?', line, re.I):
             tally['bait_ran_out'].append(_name(match[1]))
+            event(f'Ran out of {_name(match[1])}')
         elif not any(pattern.fullmatch(line) for pattern in SKIPPED):
             pending = line
     if pending is not None:

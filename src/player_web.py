@@ -11,8 +11,8 @@ from .fishing_sessions import DEFAULT_SESSION_ROOT
 from .fishing_web import fishing_card, fishing_panel, handle_fishing
 from .planner_web import planner_card
 from .player_charts import line_chart_svg
-from .player_snapshots import (DEFAULT_SNAPSHOT_ROOT, compare_latest, describe_changes,
-                               growth_series, list_accounts, load_history, save_snapshot)
+from .player_snapshots import (DEFAULT_SNAPSHOT_ROOT, compare_latest, describe_changes, growth_series,
+                               latest_full_snapshots, list_accounts, load_history, save_snapshot)
 from .player_state import display_value, parse_responses, quest_summary
 
 TEMPLATE = Path(__file__).with_name('player_web.html')
@@ -130,9 +130,16 @@ def render(profile='', buffs='', prestige_shop='', pet='', submitted=False, root
         accounts, account_warnings = list_accounts(root)
     except OSError as error:
         accounts, account_warnings = [], [str(error)]
-    fishing_tally, fishing_message = None, ''
+    fishing_tally, fishing_message, fishing_biome = None, '', None
     if fishing is not None:
         fishing_tally, fishing_message = handle_fishing(fishing, action, account, accounts, fishing_root)
+        if account in accounts:
+            try:
+                latest_full, _ = latest_full_snapshots(account, root, count=1)
+            except OSError:
+                latest_full = []
+            if latest_full:
+                fishing_biome = latest_full[0]['state'].get('profile', {}).get('biome')
     save_message = ''
     shown_account = account
     if submitted:
@@ -165,7 +172,7 @@ def render(profile='', buffs='', prestige_shop='', pet='', submitted=False, root
         account_warnings=_warning_list('Some snapshots could not be read', account_warnings),
         target_value=target or '',
         fishing=fishing_panel(fishing or '', fishing_tally, fishing_message,
-                              _options(accounts, account if fishing is not None else '')),
+                              _options(accounts, account if fishing is not None else ''), fishing_biome),
         dashboard=dashboard)
 
 

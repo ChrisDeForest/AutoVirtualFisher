@@ -97,6 +97,17 @@ fingerprint of the batch are kept, never the pasted text. The fingerprint stops
 the same batch from being counted twice; batches that only partly overlap
 cannot be detected, so paste each fishing run once.
 
+Below the tally, an **XP check** lists every trip: the wiki base XP of what was
+caught (from `src/reference/fish.json`), the XP the game gave, and their
+ratio. A steady ratio is your overall XP multiplier; a change larger than the
+game's rounding is marked ▲ next to that trip's events, so you can see effects
+such as a charm levelling up. With an account chosen, catches the wiki says
+cannot occur in that account's latest-snapshot biome are flagged, as are fish
+missing from the wiki table. The batch's sell value is shown at wiki base
+prices, without your sale multiplier. Where the wiki's two sources disagree
+about a biome, the per-fish flags in `fish.json` are used. Saved sessions keep
+these per-trip catches, XP, and events.
+
 **Show history** adds an all-time fishing card for the account: trips, fish
 and XP per trip, finds per 100 trips, chest contents, quest rewards, and
 level-ups.

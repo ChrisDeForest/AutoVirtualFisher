@@ -39,6 +39,20 @@ class LiveFishingTests(unittest.TestCase):
         self.assertEqual(self.tally['warnings'], [])
         self.assertEqual(self.tally['unparsed_line_count'], 0)
 
+    def test_each_trip_records_catches_xp_and_events(self):
+        trips = self.tally['trip_details']
+        self.assertEqual(len(trips), 6)
+        self.assertEqual(trips[0]['catches'], {'Fish': 2, 'Salmon': 7, 'Cod': 12})
+        self.assertEqual([trip['xp'] for trip in trips], [140, 102, 97, 81, 91, 120])
+        self.assertTrue(all(trip['boosted'] for trip in trips))
+        self.assertEqual(trips[0]['events'], ['Reached level 30', 'Unlocked NEW BAIT',
+                                              'Completed Daily Level-ups tier 1', 'Chest: 2 Gold Fish'])
+        self.assertEqual(trips[3]['events'], ['Found artifact box', 'Found Endurance Charm', 'Found Quality Charm',
+                                              'Found Experience Charm', 'Endurance Charm now level 1',
+                                              'Quality Charm now level 1', 'Experience Charm now level 1'])
+        self.assertEqual(trips[4]['events'], ['Completed Daily Fishing tier 1'])
+        self.assertEqual(trips[5]['events'], ['Ran out of worms'])
+
 
 class FishingEdgeTests(unittest.TestCase):
     def test_unknown_lines_become_warnings_including_the_last_line(self):

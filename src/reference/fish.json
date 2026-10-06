@@ -1,0 +1,191 @@
+{
+  "fish": {
+    "Fish": {
+      "Type": "Fish",
+      "River": 1,
+      "Volcanic": 0,
+      "Ocean": 0,
+      "Sky": 0,
+      "Space": 1,
+      "Alien": 0,
+      "Base XP": 1,
+      "Base Sell Price": 1
+    },
+    "Salmon": {
+      "Type": "Salmon",
+      "River": 1,
+      "Volcanic": 1,
+      "Ocean": 0,
+      "Sky": 0,
+      "Space": 1,
+      "Alien": 0,
+      "Base XP": 2,
+      "Base Sell Price": 3
+    },
+    "Cod": {
+      "Type": "Cod",
+      "River": 1,
+      "Volcanic": 1,
+      "Ocean": 0,
+      "Sky": 0,
+      "Space": 0,
+      "Alien": 0,
+      "Base XP": 5,
+      "Base Sell Price": 10
+    },
+    "Tropical fish": {
+      "Type": "Tropical fish",
+      "River": 1,
+      "Volcanic": 1,
+      "Ocean": 1,
+      "Sky": 0,
+      "Space": 0,
+      "Alien": 0,
+      "Base XP": 10,
+      "Base Sell Price": 50
+    },
+    "Pufferfish": {
+      "Type": "Pufferfish",
+      "River": 1,
+      "Volcanic": 0,
+      "Ocean": 1,
+      "Sky": 0,
+      "Space": 0,
+      "Alien": 0,
+      "Base XP": 25,
+      "Base Sell Price": 150
+    },
+    "Fiery puffer": {
+      "Type": "Fiery puffer",
+      "River": 0,
+      "Volcanic": 1,
+      "Ocean": 0,
+      "Sky": 1,
+      "Space": 0,
+      "Alien": 0,
+      "Base XP": 50,
+      "Base Sell Price": 250
+    },
+    "Hot cod": {
+      "Type": "Hot cod",
+      "River": 0,
+      "Volcanic": 1,
+      "Ocean": 0,
+      "Sky": 0,
+      "Space": 0,
+      "Alien": 0,
+      "Base XP": 100,
+      "Base Sell Price": 500
+    },
+    "Squid": {
+      "Type": "Squid",
+      "River": 0,
+      "Volcanic": 0,
+      "Ocean": 1,
+      "Sky": 1,
+      "Space": 0,
+      "Alien": 0,
+      "Base XP": 175,
+      "Base Sell Price": 1200
+    },
+    "Turtle": {
+      "Type": "Turtle",
+      "River": 0,
+      "Volcanic": 0,
+      "Ocean": 1,
+      "Sky": 0,
+      "Space": 0,
+      "Alien": 0,
+      "Base XP": 400,
+      "Base Sell Price": 4000
+    },
+    "Dolphin": {
+      "Type": "Dolphin",
+      "River": 0,
+      "Volcanic": 0,
+      "Ocean": 1,
+      "Sky": 0,
+      "Space": 0,
+      "Alien": 0,
+      "Base XP": 800,
+      "Base Sell Price": 20000
+    },
+    "Guardian": {
+      "Type": "Guardian",
+      "River": 0,
+      "Volcanic": 0,
+      "Ocean": 0,
+      "Sky": 1,
+      "Space": 0,
+      "Alien": 0,
+      "Base XP": 1100,
+      "Base Sell Price": 29000
+    },
+    "Emerald squid": {
+      "Type": "Emerald squid",
+      "River": 0,
+      "Volcanic": 0,
+      "Ocean": 0,
+      "Sky": 1,
+      "Space": 0,
+      "Alien": 1,
+      "Base XP": 1900,
+      "Base Sell Price": 42000
+    },
+    "Rainbow fish": {
+      "Type": "Rainbow fish",
+      "River": 0,
+      "Volcanic": 0,
+      "Ocean": 0,
+      "Sky": 1,
+      "Space": 1,
+      "Alien": 1,
+      "Base XP": 4800,
+      "Base Sell Price": 125000
+    },
+    "Space fish": {
+      "Type": "Space fish",
+      "River": 0,
+      "Volcanic": 0,
+      "Ocean": 0,
+      "Sky": 0,
+      "Space": 1,
+      "Alien": 1,
+      "Base XP": 8000,
+      "Base Sell Price": 200000
+    },
+    "Galactic crab": {
+      "Type": "Galactic crab",
+      "River": 0,
+      "Volcanic": 0,
+      "Ocean": 0,
+      "Sky": 0,
+      "Space": 1,
+      "Alien": 0,
+      "Base XP": 15000,
+      "Base Sell Price": 600000
+    },
+    "Shark": {
+      "Type": "Shark",
+      "River": 0,
+      "Volcanic": 0,
+      "Ocean": 0,
+      "Sky": 0,
+      "Space": 0,
+      "Alien": 1,
+      "Base XP": 35000,
+      "Base Sell Price": 2000000
+    },
+    "Alien fish": {
+      "Type": "Alien fish",
+      "River": 0,
+      "Volcanic": 0,
+      "Ocean": 0,
+      "Sky": 0,
+      "Space": 0,
+      "Alien": 1,
+      "Base XP": 65000,
+      "Base Sell Price": 5000000
+    }
+  }
+}
