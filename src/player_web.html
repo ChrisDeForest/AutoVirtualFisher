@@ -35,7 +35,11 @@ select, input[type=number] { font:inherit; width:100%; max-width:360px; border:1
 .table-scroll { overflow-x:auto; } .trips { width:100%; border-collapse:collapse; font-size:14px; font-variant-numeric:tabular-nums; }
 .trips th, .trips td { text-align:left; padding:7px 10px 7px 0; border-bottom:1px solid #263d4a; vertical-align:top; }
 .trips th { color:var(--muted); font-weight:600; white-space:nowrap; } .trips tr.jump td { color:#ffda8b; }
-.smart { margin:0 0 36px; max-width:860px; } .upload input[type=file] { color:var(--muted); font:inherit; }
+.smart { margin:0 0 36px; max-width:860px; }
+a { color:var(--sea); } .brand { color:var(--ink); text-decoration:none; }
+.review { border-left:3px solid #ffda8b; padding:4px 18px; margin:18px 0; background:#1a2a33; }
+.review pre { white-space:pre-wrap; overflow-wrap:anywhere; font:13px/1.5 Consolas,monospace; color:var(--ink); }
+.review form { display:inline; } .upload input[type=file] { color:var(--muted); font:inherit; }
 code { font:14px Consolas,monospace; color:var(--ink); }
 .fishing { border-top:1px solid var(--line); margin-top:40px; padding-top:28px; }
 .dashboard { border-top:1px solid var(--line); margin-top:40px; padding-top:28px; overflow-wrap:anywhere; }
@@ -51,7 +55,7 @@ footer { border-top:1px solid var(--line); margin-top:32px; padding-top:18px; co
 </style>
 </head>
 <body>
-<header><span class="brand">AutoVirtualFisher</span><span class="local">Local workspace · Saved on this computer</span></header>
+<header><span class="brand">AutoVirtualFisher</span><span class="local"><a href="/live">Live capture</a> · Local workspace · Saved on this computer</span></header>
 <main>
 <h1>Player logbook</h1>
 <p class="intro">Bring your current setup into focus. Paste your profile and buffs from Discord to inspect your equipment, balance, and bonuses together.</p>

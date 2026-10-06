@@ -35,9 +35,22 @@ async def _read(path: Path) -> list[str]:
     if engine is None:
         raise RuntimeError('Windows has no OCR language installed for your profile languages.')
     result = await engine.recognize_async(bitmap)
-    return [line.text for line in result.lines]
+    lines = []
+    for line in result.lines:
+        rects = [word.bounding_rect for word in line.words]
+        left = min(rect.x for rect in rects) / SCALE
+        top = min(rect.y for rect in rects) / SCALE
+        right = max(rect.x + rect.width for rect in rects) / SCALE
+        bottom = max(rect.y + rect.height for rect in rects) / SCALE
+        lines.append({'text': line.text, 'left': left, 'top': top, 'right': right, 'bottom': bottom})
+    return lines
+
+
+def read_image_boxes(path: Path) -> list[dict]:
+    """Return each recognized line as {'text', 'left', 'top', 'right', 'bottom'} in image pixels."""
+    return asyncio.run(_read(path))
 
 
 def read_image(path: Path) -> list[str]:
     """Return the recognized text lines of one image file."""
-    return asyncio.run(_read(path))
+    return [line['text'] for line in read_image_boxes(path)]

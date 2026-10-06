@@ -9,6 +9,11 @@ BUTTONS = ('Fish Again', 'Sell', 'Return', 'Back', 'Deselect', 'Select', 'Invent
 BUFF_LABELS = ('Sell price', 'Fish catch', 'Fish quality', 'Treasure chance', 'Treasure quality',
                'XP Multiplier', 'Fishing cooldown')
 TIME = re.compile(r'\d{1,2}:\d{2}\s*[AP]M', re.I)
+# A message header: the bot name, its APP tag as OCR reads it ("APP", "AP", "VAPP", "V APP"), and/or a time.
+# Rejects look-alikes such as the DM title "Virtual Fisher [fish" or the profile panel's "Virtual Fisher#7036".
+MESSAGE_HEADER = re.compile(r'Virtual Fisher(?:\s+[V✓]?\s*A?PP?)?(?:\s+\d{1,2}:\d{2}\s*[AP]M)?', re.I)
+# Discord chrome that can sit inside the chat column: the message box and the slash-command list.
+CHROME = re.compile(r'Message [@#].*|[/\[|]\w+')
 
 
 def _pet_names():
@@ -43,8 +48,10 @@ def clean_ocr(lines: list[str], label: str) -> str:
             continue
         if re.fullmatch(r'[^\w]*\s*(' + '|'.join(map(re.escape, BUTTONS)) + ')', line):
             continue
-        if line.startswith('Virtual Fisher'):
+        if MESSAGE_HEADER.fullmatch(line):
             cleaned += ['Virtual Fisher', 'APP', f' — screenshot {label}']
+            continue
+        if CHROME.fullmatch(line):
             continue
         # The game writes "(Lvl 30)"; OCR often reads the "l" as "1" ("Lv130").
         line = re.sub(r'\(Lv[1lI|]\s?(\d+)\)', r'(Lvl \1)', line)

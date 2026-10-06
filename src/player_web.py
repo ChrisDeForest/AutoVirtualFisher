@@ -3,20 +3,24 @@ import argparse
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import threading
 from pathlib import Path
 from string import Template
 from urllib.parse import parse_qs, urlsplit
 
 from .fishing_sessions import DEFAULT_SESSION_ROOT
-from .fishing_web import bait_card, bait_choice, fishing_card, fishing_panel, handle_fishing
+from .fishing_web import bait_card, bait_choice, bait_options, fishing_card, fishing_panel, handle_fishing
 from .paste_detect import detect
 from .fish_value import latest_sell_multiplier
+from .live_capture import LiveCapture, capture_discord
+from .live_web import render_live
 from .planner_web import planner_card
 from .player_charts import line_chart_svg
 from .player_snapshots import (DEFAULT_SNAPSHOT_ROOT, compare_latest, describe_changes, growth_series,
                                latest_full_snapshots, list_accounts, load_history, save_snapshot)
 from .player_state import display_value, parse_responses, quest_summary
 from .screenshot_ocr import ocr_available, read_image
+from .review_queue import DEFAULT_REVIEW_ROOT, dismiss, list_items
 from .screenshot_web import INSTALL_COMMAND, MAX_UPLOAD_BYTES, read_screenshots, uploaded_files
 
 TEMPLATE = Path(__file__).with_name('player_web.html')
@@ -252,15 +256,74 @@ def render(profile='', buffs='', prestige_shop='', pet='', submitted=False, root
         dashboard=dashboard)
 
 
+LIVE_LOCK = threading.Lock()
+
+
 class Handler(BaseHTTPRequestHandler):
     snapshot_root = DEFAULT_SNAPSHOT_ROOT
     fishing_root = DEFAULT_SESSION_ROOT
+    review_root = DEFAULT_REVIEW_ROOT
+    # One live capture per server, shared by every request.
+    live = None
+    live_capture_function = staticmethod(capture_discord)
     ocr_reader = staticmethod(read_image)
     # None means "check whether the Windows OCR packages are installed".
     ocr_ready = None
 
     def screenshots_supported(self):
         return ocr_available() if self.ocr_ready is None else self.ocr_ready
+
+    def live_capture(self):
+        cls = type(self)
+        with LIVE_LOCK:
+            if cls.live is None:
+                cls.live = LiveCapture(self.snapshot_root, self.fishing_root, self.review_root,
+                                       capture=self.live_capture_function)
+        return cls.live
+
+    def live_page(self, notice=''):
+        try:
+            accounts, _ = list_accounts(self.snapshot_root)
+        except OSError:
+            accounts = []
+        try:
+            items, warnings = list_items(self.review_root)
+        except OSError as error:
+            items, warnings = [], [str(error)]
+        template = TEMPLATE.read_text(encoding='utf-8')
+        head = template[template.index('<head>'):template.index('</head>') + len('</head>')]
+        notice = ' '.join([notice] + warnings).strip()
+        self.send_content(render_live(head, self.live_capture().status(), accounts, bait_options(''), items, notice))
+
+    def live_action(self):
+        try:
+            length = int(self.headers.get('Content-Length', '0'))
+            if length < 0 or length > 4096:
+                self.send_error(413, 'Request is too large')
+                return
+            fields = parse_qs(self.rfile.read(length).decode('utf-8'), max_num_fields=5)
+        except (ValueError, UnicodeDecodeError):
+            self.send_error(400, 'Invalid form input')
+            return
+        action = fields.get('action', [''])[0]
+        live, notice = self.live_capture(), ''
+        if action == 'start':
+            account = fields.get('account', [''])[0].strip()
+            try:
+                accounts, _ = list_accounts(self.snapshot_root)
+            except OSError:
+                accounts = []
+            if account not in accounts:
+                notice = 'Choose a saved account to start. Save a snapshot for a new account first.'
+            else:
+                choice = bait_choice(fields.get('bait', [''])[0])
+                live.start(account, choice)
+        elif action == 'stop':
+            live.stop()
+        elif action == 'dismiss':
+            if not dismiss(self.review_root, fields.get('id', [''])[0]):
+                notice = 'That review item was already gone.'
+        self.live_page(notice)
 
     def log_message(self, format, *args):
         # Pasted account data should not appear in request logs.
@@ -281,6 +344,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         url = urlsplit(self.path)
+        if url.path == '/live':
+            self.live_page()
+            return
         if url.path != '/':
             self.send_error(404)
             return
@@ -321,6 +387,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path == '/screenshots':
             self.read_uploaded_screenshots()
+            return
+        if self.path == '/live':
+            self.live_action()
             return
         if self.path != '/':
             self.send_error(404)
@@ -375,6 +444,9 @@ def main():
             server.serve_forever()
         except KeyboardInterrupt:
             pass
+        finally:
+            if Handler.live:
+                Handler.live.stop()
 
 
 if __name__ == '__main__':

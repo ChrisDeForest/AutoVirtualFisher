@@ -73,6 +73,41 @@ progress from a `/pet` screenshot usually stays Unknown. Copied text remains the
 most accurate input. Without the OCR packages, the page shows the install
 command and everything else works as before.
 
+### Live capture
+
+Open **Live capture** (top right of the page, or <http://127.0.0.1:8765/live>),
+choose the account you are playing and your bait, and select **Start**. Every
+five seconds the logbook copies the Discord window's pixels, reads them with
+Windows OCR, and discards the image. It only reads the screen: nothing is typed,
+clicked, or sent to Discord. Needs Windows and the OCR packages above.
+
+- Only the chat column is used. It is found from the content itself: the left
+  edge shared by Virtual Fisher's message text, with distances measured in OCR
+  text heights. Window size, resolution, display scaling, Discord's zoom,
+  collapsed sidebars, and side panels do not matter, locally or over Remote
+  Desktop.
+- Messages already on screen when you start count as seen. Each capture is
+  lined up against the previous one, and only messages below the overlap are
+  new, so identical results in a row still count as separate trips. A message
+  whose header is cut off at the top is ignored until it is fully visible.
+- Clean fishing results are saved as fishing sessions with your bait (until a
+  "You ran out of …" line). Clean profile, buffs, prestige shop, and quests
+  replies are saved as snapshots. Shop, boost, and "You don't have enough…"
+  replies are ignored.
+- Anything else goes to **Needs review** with its reasons: parser warnings,
+  fish missing from the wiki table, a profile for another account, pet replies
+  whose XP OCR could not read, and unrecognized messages. Use **Load into
+  boxes** to fix and save one by hand, or keep it as an example for improving
+  the parsers. Review items keep the message text in the ignored
+  `src/data/review_queue/` folder, which is the one place message text is stored.
+- If the view changes (you scroll up, open another channel, or a menu covers
+  the messages), capture pauses and resumes when the newest messages are
+  visible again. After about a minute it continues from the new view and sends
+  messages it cannot place to review rather than saving or skipping them.
+- Capture pauses while Discord is minimized. Over Remote Desktop, Windows may
+  stop drawing the session while the Remote Desktop window is minimized; the
+  page then reports a blank capture.
+
 ### Snapshot history
 
 The logbook keeps a local history of parsed states for each account, so you can

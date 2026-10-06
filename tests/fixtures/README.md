@@ -32,3 +32,9 @@ returned on October 6, 2026 for the user's screenshots `2x_fish_msgs.png`,
 misreads (e.g. `Lv130` for `Lvl 30`) except that another player's name in a
 "Global boost by" line is replaced with a placeholder. The screenshots
 themselves stay in the ignored `docs/screenshots/` folder.
+
+`capture_discord_window.json` is one live capture of the user's Discord window
+(DM with Virtual Fisher, 2582x1550 px at 150% scaling) on October 6, 2026: every
+OCR line with its pixel box, including the DM sidebar, a profile side panel, and
+the slash-command list. Names in the DM list and another player's boost name are
+replaced with placeholders.
