@@ -266,3 +266,45 @@ def describe_changes(changes: dict) -> list[tuple[str, str | None]]:
                  for field, label in (('level', 'Lvl'), ('xp_current', 'XP'))]
         rows.append((f'Pet: {pet}', ', '.join(parts)))
     return rows
+
+
+GROWTH_METRICS = ('balance', 'level_progress', 'fish_value', 'exotic_total')
+
+
+def _number_or_none(value):
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _growth_values(state: dict) -> dict:
+    profile = state.get('profile', {})
+    level = _number_or_none(profile.get('level'))
+    current = _number_or_none(profile.get('xp_current'))
+    required = _number_or_none(profile.get('xp_required'))
+    exotic = state.get('inventory', {}).get('exotic_fish')
+    counts = [_number_or_none(count) for count in exotic.values()] if isinstance(exotic, dict) else None
+    return {
+        'balance': _number_or_none(profile.get('balance')),
+        # Without the current/required fraction, a bare level would plot as a fake drop.
+        'level_progress': (level + current / required
+                           if level is not None and current is not None and required else None),
+        'fish_value': _number_or_none(profile.get('fish_value')),
+        'exotic_total': sum(counts) if counts is not None and None not in counts else None,
+    }
+
+
+def growth_series(account_name: str, root: Path = DEFAULT_SNAPSHOT_ROOT) -> dict:
+    """Return each growth metric as oldest-first (captured_at, value) points from full snapshots."""
+    history, warnings = load_history(account_name, root)
+    series = {metric: [] for metric in GROWTH_METRICS}
+    for snapshot in reversed(history):
+        if snapshot.get('validity') != 'full':
+            continue
+        try:
+            datetime.fromisoformat(snapshot['captured_at'])
+        except (TypeError, ValueError):
+            warnings.append(f'{snapshot.get("snapshot_id", "snapshot")}: unreadable timestamp; left out of growth charts')
+            continue
+        for metric, value in _growth_values(snapshot['state']).items():
+            if value is not None:
+                series[metric].append((snapshot['captured_at'], value))
+    return {'series': series, 'warnings': warnings}

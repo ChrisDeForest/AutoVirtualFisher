@@ -5,7 +5,7 @@ import tempfile
 import unittest
 
 from src.player_state import parse_responses
-from src.player_snapshots import (account_key, compare_latest, latest_full_snapshots,
+from src.player_snapshots import (account_key, compare_latest, growth_series, latest_full_snapshots,
                                   list_accounts, load_history, save_snapshot,
                                   validate_full_state)
 
@@ -214,6 +214,65 @@ class SnapshotComparisonTests(unittest.TestCase):
         self.assertIsNone(result['older'])
         self.assertIsNotNone(result['newer'])
 
+
+
+
+class GrowthSeriesTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def save(self, profile):
+        state = parse_responses(profile='Inventory of BugParticle\n' + profile)
+        result = save_snapshot(state, self.root)
+        self.assertEqual(result['status'], 'saved', result)
+        return result['snapshot']['captured_at']
+
+    def test_series_are_oldest_first_and_cover_each_metric(self):
+        first = self.save('Balance: $100\nLevel 10, 250/1,000 XP to next level\nFish Value: $50\n'
+                          'Exotic Fish\n3 Gold Fish\n2 Lava Fish')
+        second = self.save('Balance: $400\nLevel 11, 500/1,000 XP to next level\nFish Value: $70\n'
+                           'Exotic Fish\n4 Gold Fish\n2 Lava Fish')
+        result = growth_series('BugParticle', self.root)
+        self.assertEqual(result['warnings'], [])
+        self.assertEqual(result['series']['balance'], [(first, 100), (second, 400)])
+        self.assertEqual(result['series']['level_progress'], [(first, 10.25), (second, 11.5)])
+        self.assertEqual(result['series']['fish_value'], [(first, 50), (second, 70)])
+        self.assertEqual(result['series']['exotic_total'], [(first, 5), (second, 6)])
+
+    def test_missing_values_are_skipped_not_zero(self):
+        self.save('Balance: $100\nLevel: 10')
+        later = self.save('Balance: $200\nL10, 750 XP to next level\nFish Value: $9\nExotic Fish')
+        series = growth_series('BugParticle', self.root)['series']
+        self.assertEqual(len(series['balance']), 2)
+        self.assertEqual(series['level_progress'], [])
+        self.assertEqual(series['fish_value'], [(later, 9)])
+        self.assertEqual(series['exotic_total'], [(later, 0)])
+
+    def test_partial_snapshots_are_excluded(self):
+        self.save('Balance: $100\nLevel: 10')
+        save_snapshot(parse_responses(pet='You have no pets! Find pets by fishing.'), self.root,
+                      mode='manual', account_name='BugParticle')
+        self.assertEqual(len(growth_series('BugParticle', self.root)['series']['balance']), 1)
+
+    def test_unreadable_timestamps_are_skipped_with_warning(self):
+        self.save('Balance: $100\nLevel: 10')
+        self.save('Balance: $200\nLevel: 10')
+        path = sorted(self.root.rglob('*.json'))[0]
+        stored = json.loads(path.read_text(encoding='utf-8'))
+        stored['captured_at'] = 'not a time'
+        path.write_text(json.dumps(stored), encoding='utf-8')
+        result = growth_series('BugParticle', self.root)
+        self.assertEqual([value for _, value in result['series']['balance']], [200])
+        self.assertTrue(any('timestamp' in warning for warning in result['warnings']), result['warnings'])
+
+    def test_unknown_account_has_empty_series(self):
+        result = growth_series('Nobody', self.root)
+        self.assertEqual(result['series'], {'balance': [], 'level_progress': [], 'fish_value': [],
+                                            'exotic_total': []})
 
 if __name__ == '__main__':
     unittest.main()

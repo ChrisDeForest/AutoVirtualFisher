@@ -7,12 +7,19 @@ from pathlib import Path
 from string import Template
 from urllib.parse import parse_qs, urlsplit
 
+from .player_charts import line_chart_svg
 from .player_snapshots import (DEFAULT_SNAPSHOT_ROOT, compare_latest, describe_changes,
-                               list_accounts, load_history, save_snapshot)
+                               growth_series, list_accounts, load_history, save_snapshot)
 from .player_state import display_value, parse_responses
 
 TEMPLATE = Path(__file__).with_name('player_web.html')
 HISTORY_LIMIT = 10
+GROWTH_CHARTS = (
+    ('balance', 'Balance', lambda value: '$' + display_value(value)),
+    ('level_progress', 'Level progress', lambda value: f'{value:,.2f}'),
+    ('fish_value', 'Fish value', lambda value: '$' + display_value(value)),
+    ('exotic_total', 'Exotic fish total', display_value),
+)
 
 
 def _sections(state):
@@ -58,6 +65,7 @@ def _dashboard(account, root):
     try:
         history, history_warnings = load_history(account, root, limit=HISTORY_LIMIT)
         comparison = compare_latest(account, root)
+        growth = growth_series(account, root)
     except OSError as error:
         return _warning_list('Snapshot history unavailable', [str(error)]), None
     if not history:
@@ -66,9 +74,12 @@ def _dashboard(account, root):
                     f'<span class="tag">{escape(item.get("save_mode", "unknown"))}</span>'
                     f'<span class="tag">{escape(item.get("validity", "unknown"))}</span></li>'
                     for item in history)
-    warnings = sorted(set(history_warnings) | set(comparison['warnings']))
+    warnings = sorted(set(history_warnings) | set(comparison['warnings']) | set(growth['warnings']))
+    charts = ''.join(line_chart_svg(title, growth['series'][metric], format_value)
+                     for metric, title, format_value in GROWTH_CHARTS)
     html = (f'<section class="dashboard"><h2>History for {escape(account)}</h2>'
             + _warning_list('Some snapshots could not be read', warnings)
+            + f'<h3>Growth</h3><div class="charts">{charts}</div>'
             + '<div class="layout"><div><h3>Progress between the latest full snapshots</h3>'
             + _progress(comparison)
             + f'</div><div><h3>Recent snapshots</h3><ul class="history">{items}</ul></div></div></section>')

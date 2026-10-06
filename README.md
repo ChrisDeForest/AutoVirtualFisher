@@ -52,6 +52,11 @@ see progress between imports.
   recent full snapshots: balance, level, current XP, fish value, bait stock,
   inventory counts, and pet levels/XP. Partial snapshots never take part in the
   comparison, and values missing from either snapshot show as Unknown.
+- **Growth charts:** the same view charts balance, level progress (level plus
+  the fraction toward the next one), fish value, and the exotic fish total
+  across every full snapshot, spaced by real date. Hover a point for its exact
+  value. A snapshot missing a value leaves a gap rather than a zero; level
+  progress needs the `current/required XP` form of the profile line.
 
 Snapshots are JSON files in `src/data/player_snapshots/`, one folder per
 account. That folder is ignored by Git and never leaves this computer. Only the

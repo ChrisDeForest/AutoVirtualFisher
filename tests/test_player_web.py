@@ -187,3 +187,20 @@ Gives you bonus XP and leads you to more treasure.
             self.assertIn('attachment', response.headers['Content-Disposition'])
             json.loads(response.read())
         self.assertEqual(self.snapshot_files(), [])
+
+    def test_history_view_shows_four_growth_charts(self):
+        for balance, level in ((100, 2), (400, 3), (900, 5)):
+            self.post(profile=named_profile(balance=balance, level=level, extra='Fish Value: $10'))
+        html = self.get('/?account=BugParticle')
+        self.assertIn('<h3>Growth</h3>', html)
+        self.assertEqual(html.count('<figure class="chart">'), 4)
+        self.assertEqual(html.count('<svg'), 2)
+        self.assertIn('Balance: $100 → $900 (+$800)', html)
+        self.assertIn('Fish value: $10 → $10 (no change)', html)
+        self.assertEqual(html.count('Needs two full snapshots with this value.'), 2)
+
+    def test_single_snapshot_asks_for_another(self):
+        self.post(profile=named_profile())
+        html = self.get('/?account=BugParticle')
+        self.assertEqual(html.count('Needs two full snapshots with this value.'), 4)
+        self.assertNotIn('<svg', html)
