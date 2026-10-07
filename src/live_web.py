@@ -60,6 +60,9 @@ def render_live(head, status, accounts, bait_options, review_items, notice='', k
         notice_html += (f'<p class="status">Keeping full-window captures in {escape(str(keeping))} (newest 200). '
                         'They show everything visible in Discord, including unrelated conversations; delete them '
                         'when you are done.</p>')
+    if running and status.get('interval'):
+        notice_html += (f'<p class="note">Capturing every {status["interval"]:g} s. '
+                        f'{escape(status.get("interval_reason") or "")}</p>')
     if status.get('unresolved'):
         notice_html += (f'<p class="status">{status["unresolved"]:,} uncertain placement'
                         f'{"" if status["unresolved"] == 1 else "s"} this run: identical replies or a changed view '

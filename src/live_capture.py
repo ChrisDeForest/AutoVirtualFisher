@@ -4,6 +4,7 @@ Read-only: the window is captured and read with OCR; nothing is typed, clicked, 
 """
 from datetime import datetime, timezone
 import json
+from math import ceil
 import os
 from pathlib import Path
 import re
@@ -11,6 +12,7 @@ from secrets import token_hex
 from statistics import median
 import tempfile
 import threading
+import time
 
 from .bait_compare import NOT_RECORDED, assign_bait, load_bait_reference
 from .catch_check import load_fish_reference
@@ -19,7 +21,7 @@ from .fishing_sessions import save_session
 from .observation import BOT_NAME, VERIFIED, Identity, Observation, check_identity, recipients
 from .ocr_cleanup import META, clean_ocr
 from .paste_detect import _kind, split_messages
-from .player_snapshots import save_snapshot, validate_full_state
+from .player_snapshots import load_history, save_snapshot, validate_full_state
 from .player_state import _clean, _name, parse_responses
 from .review_queue import add_item
 
@@ -34,12 +36,18 @@ RIGHT_REACH_HEIGHTS = 25
 REREAD_OFFSET_HEIGHTS = 1
 # Reread scales that must agree before a recovered count is trusted (one alone misread "10" as "IO").
 REREAD_SCALES = (2, 3)
-# Seconds between captures. Shorter than the 3.5 s fishing cooldown, so at most one new reply normally arrives
-# between captures and each capture overlaps the one before (a 5 s interval allowed two).
-DEFAULT_INTERVAL = 3.0
-# Captures in a row without overlap (about a minute at the default interval) before accepting the new view.
-# Brief changes, such as the slash-command menu covering messages, resolve well before this.
-RESYNC_AFTER = 20
+# Seconds from the start of one capture to the next. The fishing cooldown changes as you level up and resets
+# when you prestige, so capture keeps pace with the cooldown in your latest /buffs: a capture every three quarters
+# of it, so at most one new reply normally arrives between captures and each capture overlaps the one before.
+INTERVAL_FRACTION = 0.75
+# Never slower than this (also the pace before any cooldown is known: under the 3.5 s starting cooldown)...
+MAX_INTERVAL = DEFAULT_INTERVAL = 3.0
+# ...and never faster than a capture plus OCR can reliably finish.
+MIN_INTERVAL = 1.0
+# How long the view may stay without overlap before capture accepts the new view. Brief changes, such as the
+# slash-command menu covering messages, resolve well before this.
+RESYNC_SECONDS = 60
+RESYNC_AFTER = ceil(RESYNC_SECONDS / DEFAULT_INTERVAL)  # captures, at the default pace
 LOG_LENGTH = 30
 # Kept diagnostic captures (--keep-captures) are full-window images; only the newest this many are kept.
 KEEP_LIMIT = 200
@@ -235,6 +243,13 @@ def new_messages(previous: list | None, current: list) -> list | None:
     return None if start is None else current[start:]
 
 
+def _cooldown_seconds(state: dict) -> float | None:
+    cooldown = (state.get('buffs') or {}).get('fishing_cooldown')
+    if isinstance(cooldown, dict) and cooldown.get('unit') == 'seconds' and cooldown.get('value', 0) > 0:
+        return cooldown['value']
+    return None
+
+
 def context_key(context: dict) -> str:
     """Identify the captured window and channel. Discord titles its window after the open channel or DM, so a
     changed title means a different channel; the same title is not proof of the same channel by itself."""
@@ -317,7 +332,10 @@ STATUS_TEXT = {
 class LiveCapture:
     def __init__(self, snapshot_root, fishing_root, review_root, capture=capture_discord, interval=DEFAULT_INTERVAL, clock=None):
         self.roots = {'snapshots': Path(snapshot_root), 'fishing': Path(fishing_root), 'review': Path(review_root)}
-        self.capture, self.interval = capture, interval
+        # `interval` is the starting and slowest pace; see _retime for how it follows the fishing cooldown.
+        self.capture, self.max_interval = capture, interval
+        self.interval, self.interval_reason = interval, 'Default pace: no fishing cooldown known yet.'
+        self.cooldown = self.tightened = None
         # UTC time each capture is observed at; replaceable so tests can use a fixed clock.
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.lock = threading.Lock()
@@ -357,6 +375,8 @@ class LiveCapture:
             self.previous, self.misses, self.latest, self.held = None, 0, {}, None
             self.previous_lines, self.alignment, self.unresolved = [], None, 0
             self.context_id = None
+            self.cooldown, self.tightened = self._saved_cooldown(account), None
+            self._retime()
             self.counts = dict.fromkeys(self.counts, 0)
             self.running, self.state = True, 'Starting: messages already on screen are treated as seen.'
             self._note(f'Started for {account}' + (f' ({username})' if username else '')
@@ -385,8 +405,31 @@ class LiveCapture:
         if worker is not None and worker is not threading.current_thread():
             worker.join(timeout)
 
+    def _saved_cooldown(self, account):
+        """The fishing cooldown from the newest saved /buffs, as a starting point until this run sees one."""
+        try:
+            history = load_history(account, self.roots['snapshots'])[0]
+        except OSError:
+            return None
+        return next((seconds for seconds in (_cooldown_seconds(item['state']) for item in history)
+                     if seconds is not None), None)
+
+    def _retime(self):
+        """Set the pace: three quarters of the known cooldown, or faster if replies were seen arriving faster
+        than that, within MIN_INTERVAL and the starting interval."""
+        interval, reason = self.max_interval, 'Default pace: no fishing cooldown known yet.'
+        if self.cooldown is not None:
+            interval = self.cooldown * INTERVAL_FRACTION
+            reason = f'Paced to your {self.cooldown:g} s fishing cooldown from /buffs.'
+        if self.tightened is not None and self.tightened < interval:
+            interval, reason = self.tightened, ('Replies were arriving faster than captures; speeded up until the '
+                                                'next /buffs shows your cooldown.')
+        self.interval = round(min(max(interval, MIN_INTERVAL), self.max_interval), 2)
+        self.interval_reason = reason
+
     def _loop(self, generation, stop_event):
         while not stop_event.is_set():
+            began = time.monotonic()
             try:
                 self.step(generation)
             except Exception as error:  # keep watching; a single failed capture should not end the session
@@ -394,7 +437,8 @@ class LiveCapture:
                     if generation == self.generation:
                         self.state = f'Capture failed: {error}'
                         self._note(self.state)
-            if stop_event.wait(self.interval):
+            # Paced from the start of each capture, so slow OCR does not stretch the gap between captures.
+            if stop_event.wait(max(0.0, self.interval - (time.monotonic() - began))):
                 break
 
     def status(self):
@@ -402,6 +446,7 @@ class LiveCapture:
             return {'running': self.running, 'account': self.account, 'bait': self.bait, 'state': self.state,
                     'username': self.identity.username if self.identity else None,
                     'alignment': self.alignment, 'unresolved': self.unresolved,
+                    'interval': self.interval, 'interval_reason': self.interval_reason,
                     'bait_state': {'bait': None if self.bait == NOT_RECORDED else self.bait,
                                    'status': self.bait_status},
                     'counts': dict(self.counts), 'log': list(self.log), 'last_capture': self.last_capture}
@@ -439,7 +484,7 @@ class LiveCapture:
             self.alignment = {'status': alignment['status'], 'reason': alignment['reason']}
             if start is None:
                 self.misses += 1
-                if self.misses < RESYNC_AFTER:
+                if self.misses < ceil(RESYNC_SECONDS / self.interval):
                     self.state = ('Paused: the chat view moved (scrolled or another channel). Scroll back to the '
                                   'newest messages to resume.')
                     return
@@ -482,6 +527,12 @@ class LiveCapture:
                 else:
                     self.held = now
             fresh = messages[start:]
+            arrived = sum(message['kind'] == 'fishing' for message in fresh)
+            if arrived >= 2:
+                # More than one result between captures: the cooldown is shorter than the pace assumes (for
+                # example after a level-up), so capture that much more often until /buffs says otherwise.
+                self.tightened = self.interval / arrived
+                self._retime()
             if fresh:
                 # The newest message may still change (rendering, or the message box below it), so wait.
                 ready += fresh[:-1]
@@ -609,6 +660,13 @@ class LiveCapture:
 
     def _save_player(self, kind, observation):
         self.latest[kind] = observation
+        if kind == 'buffs':
+            seconds = _cooldown_seconds(parse_responses(buffs=observation.text))
+            if seconds is not None:
+                # A confirmed cooldown replaces any guess, faster or slower (it resets after prestige).
+                self.cooldown, self.tightened = seconds, None
+                self._retime()
+                self._note(f'Capturing every {self.interval:g} s ({self.cooldown:g} s fishing cooldown)')
         state = parse_responses(**{name: seen.text for name, seen in self.latest.items()})
         # Each section keeps the time and source of the reply it came from, however later it is saved.
         sections = {KIND_SECTION[name]: {'observed_at': seen.observed_at, 'source_observation_id': seen.observation_id,

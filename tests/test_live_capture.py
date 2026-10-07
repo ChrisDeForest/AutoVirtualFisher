@@ -440,6 +440,57 @@ class LiveRunTests(unittest.TestCase):
         self.assertEqual(status['alignment']['status'], 'certain')
         self.assertEqual(self.saved_trips(), len(replies) - 1, 'every reply after the first capture')
 
+    def buffs(self, cooldown):
+        return reply("epicmouse9925's current multipliers (including bait):", 'Sell price: 2.20x',
+                     f'Fishing cooldown: {cooldown}s.')
+
+    def test_capture_pace_follows_the_observed_cooldown(self):
+        from src.live_capture import MAX_INTERVAL, MIN_INTERVAL
+        self.assertEqual(self.run_screens([fish(1, 1, 10)], stop=False)['interval'], MAX_INTERVAL,
+                         'no cooldown known yet: the safe default')
+        self.screens = [sum([fish(1, 1, 10), self.buffs(2.0), fish(2, 2, 20)], [])]
+        self.live.step()
+        status = self.live.status()
+        self.assertEqual(status['interval'], 1.5, 'three quarters of a 2 s cooldown')
+        self.assertIn('2', status['interval_reason'])
+        self.screens = [sum([fish(2, 2, 20), self.buffs(5.0), fish(3, 3, 30)], [])]
+        self.live.step()
+        self.assertEqual(self.live.status()['interval'], MAX_INTERVAL, 'after prestige: slower, but capped')
+        self.screens = [sum([fish(3, 3, 30), self.buffs(0.5), fish(4, 4, 40)], [])]
+        self.live.step()
+        self.assertEqual(self.live.status()['interval'], MIN_INTERVAL, 'never faster than OCR can keep up')
+        self.live.stop()
+
+    def test_start_uses_the_saved_cooldown(self):
+        from src.player_snapshots import save_snapshot
+        from src.player_state import parse_responses
+        save_snapshot(parse_responses(profile='\n'.join(PROFILE[3:]), buffs='\n'.join(self.buffs(2.4)[3:])),
+                      self.snapshots)
+        self.assertEqual(self.run_screens([fish(1, 1, 10)])['interval'], 1.8)
+
+    def test_several_new_replies_in_one_capture_speed_capture_up(self):
+        from src.live_capture import MAX_INTERVAL
+        status = self.run_screens([fish(1, 1, 10)], [fish(1, 1, 10), fish(2, 2, 20), fish(3, 3, 30), fish(4, 4, 40)],
+                                  stop=False)
+        self.assertLess(status['interval'], MAX_INTERVAL / 2, 'three new replies: capture three times as often')
+        self.assertIn('arriving faster', status['interval_reason'])
+        self.live.stop()
+
+    def test_faster_cooldown_without_buffs_loses_nothing(self):
+        cooldown, visible = 1.6, 3  # quicker than the default interval assumes, and never shown in /buffs
+        replies = [fish(n % 9 + 1, n % 7 + 1, 10 + n) for n in range(60)]
+        self.live.start('epicmouse', 'Worms', thread=False, username='epicmouse9925')
+        moment, arrived, paused = 0.0, 0, []
+        while arrived < len(replies):
+            arrived = min(len(replies), int(moment / cooldown) + 1)
+            self.screens = [sum(replies[max(0, arrived - visible):arrived], [])]
+            self.live.step()
+            paused.append(self.live.status()['state'].startswith('Paused'))
+            moment += self.live.status()['interval']
+        self.live.stop()
+        self.assertFalse(any(paused))
+        self.assertEqual(self.saved_trips(), len(replies) - 1)
+
     def test_window_problems_are_reported(self):
         self.live = LiveCapture(self.snapshots, self.sessions, self.review,
                                 capture=lambda: {'status': 'minimized', 'lines': []})

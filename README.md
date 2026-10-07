@@ -78,10 +78,19 @@ command and everything else works as before.
 Open **Live capture** (top right of the page, or <http://127.0.0.1:8765/live>),
 choose the account you are playing, enter your Discord username (the name
 above "You caught:" in your fishing results; remembered per account), choose
-your bait, and select **Start**. Every three seconds (faster than the 3.5 s
-fishing cooldown) the logbook copies the Discord window's pixels, reads them
-with Windows OCR, and discards the image. It only reads the screen: nothing is
-typed, clicked, or sent to Discord. Needs Windows and the OCR packages above.
+your bait, and select **Start**. Every few seconds the logbook copies the
+Discord window's pixels, reads them with Windows OCR, and discards the image.
+It only reads the screen: nothing is typed, clicked, or sent to Discord. Needs
+Windows and the OCR packages above.
+
+- **Pace follows your fishing cooldown.** Your cooldown changes as you level
+  up and resets when you prestige, so capture runs at three quarters of the
+  cooldown in your newest `/buffs` (from your saved snapshots at Start, then
+  from any `/buffs` it reads), between 1 and 3 seconds; 3 seconds until a
+  cooldown is known. If one capture finds two or more new fishing results, your
+  cooldown has become quicker than it assumed, so it speeds up at once until
+  the next `/buffs`. Run `/buffs` after a level-up or prestige to set it
+  exactly. The live page shows the current pace and why.
 
 - **Only your replies are saved.** Your display name (`Inventory of <name>`,
   `<name> used /fish`) and Discord username (fishing results'
