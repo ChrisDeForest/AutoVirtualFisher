@@ -61,6 +61,9 @@ class JournalTests(unittest.TestCase):
         recovered = AutomationJournal(self.root).recover()
         self.assertEqual(len(recovered['warnings']), 1)
         self.assertEqual(recovered['actions']['a1']['status'], 'intended')
+        self.assertEqual(recovered['damaged'], ['run1/999999-broken.json'], 'reported until a person checks it')
+        self.event('run2', 'journal_damage_resolved', outcome='happened', files=recovered['damaged'])
+        self.assertEqual(AutomationJournal(self.root).recover()['damaged'], [])
 
 
 if __name__ == '__main__':

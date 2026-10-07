@@ -195,10 +195,10 @@ answers it, update state, and wait out the verified cooldown plus 0.5 s.
   logbook. Tests cover 100 simulated trips, with and without a crash in the
   middle, with exact totals.
 
-There is no live mode. Sending commands to Discord from your account is what
-Discord's self-bot rule and Virtual Fisher's anti-macro rule forbid (see
-`docs/planning/interaction-feasibility.md`), so nothing here sends anything to
-Discord.
+Live mode is not implemented: there is no live transport, so nothing here sends
+anything to Discord. A live transport would implement the same contract as the
+simulation (`src/automation_transport.py`). Project direction and the platform
+rules on record are in `docs/planning/interaction-feasibility.md`.
 
 ### Snapshot history
 

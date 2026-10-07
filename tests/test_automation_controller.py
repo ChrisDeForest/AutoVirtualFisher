@@ -59,8 +59,9 @@ class ControllerTests(unittest.TestCase):
         def checked_send(intent):
             # At every hand-over: the intent is already journaled, and no other command is unresolved.
             events = AutomationJournal(self.journal_root).recover()['actions']
+            pending = self.controller.state.pending  # reserved for this very command, and nothing else
             self.checks.append((events.get(intent.action_id, {}).get('status'),
-                                self.controller.state.pending, self.clock.now))
+                                None if pending == intent else pending or 'not reserved', self.clock.now))
             return original(intent)
 
         self.sim.send = checked_send
@@ -265,6 +266,48 @@ class ControllerTests(unittest.TestCase):
         fish = [info for info in recovered['actions'].values() if info.get('intent', {}).get('kind') == 'fish']
         self.assertEqual(len(fish), 1)
         self.assertNotEqual(fish[0]['status'], 'intended', 'its hand-over is in the journal')
+
+    def test_concurrent_ticks_send_one_command(self):
+        entered, release = threading.Event(), threading.Event()
+        inner = self.sim.send
+
+        def blocking(intent):
+            entered.set()
+            release.wait(5)
+            return inner(intent)
+
+        self.sim.send = blocking
+        controller = self.make()
+        controller.start()
+        first = threading.Thread(target=controller.tick)
+        first.start()
+        self.assertTrue(entered.wait(5))
+        second = threading.Thread(target=controller.tick)  # e.g. the page's thread and the worker together
+        second.start()
+        second.join(5)
+        release.set()
+        first.join(5)
+        self.assertEqual([intent.kind for _, intent in self.sim.sent], ['refresh_profile'])
+        self.assertEqual(controller.status()['pending'], self.sim.sent[0][1].action_id)
+
+    def test_damaged_journal_blocks_sending_until_resolved(self):
+        self.make(journal=FaultyJournal(self.journal_root, on='dispatched', nth=3)).start()
+        with self.assertRaises(Crash):
+            self.run_for(10)
+        dispatching = [path for path in self.journal_root.rglob('*.json')
+                       if '"dispatching"' in path.read_text(encoding='utf-8')][-1]
+        dispatching.write_text('{"schema_version": 1, "type": "dispa', encoding='utf-8')  # torn write
+        sends = len(self.sim.sent)
+        restarted = self.make()
+        restarted.start()
+        self.run_for(30)
+        status = restarted.status()
+        self.assertEqual(len(self.sim.sent), sends, 'a possibly sent command is not treated as unsent')
+        self.assertEqual(status['phase'], 'NEEDS_REVIEW')
+        self.assertIn('damaged-journal', status['unresolved'])
+        restarted.resolve('damaged-journal', 'happened')
+        self.run_for(10)
+        self.assertGreater(len(self.sim.sent), sends, 'sending resumes once a person has checked')
 
     # --- acceptance ---
 

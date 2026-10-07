@@ -1,8 +1,8 @@
 """Transports: how actions reach the game and how replies come back.
 
 `Transport` is the contract. `SimulationTransport` is a deterministic stand-in for Virtual Fisher (cooldowns,
-catches, reply latency, and scripted faults) used to test the controller. There is deliberately no live Discord
-transport: see docs/planning/interaction-feasibility.md.
+catches, reply latency, and scripted faults) used to test the controller. No live Discord transport is
+implemented; one would implement this same contract.
 """
 from dataclasses import replace
 from random import Random

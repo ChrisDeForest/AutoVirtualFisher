@@ -26,6 +26,8 @@ from .review_queue import add_item
 
 COOLDOWN_REPLY = re.compile(r'You must wait ([\d.]+) seconds? before fishing again', re.I)
 RESOLUTIONS = ('happened', 'not_sent')
+# The unresolved entry for journal records that could not be read.
+DAMAGED_JOURNAL = 'damaged-journal'
 
 
 def _iso(moment: datetime) -> str:
@@ -51,6 +53,7 @@ class AutomationController:
         self.unresolved = {}           # action id -> why its outcome is unknown
         self.acknowledged = set()      # action ids whose reply has been accepted
         self.failed = None             # a journal failure: nothing more is sent until restart
+        self.in_flight = None          # the command being handed over right now, if any
         self.sent_at = None            # (monotonic, UTC ISO) of the pending command's hand-over
         self.ready_at = float('-inf')  # monotonic time the next fish may be sent
         self.last_trip_at = None       # monotonic time of the latest confirmed trip (its hand-over, or when seen)
@@ -79,13 +82,25 @@ class AutomationController:
             self.total_trips = sum(info.get('result') == 'trip' for info in recovered['actions'].values())
             self._event('run_started', mode=self.config.mode, max_trips=self.config.max_trips,
                         max_seconds=self.config.max_seconds)
+            damaged = recovered['damaged']
             for action in recovered['never_sent']:
-                self._event('abandoned', action, reason='Journaled but never handed over (restart).')
+                if damaged:
+                    # A later record of this command may be among the unreadable ones: it may have been sent.
+                    recovered['actions'][action]['reason'] = ('Its later journal records may be among the '
+                                                              'unreadable ones; it may have been sent.')
+                    recovered['unresolved'].append(action)
+                else:
+                    self._event('abandoned', action, reason='Journaled but never handed over (restart).')
             for action in recovered['unprojected']:
                 self._project(action, recovered['actions'][action]['tally'])
             self.unresolved = {action: recovered['actions'][action].get('reason')
                                or 'It may have been sent before the app stopped; its outcome is unknown.'
                                for action in recovered['unresolved']}
+            if damaged:
+                self.damaged_files = damaged
+                self.unresolved[DAMAGED_JOURNAL] = (
+                    f'{len(damaged)} journal record(s) could not be read ({", ".join(damaged[:3])}), so an '
+                    'earlier command may have been sent without its record. Check Discord, then resolve.')
             self.phase, self.reason = ('NEEDS_REVIEW', self._unresolved_text()) if self.unresolved else (
                 'BOOTSTRAPPING', 'Starting.')
             generation, stop_event = self.generation, self.stop_event
@@ -114,7 +129,11 @@ class AutomationController:
         with self.lock:
             if action_id not in self.unresolved:
                 return False
-            self._event('resolved', action_id, outcome=outcome)
+            if action_id == DAMAGED_JOURNAL:
+                # Remembered in the journal, so the same damaged records do not block every later start.
+                self._event('journal_damage_resolved', None, outcome=outcome, files=self.damaged_files)
+            else:
+                self._event('resolved', action_id, outcome=outcome)
             del self.unresolved[action_id]
             self.acknowledged.add(action_id)
             self._sync_uncertain()
@@ -146,6 +165,10 @@ class AutomationController:
             if not self.running or (generation is not None and generation != self.generation):
                 return
             generation = self.generation
+            if self.in_flight is not None:
+                # Another step is handing a command over right now; nothing else may be chosen or sent.
+                self.phase, self.reason = 'SENDING', f'Handing over {self.in_flight.kind}.'
+                return
             now = self.monotonic()
             if self.config.max_seconds is not None and now - self.started_at >= self.config.max_seconds:
                 self._finish('Bounded run complete: time limit reached.')
@@ -195,6 +218,9 @@ class AutomationController:
                 self._event('dispatching', intent.action_id)
             except OSError as error:
                 return self._journal_failed(f'Could not record the {intent.kind} command, so it was not sent: {error}')
+            # Reserved before the lock is released: a concurrent step sees it and sends nothing.
+            self.in_flight = intent
+            self.state = replace(self.state, pending=intent)
         # The hand-over happens outside the lock so stop() is never blocked behind it; it is recorded either way.
         try:
             receipt, failure = self.transport.send(intent), None
@@ -204,6 +230,9 @@ class AutomationController:
             receipt, failure = None, ('uncertain', f'The hand-over failed ({error}); it may or may not have '
                                                    'reached the game. Not resent.')
         with self.lock:
+            self.in_flight = None
+            if failure or generation != self.generation:
+                self.state = replace(self.state, pending=None)
             if failure and failure[0] == 'abandoned':
                 self._safe_event('abandoned', intent.action_id, reason=failure[1])
                 self.failed = failure[1]
@@ -217,6 +246,7 @@ class AutomationController:
             try:
                 self._event('dispatched', intent.action_id, sent_at=receipt.sent_at, detail=receipt.detail)
             except OSError as error:
+                self.state = replace(self.state, pending=None)
                 self.unresolved[intent.action_id] = 'Sent, but the hand-over could not be recorded.'
                 self._sync_uncertain()
                 return self._journal_failed(f'Sent the {intent.kind} command but could not record it: {error}')
@@ -225,7 +255,6 @@ class AutomationController:
                 self.unresolved[intent.action_id] = 'Sent while the run was stopping; its outcome is unknown.'
                 self._safe_event('uncertain', intent.action_id, reason=self.unresolved[intent.action_id])
                 return
-            self.state = replace(self.state, pending=intent)
             self.sent_at = (self.monotonic(), receipt.sent_at)
             self.phase, self.reason = 'WAITING_REPLY', f'Waiting for the reply to {intent.kind}.'
 

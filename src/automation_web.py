@@ -1,5 +1,5 @@
 """The /automation page: run the fishing loop against the simulation, watch it, stop it, and resolve uncertain
-commands. There is no live mode: see docs/planning/interaction-feasibility.md."""
+commands. Live mode is not implemented (there is no live transport)."""
 from html import escape
 
 MAX_TRIPS, MAX_MINUTES = 1000, 120
@@ -67,8 +67,7 @@ def render_automation(head, status, notice=''):
             'Virtual Fisher: it refreshes your profile and cooldown, fishes, confirms each reply, and waits out '
             'the cooldown. Every command is journaled before it is sent; anything uncertain stops the loop until '
             'you resolve it. Simulated trips are saved apart from your logbook.</p>'
-            '<p class="note">There is no live mode. Sending commands to Discord from your account is what '
-            'Discord\'s self-bot rule and Virtual Fisher\'s anti-macro rule forbid; see '
-            'docs/planning/interaction-feasibility.md.</p>'
+            '<p class="note">Live mode: not implemented. No live transport exists, so nothing here sends '
+            'anything to Discord. Project direction: docs/planning/interaction-feasibility.md.</p>'
             f'{notice_html}{control}<section class="dashboard"><h2>Run</h2>'
             f'{details or "<p class=status>No run yet.</p>"}</section></main></body></html>')

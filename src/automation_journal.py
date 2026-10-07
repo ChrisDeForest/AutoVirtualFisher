@@ -71,7 +71,11 @@ class AutomationJournal:
                 if field in event:
                     action[field] = event[field]
         by_status = lambda *statuses: [action for action, info in actions.items() if info['status'] in statuses]
-        return {'actions': actions, 'never_sent': by_status('intended'), 'unresolved': by_status(*UNRESOLVED),
+        # Unreadable records not yet checked by a person. Until they are, nothing in them can be ruled out.
+        checked = {name for event in events if event['type'] == 'journal_damage_resolved'
+                   for name in event.get('files', [])}
+        damaged = [warning.split(':', 1)[0] for warning in warnings if warning.split(':', 1)[0] not in checked]
+        return {'actions': actions, 'damaged': damaged, 'never_sent': by_status('intended'), 'unresolved': by_status(*UNRESOLVED),
                 'unprojected': [action for action in by_status('acknowledged')
                                 if actions[action].get('result') == 'trip'],
                 'events': len(events), 'warnings': warnings}
