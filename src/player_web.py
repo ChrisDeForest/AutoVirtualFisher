@@ -1,9 +1,11 @@
 """Local web interface with snapshot history. Run with python -m src.player_web."""
 import argparse
+from datetime import datetime, timezone
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import threading
+import time
 from pathlib import Path
 from string import Template
 from urllib.parse import parse_qs, urlsplit
@@ -13,6 +15,11 @@ from .fishing_web import bait_card, bait_choice, bait_options, fishing_card, fis
 from .paste_detect import detect
 from .fish_value import latest_sell_multiplier
 from .live_capture import LiveCapture, capture_discord, make_capture
+from .automation_controller import AutomationController
+from .automation_journal import AutomationJournal
+from .automation_models import AutomationConfig
+from .automation_transport import SimulationTransport
+from .automation_web import parse_limits, render_automation
 from .live_web import render_live
 from .observation import DEFAULT_IDENTITY_PATH, Identity, load_identity, save_identity
 from .planner_web import planner_card
@@ -258,6 +265,7 @@ def render(profile='', buffs='', prestige_shop='', pet='', submitted=False, root
 
 
 LIVE_LOCK = threading.Lock()
+AUTOMATION_LOCK = threading.Lock()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -265,6 +273,13 @@ class Handler(BaseHTTPRequestHandler):
     fishing_root = DEFAULT_SESSION_ROOT
     review_root = DEFAULT_REVIEW_ROOT
     identity_path = DEFAULT_IDENTITY_PATH
+    # Simulated automation keeps its journal, trips, and review items here, apart from the logbook.
+    automation_root = Path(__file__).parent / 'data' / 'automation_sim'
+    automation = None
+    # Builds the simulated game from (monotonic clock, UTC clock); one game is shared by every run.
+    automation_game_factory = staticmethod(lambda monotonic, utc: SimulationTransport(monotonic, utc))
+    automation_game = None
+    automation_tick = 0.2
     # One live capture per server, shared by every request.
     live = None
     live_capture_function = staticmethod(capture_discord)
@@ -356,10 +371,57 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def automation_page(self, notice=''):
+        template = TEMPLATE.read_text(encoding='utf-8')
+        head = template[template.index('<head>'):template.index('</head>') + len('</head>')]
+        status = type(self).automation.status() if type(self).automation else None
+        self.send_content(render_automation(head, status, notice))
+
+    def automation_action(self):
+        try:
+            length = int(self.headers.get('Content-Length', '0'))
+            if length < 0 or length > 4096:
+                self.send_error(413, 'Request is too large')
+                return
+            fields = parse_qs(self.rfile.read(length).decode('utf-8'), max_num_fields=5)
+        except (ValueError, UnicodeDecodeError):
+            self.send_error(400, 'Invalid form input')
+            return
+        cls, action, notice = type(self), fields.get('action', [''])[0], ''
+        with AUTOMATION_LOCK:
+            current = cls.automation
+            if action == 'start':
+                trips, minutes, notice = parse_limits(fields)
+                if current and current.status()['running']:
+                    notice = 'A run is already running; stop it first.'
+                elif not notice:
+                    root = Path(cls.automation_root)
+                    clock = time.monotonic
+                    utc = lambda: datetime.now(timezone.utc)
+                    if cls.automation_game is None:
+                        cls.automation_game = cls.automation_game_factory(clock, utc)
+                    game = cls.automation_game
+                    config = AutomationConfig(account='sim', username='sim0001', context_id='sim:dm',
+                                              max_trips=trips, max_seconds=minutes * 60)
+                    cls.automation = AutomationController(game, config, AutomationJournal(root / 'journal'),
+                                                          root / 'fishing', root / 'review', monotonic=clock,
+                                                          utc=utc, interval=cls.automation_tick)
+                    cls.automation.start(thread=True)
+            elif action == 'stop' and current:
+                current.stop()
+            elif action == 'resolve' and current:
+                outcome = fields.get('outcome', [''])[0]
+                if outcome not in ('happened', 'not_sent') or not current.resolve(fields.get('id', [''])[0], outcome):
+                    notice = 'That command was already resolved.'
+        self.automation_page(notice)
+
     def do_GET(self):
         url = urlsplit(self.path)
         if url.path == '/live':
             self.live_page()
+            return
+        if url.path == '/automation':
+            self.automation_page()
             return
         if url.path != '/':
             self.send_error(404)
@@ -404,6 +466,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == '/live':
             self.live_action()
+            return
+        if self.path == '/automation':
+            self.automation_action()
             return
         if self.path != '/':
             self.send_error(404)
@@ -468,6 +533,8 @@ def main():
         finally:
             if Handler.live:
                 Handler.live.stop()
+            if Handler.automation:
+                Handler.automation.stop()
 
 
 if __name__ == '__main__':

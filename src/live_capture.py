@@ -64,6 +64,21 @@ TOP_BAR_FRACTION = 0.15
 KIND_SECTION = {'profile': 'profile', 'buffs': 'buffs', 'prestige_shop': 'prestige', 'pet': 'pets', 'quests': 'quests'}
 
 
+def fishing_problems(text: str) -> list[str]:
+    """Why one fishing reply cannot be counted as exactly one trip; empty when it reads cleanly."""
+    tally = parse_fishing(text)
+    reasons = list(tally['warnings'])
+    if tally['trips'] != 1:
+        reasons.append(f'Expected one fishing result, found {tally["trips"]}.')
+    reference = load_fish_reference() or {}
+    unknown = [name for name in tally['catches'] if name.casefold() not in reference]
+    if unknown:
+        reasons.append('Not in the wiki fish table: ' + ', '.join(unknown))
+    if tally['trips'] == 1 and tally['trip_details'][0]['xp'] is None:
+        reasons.append('No XP line was read.')
+    return reasons
+
+
 def chat_column(boxes: list[dict]) -> tuple[list[dict], float | None, float | None]:
     """Return (boxes in Virtual Fisher's message column in reading order, text left edge, text height)."""
     anchors = [box for box in boxes if _kind(_clean(box['text']))]
@@ -656,7 +671,7 @@ class LiveCapture:
                 # Nothing is saved or changed for a reply not confirmed to be the configured player's.
                 self._flag(kind, text, [observation.reason], observation)
             elif kind == 'fishing':
-                reasons = self._fishing_problems(text)
+                reasons = fishing_problems(text)
                 if reasons:
                     self._flag(kind, text, reasons, observation)
                 ran_out = parse_fishing(text)['bait_ran_out']
@@ -682,19 +697,6 @@ class LiveCapture:
                         self._set_bait(bait, 'verified', 'Bait in use confirmed by profile')
                     self._save_player(kind, observation)
         flush()
-
-    def _fishing_problems(self, text):
-        tally = parse_fishing(text)
-        reasons = list(tally['warnings'])
-        if tally['trips'] != 1:
-            reasons.append(f'Expected one fishing result, found {tally["trips"]}.')
-        reference = load_fish_reference() or {}
-        unknown = [name for name in tally['catches'] if name.casefold() not in reference]
-        if unknown:
-            reasons.append('Not in the wiki fish table: ' + ', '.join(unknown))
-        if tally['trips'] == 1 and tally['trip_details'][0]['xp'] is None:
-            reasons.append('No XP line was read.')
-        return reasons
 
     def _player_problems(self, kind, text):
         state = parse_responses(**{kind: text})

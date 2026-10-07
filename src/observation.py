@@ -35,6 +35,9 @@ class Observation:
     text: str
     identity_status: str
     reason: str = ''
+    # Evidence tying this reply to one dispatched action (its action id), when the transport can supply it.
+    # Reply kind alone never correlates: an identical older reply would look the same.
+    correlation: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)

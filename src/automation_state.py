@@ -4,10 +4,13 @@ This is separate from the logbook. A snapshot's save time is not evidence that i
 section counts as fresh only when it was observed, confirmed as the configured player's, and is recent enough.
 Pasted (user-attributed) and version 1 snapshots have no observation time and are unknown here.
 """
+from dataclasses import dataclass, replace
 from datetime import datetime
 
-from .observation import VERIFIED
+from .automation_models import ActionIntent
+from .observation import VERIFIED, Observation
 from .player_snapshots import SECTIONS
+from .player_state import parse_responses
 
 # Initial conservative default from the automation design: money decisions need /profile and /buffs seen within
 # the last 30 seconds.
@@ -93,3 +96,43 @@ def automation_view(snapshot: dict | None, now: datetime, max_age: float = FINAN
     return {'sections': sections, 'bait': bait, 'actions_allowed': actions_allowed,
             'financial_ready': financial_ready, 'bait_ready': financial_ready and bait.get('status') == 'verified',
             'blockers': blockers}
+
+
+@dataclass(frozen=True)
+class AutomationState:
+    """What the controller knows. Observations change it only through apply_observation(); the controller sets
+    the action fields (pending, uncertain, trips, sequence) as it journals actions."""
+    run_id: str
+    account: str
+    username: str | None
+    context_id: str | None
+    context_ok: bool = False
+    profile: dict | None = None
+    profile_observed_at: str | None = None
+    cooldown_seconds: float | None = None
+    buffs_observed_at: str | None = None
+    pending: ActionIntent | None = None
+    # Why no action may be sent until a person resolves it (an unanswered or unreadable command), else None.
+    uncertain: str | None = None
+    trips: int = 0
+    sequence: int = 0
+    applied: frozenset = frozenset()
+
+
+def apply_observation(state: AutomationState, observation: Observation) -> AutomationState:
+    """Return the state with a verified profile or /buffs reply applied. Rejected observations (another player,
+    unknown identity, another channel) and ones already applied return the state unchanged."""
+    if observation.observation_id in state.applied or observation.identity_status != VERIFIED:
+        return state
+    if state.context_id and observation.context_id and observation.context_id != state.context_id:
+        return state
+    applied = state.applied | {observation.observation_id}
+    if observation.kind == 'profile':
+        profile = parse_responses(profile=observation.text)['profile']
+        return replace(state, profile=profile, profile_observed_at=observation.observed_at, applied=applied)
+    if observation.kind == 'buffs':
+        cooldown = parse_responses(buffs=observation.text)['buffs']['fishing_cooldown']
+        if isinstance(cooldown, dict) and cooldown.get('unit') == 'seconds':
+            return replace(state, cooldown_seconds=cooldown['value'], buffs_observed_at=observation.observed_at,
+                           applied=applied)
+    return replace(state, applied=applied)

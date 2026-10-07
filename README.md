@@ -172,6 +172,34 @@ Windows and the OCR packages above.
   newest 200 are kept, and you should delete the folder when done; `docs/` is
   ignored by Git.
 
+### Automation (simulation)
+
+Open **Automation** (<http://127.0.0.1:8765/automation>) to run the fishing loop
+against a simulated Virtual Fisher, bounded by a trip count and a time limit.
+Each step is: choose the next action (refresh `/profile`, then `/buffs` for the
+cooldown, then fish), record it in the journal, send it, confirm the reply that
+answers it, update state, and wait out the verified cooldown plus 0.5 s.
+
+- At most one command is unanswered at a time. Every command is journaled
+  (`src/data/automation_sim/journal/`) before it is sent, and its hand-over and
+  reply after.
+- A command whose outcome is unknown is never resent: no reply within 20 s, a
+  failed or unrecorded hand-over, a reply with no evidence of which command it
+  answers, or an unreadable result. The loop stops sending and the page asks
+  you what happened.
+- After a crash, the next start rebuilds the state from the journal. Commands
+  that were never sent are dropped, unfinished logbook saves are redone (each
+  trip is saved once, keyed by its command), and commands that may have been
+  sent stay unresolved until their reply is seen or you resolve them.
+- Simulated trips are saved in `src/data/automation_sim/`, never in your
+  logbook. Tests cover 100 simulated trips, with and without a crash in the
+  middle, with exact totals.
+
+There is no live mode. Sending commands to Discord from your account is what
+Discord's self-bot rule and Virtual Fisher's anti-macro rule forbid (see
+`docs/planning/interaction-feasibility.md`), so nothing here sends anything to
+Discord.
+
 ### Snapshot history
 
 The logbook keeps a local history of parsed states for each account, so you can
