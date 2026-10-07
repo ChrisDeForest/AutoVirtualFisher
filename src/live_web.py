@@ -63,11 +63,19 @@ def render_live(head, status, accounts, bait_options, review_items, notice='', k
     if running and status.get('interval'):
         notice_html += (f'<p class="note">Capturing every {status["interval"]:g} s. '
                         f'{escape(status.get("interval_reason") or "")}</p>')
+    if running:
+        context = status.get('context') or {}
+        channel = {'verified': f'Channel confirmed in the capture: {context.get("channel")}.',
+                   'changed': 'Discord is showing a different channel; nothing is read until you return.'}.get(
+            context.get('status'), 'Channel not confirmed in the latest capture (the search box was not read).')
+        notice_html += f'<p class="note">{escape(channel)}</p>'
     if status.get('unresolved'):
-        notice_html += (f'<p class="status">{status["unresolved"]:,} uncertain placement'
-                        f'{"" if status["unresolved"] == 1 else "s"} this run: identical replies or a changed view '
-                        'meant some messages could not be counted exactly. They are in Needs review; trip counts '
-                        'may be incomplete until you check them.</p>')
+        notice_html += (f'<p class="status">{status["unresolved"]:,} review item'
+                        f'{"" if status["unresolved"] == 1 else "s"} about your replies '
+                        f'{"is" if status["unresolved"] == 1 else "are"} waiting (unreadable results, replies that '
+                        'may be repeats, or replies that may be yours). Until each is fixed or dismissed, what '
+                        'happened is unknown: trip counts may be incomplete and nothing automatic should rely on '
+                        'them.</p>')
     return (f'<!doctype html><html lang="en">{head}<body>'
             '<header><a class="brand" href="/">AutoVirtualFisher</a><span class="local">Live capture · Read-only</span></header>'
             '<main><h1>Live capture</h1>'

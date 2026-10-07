@@ -100,9 +100,17 @@ Windows and the OCR packages above.
   reply whose `used /pet` line OCR missed), because the account chosen on the
   page is not evidence of whose reply it is. Messages from other bots and
   players are left out even if their text looks like Virtual Fisher's.
-- **One channel.** Capture pins the Discord window and channel it started in
-  (Discord titles its window after the open channel). If you switch channels,
-  nothing is read until you return or restart.
+- **One channel.** Capture only uses a window owned by the Discord program,
+  and pins the window and channel it started in, checked two ways: the window
+  title (Discord names it after the open channel) and the channel name in the
+  capture's own pixels (the search box, `Search Virtual Fisher#7036`). If
+  either changes, nothing is read until you return or restart. When OCR does
+  not read the search box, replies are still read (each is checked for your
+  names) but the channel counts as unconfirmed.
+- **Review items block.** Anything in Needs review about your replies (an
+  unreadable result, a possible repeat, a reply that may be yours) means
+  what happened is unknown, so the page warns until you fix or dismiss it.
+  Replies clearly naming another player are queued but do not block.
 
 - Only the chat column is used. It is found from the content itself: the left
   edge shared by Virtual Fisher's message text, with distances measured in OCR
@@ -118,20 +126,22 @@ Windows and the OCR packages above.
   on screen may be unchanged, or one `A` may have scrolled away as a new `A`
   arrived. The cut-off text above the first message and the send times break
   the tie when they differ. When nothing on screen tells, the possible repeat
-  goes to review once (never guessed into the trip count), and the page shows
-  an uncertain-placement warning for the rest of the run. The newest
+  goes to review once (never guessed into the trip count) and blocks like any
+  other review item until you dismiss it. The newest
   message is processed once something follows it or it reads the same in two
   captures in a row (or when you select **Stop**). A message whose header is
   cut off at the top is ignored until it is fully visible.
 - Clean fishing results are saved as fishing sessions, each recording the
-  observation it came from and, once a `/profile` has been seen this run, the
-  biome, rod, and pet it was fished with. The bait chosen on the page is an
-  assumption until a reply confirms it: your profile's `Bait:` line, `/bait`
-  (`Current bait: …`), `You are already using …`, or the bait shop's
-  `Selected: …`. A change applies to later trips only. `You ran out of …` ends
-  the bait even when the rest of that trip went to review; if it names a
-  different bait than the one in use, later trips are saved with bait unknown
-  (left out of bait comparisons) until a reply confirms it.
+  observation it came from and, once seen this run, the biome, rod, and pet
+  from `/profile` and the multipliers from `/buffs` it was fished with.
+- The bait chosen on the page is only an assumption: trips are saved with it
+  as "assumed bait", not as their bait, so bait comparisons do not use them.
+  Bait is recorded once a reply confirms it: your profile's `Bait:` line,
+  `/bait` (`Current bait: …`), `You are already using …`, the bait shop's
+  `Selected: …`, or `You ran out of X` (which shows that trip used X). A
+  change applies to later trips only. `You ran out of …` ends the bait even
+  when the rest of that trip went to review; if it contradicts a confirmed
+  bait, that trip's bait is saved as unknown.
 - Clean profile, buffs, prestige shop, pet, and quests replies are saved as
   snapshots. Each section keeps when it was observed, so a new `/buffs` does
   not make an older balance look current, and charts plot each profile once at
@@ -269,9 +279,12 @@ your saved fishing sessions, it estimates:
   balance (assuming you sell everything you catch). Net is shown only when the
   bait's price is known; an unknown cost is never treated as zero;
 - a same-conditions estimate from your most recent trips (up to 500) fished
-  with your current biome, rod, and bait, with how many trips were left out.
-  Pasted sessions and live sessions saved before a `/profile` record no
-  conditions, so they are not used for it;
+  with your current biome, rod, pet (and its level), bait, and `/buffs`
+  multipliers (which reflect charms, bought boosts, and upgrades), leaving out
+  trips under a global boost. It says how many trips were left out and which
+  conditions your latest snapshots do not show. Pasted sessions and live
+  sessions saved before a `/profile` and `/buffs` record no conditions, so
+  they are not used for it;
 - how long ago your profile, buffs, and quests were observed (pasted ones say
   their observation time is unknown);
 - trips to finish each quest from the latest pasted `/quests`: fish caught per

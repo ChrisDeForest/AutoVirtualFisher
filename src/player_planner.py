@@ -10,13 +10,16 @@ from .bait_compare import bait_cost_per_trip, load_bait_reference
 from .catch_check import load_fish_reference
 from .fish_value import base_value, latest_sell_multiplier, value_check
 from .fishing_sessions import DEFAULT_SESSION_ROOT, fishing_totals, load_sessions
-from .player_snapshots import DEFAULT_SNAPSHOT_ROOT, SECTIONS, load_history
+from .player_snapshots import DEFAULT_SNAPSHOT_ROOT, SECTIONS, load_history, section_observed_at
 
 LEVEL_REFERENCE_PATH = Path(__file__).parent / 'reference' / 'level_xp.json'
 CHEST_NAME = re.compile(r'\b(box|chest|crate)\b', re.I)
 # Most recent matching trips used for a strategy estimate.
 STRATEGY_SAMPLE_TRIPS = 500
-STRATEGY_CONDITIONS = ('biome', 'rod')
+# What a trip's result depends on that can be checked: equipment and pet from /profile, and the multipliers
+# from /buffs, which include bait, charms, purchased boosts, and upgrades. Global boosts are marked per trip.
+STRATEGY_CONDITIONS = ('biome', 'rod', 'pet')
+STRATEGY_BUFFS = ('fish_catch', 'fish_quality', 'treasure_chance', 'treasure_quality', 'xp_multiplier')
 # A trip saved without any bait record (not the same as no bait).
 NOT_SET = object()
 
@@ -107,28 +110,45 @@ def _net(gross, cost):
     return gross - cost if gross is not None and cost is not None else None
 
 
-def _strategy(sessions, profile, reference, multiplier, bait_reference):
-    """Gross and net per trip from recent trips fished under the current biome, rod, and bait only.
+def buff_conditions(state: dict) -> dict:
+    """The /buffs multipliers that change fishing results, as numbers (None when not shown)."""
+    buffs = state.get('buffs') or {}
+    return {name: (buffs[name]['value'] if isinstance(buffs.get(name), dict) else None) for name in STRATEGY_BUFFS}
 
-    Sessions without recorded conditions (pasted ones, or older live ones) cannot be matched and are excluded.
+
+def _same(recorded, current):
+    if isinstance(current, str):
+        return isinstance(recorded, str) and recorded.casefold() == current.casefold()
+    return isinstance(recorded, (int, float)) and abs(recorded - current) < 1e-9
+
+
+def _strategy(sessions, profile, buffs, reference, multiplier, bait_reference):
+    """Gross and net per trip from recent trips fished under the same conditions as now: biome, rod, pet, bait,
+    and /buffs multipliers, without a global boost.
+
+    Sessions without recorded conditions (pasted ones, or live ones saved before a /profile and /buffs) cannot
+    be matched and are excluded; conditions the latest snapshots do not show are listed as missing.
     """
     bait_known, bait = _current_bait(profile)
     conditions = {name: profile.get(name) for name in STRATEGY_CONDITIONS}
+    conditions.update(buffs)
+    missing = [name for name, value in conditions.items() if value is None]
     conditions['bait'] = bait if bait_known else None
-    missing = [name for name in STRATEGY_CONDITIONS if not isinstance(conditions[name], str)]
     missing += [] if bait_known else ['bait']
-    total = matched = 0
+    total = matched = boosted = 0
     catches = {}
     for session in sessions:
         recorded = session['tally'].get('conditions') or {}
-        same = not missing and all(isinstance(recorded.get(name), str)
-                                   and recorded[name].casefold() == conditions[name].casefold()
-                                   for name in STRATEGY_CONDITIONS)
+        same = not missing and all(_same(recorded.get(name), value) for name, value in conditions.items()
+                                   if name != 'bait')
         for trip in session['tally'].get('trip_details', []):
             total += 1
             trip_bait = trip.get('bait', NOT_SET)
             if (same and matched < STRATEGY_SAMPLE_TRIPS and trip_bait is not NOT_SET
                     and (trip_bait or '').casefold() == (bait or '').casefold()):
+                if trip.get('boosted'):
+                    boosted += 1
+                    continue
                 matched += 1
                 for name, count in trip['catches'].items():
                     catches[name] = catches.get(name, 0) + count
@@ -138,7 +158,7 @@ def _strategy(sessions, profile, reference, multiplier, bait_reference):
         gross = None if unknown else base / matched * multiplier
     cost = bait_cost_per_trip(bait, bait_reference) if bait_known else None
     return {'conditions': conditions, 'missing_conditions': missing, 'trips': matched,
-            'excluded_trips': total - matched, 'gross_per_trip': gross, 'bait_cost_per_trip': cost,
+            'excluded_trips': total - matched, 'boosted_trips_left_out': boosted, 'gross_per_trip': gross, 'bait_cost_per_trip': cost,
             'net_per_trip': _net(gross, cost)}
 
 
@@ -162,7 +182,9 @@ def _money(history, profile, totals, reference, money_target, sessions=(), bait_
              'bait_cost_per_trip': cost, 'net_per_trip': _net(per_trip, cost),
              # An upper bound: one trip per observed cooldown, with no time between trips.
              'gross_per_hour': per_trip * 3600 / seconds if per_trip is not None and seconds else None,
-             'strategy': _strategy(sessions, profile, reference, multiplier, bait_reference),
+             'strategy': _strategy(sessions, profile, buff_conditions(next(
+                 (item['state'] for item in history if any(buff_conditions(item['state']).values())), {})),
+                 reference, multiplier, bait_reference),
              'unknown_fish': unknown or [],
              'check': value_check(history, reference) if reference is not None else None, 'target': None}
     balance, fish_value = profile.get('balance'), profile.get('fish_value')
@@ -174,6 +196,17 @@ def _money(history, profile, totals, reference, money_target, sessions=(), bait_
                            'trips': 0 if not needed else _trips(needed, per_trip),
                            'includes_unsold_fish': unsold}
     return money
+
+
+def _quests_seen_at(history, snapshot):
+    """When these quests were seen: their recorded observation time, or else when the same quest values were
+    first saved. A later snapshot that republishes them (a new profile or buffs) does not make them newer."""
+    index = history.index(snapshot)
+    while (index + 1 < len(history)
+           and history[index + 1]['state'].get('quests') == snapshot['state'].get('quests')):
+        index += 1
+    first = history[index]
+    return section_observed_at(snapshot, 'quests') or section_observed_at(first, 'quests') or first['captured_at']
 
 
 def plan(account_name: str, snapshot_root: Path = DEFAULT_SNAPSHOT_ROOT,
@@ -210,6 +243,7 @@ def plan(account_name: str, snapshot_root: Path = DEFAULT_SNAPSHOT_ROOT,
 
     with_quests = next((item for item in history if any(
         item['state'].get('quests', {}).get(group) for group in ('daily', 'special'))), None)
+    quests_seen_at = _quests_seen_at(history, with_quests) if with_quests else None
     quests, quests_reset = [], False
     if with_quests:
         state_quests = with_quests['state']['quests']
@@ -221,11 +255,11 @@ def plan(account_name: str, snapshot_root: Path = DEFAULT_SNAPSHOT_ROOT,
                                'task': quest.get('task'), 'status': status, 'trips': trips, 'note': note})
         minutes = state_quests.get('resets_in_minutes')
         if minutes is not None:
-            reset_at = datetime.fromisoformat(with_quests['captured_at']) + timedelta(minutes=minutes)
+            reset_at = datetime.fromisoformat(quests_seen_at.replace('Z', '+00:00')) + timedelta(minutes=minutes)
             quests_reset = moment >= reset_at
     return {'status': 'ok', 'as_of': latest['captured_at'], 'level': level, 'xp_to_next': xp_to_next,
             'xp_per_trip': xp_per_trip, 'fishing_trips': totals['trips'], 'model': model, 'targets': targets,
-            'quests': quests, 'quests_as_of': with_quests['captured_at'] if with_quests else None,
+            'quests': quests, 'quests_as_of': quests_seen_at,
             'quests_reset': quests_reset, 'section_ages': section_ages,
             'money': _money(history, profile, totals, fish_reference, money_target,
                             load_sessions(account_name, fishing_root)[0], load_bait_reference()),

@@ -13,6 +13,8 @@ from .player_snapshots import SECTIONS
 # the last 30 seconds.
 FINANCIAL_MAX_AGE_SECONDS = 30
 FINANCIAL_SECTIONS = ('profile', 'buffs')
+# The latest capture must be at most this many capture intervals old (and at least this many seconds allowed).
+CAPTURE_MAX_INTERVALS, CAPTURE_MIN_SECONDS = 3, 10
 
 
 def _moment(text):
@@ -45,25 +47,46 @@ def section_freshness(snapshot: dict | None, section: str, now: datetime, max_ag
     return {**result, 'status': 'fresh', 'reason': ''}
 
 
+def _capture_blockers(live, now):
+    if not live:
+        return ['Live capture has not been started.']
+    if not live.get('running'):
+        return ['Live capture is stopped.']
+    blockers = []
+    if live.get('capture_status') != 'ok':
+        blockers.append(f'The latest capture could not be read ({live.get("capture_status") or "none yet"}).')
+    captured = _moment(live.get('captured_at'))
+    limit = max(CAPTURE_MAX_INTERVALS * (live.get('interval') or 0), CAPTURE_MIN_SECONDS)
+    if captured is None or not 0 <= (now - captured).total_seconds() <= limit:
+        blockers.append('No recent capture: what is on screen now is unknown.')
+    context = live.get('context') or {}
+    if context.get('status') != 'verified':
+        blockers.append('The Discord channel is not verified in the latest capture '
+                        f'({context.get("status") or "unknown"}).')
+    alignment = live.get('alignment') or {}
+    if alignment.get('status') != 'certain':
+        blockers.append('Chat alignment is not certain: ' + (alignment.get('reason') or 'no capture placed yet.'))
+    if live.get('unresolved'):
+        blockers.append(f'{live["unresolved"]} review item(s) about your replies are waiting; until they are '
+                        'dismissed or fixed, what happened is unknown.')
+    return blockers
+
+
 def automation_view(snapshot: dict | None, now: datetime, max_age: float = FINANCIAL_MAX_AGE_SECONDS,
                     live: dict | None = None) -> dict:
     """Return section freshness, bait knowledge, and whether actions are allowed, with the reasons they are not.
 
-    `live` is LiveCapture.status(); an uncertain or lost chat alignment, or unresolved review evidence, freezes
-    every action until it is resolved.
+    `live` is LiveCapture.status(). Every action needs capture running, its latest capture recent, readable,
+    and in the verified channel, a certain chat alignment, and no review item about your replies waiting.
     """
     sections = {section: section_freshness(snapshot, section, now, max_age) for section in SECTIONS}
-    blockers = []
-    live = live or {}
-    alignment = live.get('alignment') or {}
-    if alignment.get('status') in ('ambiguous', 'lost') or live.get('unresolved'):
-        blockers.append('Chat alignment is uncertain: ' + (alignment.get('reason') or 'unresolved review items.'))
+    blockers = _capture_blockers(live, now)
     actions_allowed = not blockers
     for section in FINANCIAL_SECTIONS:
         if sections[section]['status'] != 'fresh':
             blockers.append(f'Refresh {section}: {sections[section]["reason"]}')
     financial_ready = not blockers
-    bait = live.get('bait_state') or {'status': 'unknown', 'bait': None}
+    bait = (live or {}).get('bait_state') or {'status': 'unknown', 'bait': None}
     if bait.get('status') != 'verified':
         # Only bait decisions need this; other money decisions do not depend on the bait in use.
         blockers.append('Refresh profile or /bait before buying bait: the bait in use is not confirmed.')

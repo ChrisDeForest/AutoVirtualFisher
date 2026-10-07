@@ -18,12 +18,13 @@ from .bait_compare import NOT_RECORDED, assign_bait, load_bait_reference
 from .catch_check import load_fish_reference
 from .fishing_log import fingerprint, parse_fishing
 from .fishing_sessions import save_session
-from .observation import BOT_NAME, VERIFIED, Identity, Observation, check_identity, recipients
+from .observation import BOT_NAME, MISMATCH, VERIFIED, Identity, Observation, check_identity, recipients
 from .ocr_cleanup import META, clean_ocr
 from .paste_detect import _kind, split_messages
+from .player_planner import buff_conditions
 from .player_snapshots import load_history, save_snapshot, validate_full_state
 from .player_state import _clean, _name, parse_responses
-from .review_queue import add_item
+from .review_queue import add_item, blocking_items
 
 # Bot replies that carry nothing to record.
 HARMLESS = re.compile(r"^(You don't have enough|You will now catch more fish|You are already boosting|"
@@ -57,6 +58,8 @@ STOP_TIMEOUT = 10.0
 # Replies that say which bait is in use: /bait ("Current bait: NONE"), choosing the bait already in use, and the
 # bait shop's "Selected: Worms (10)". The profile's "Bait:" line is read by the profile parser.
 BAIT_LINE = re.compile(r'(?:Current bait:|You are already using|Selected:)\s*(.+?)(?:\s*\([\d,]+\))?\.?', re.I)
+# Part of the window height where Discord's top bar (channel header and search box) sits.
+TOP_BAR_FRACTION = 0.15
 # Which snapshot section each player reply fills.
 KIND_SECTION = {'profile': 'profile', 'buffs': 'buffs', 'prestige_shop': 'prestige', 'pet': 'pets', 'quests': 'quests'}
 
@@ -250,6 +253,17 @@ def _cooldown_seconds(state: dict) -> float | None:
     return None
 
 
+def channel_name(boxes: list[dict], image_height: float) -> str | None:
+    """The open DM or server as Discord's search box shows it in the capture ("Search Virtual Fisher#7036",
+    "Search Fishing Club"), read from the top bar only; None when OCR did not read it."""
+    for box in sorted(boxes, key=lambda box: box['top']):
+        if box['top'] > image_height * TOP_BAR_FRACTION:
+            break
+        if match := re.fullmatch(r'Search\s+(.+?)(?:#\d{4})?', box['text'].strip()):
+            return match[1].strip()
+    return None
+
+
 def context_key(context: dict) -> str:
     """Identify the captured window and channel. Discord titles its window after the open channel or DM, so a
     changed title means a different channel; the same title is not proof of the same channel by itself."""
@@ -293,7 +307,8 @@ def make_capture(keep_dir: Path | None = None, keep_limit: int = KEEP_LIMIT):
             if keep_dir is not None and lines != last_kept['lines']:
                 _keep(image, Path(keep_dir), info, boxes, lines, bmp_to_png, keep_limit)
                 last_kept['lines'] = lines
-            return {'status': 'ok', 'lines': lines, 'context': {'window': window[0], 'title': window[1]}}
+            return {'status': 'ok', 'lines': lines, 'context': {'window': window[0], 'title': window[1],
+                                                                 'channel': channel_name(boxes, info['height'])}}
         finally:
             image.unlink(missing_ok=True)
 
@@ -349,10 +364,14 @@ class LiveCapture:
         self.state = 'Stopped.'
         self.previous, self.misses, self.held = None, 0, None
         self.previous_lines = []
-        # How the latest capture lined up, and how many uncertain placements are waiting in review this run.
-        self.alignment, self.unresolved = None, 0
-        # The window and channel capture started in; captures of any other are not read.
-        self.context_id = None
+        # How the latest capture lined up.
+        self.alignment = None
+        # The window and channel capture started in; captures of any other are not read. `channel` is the channel
+        # name read from the capture's own pixels (the search box), checked as well as the window title.
+        self.context_id = self.channel = None
+        # The latest capture: its status ('ok', 'blank', 'other_context', …), when it was taken, and whether it
+        # showed the pinned channel ('verified', 'unverified', 'changed').
+        self.capture_status, self.captured_at, self.context_status = None, None, 'unverified'
         self.latest = {}
         self.counts = {'trips': 0, 'sessions': 0, 'snapshots': 0, 'flagged': 0, 'ignored': 0}
         self.log = []
@@ -373,8 +392,9 @@ class LiveCapture:
             self.bait_status = 'unknown' if bait == NOT_RECORDED else 'assumed'
             self.identity = Identity(account, username or None)
             self.previous, self.misses, self.latest, self.held = None, 0, {}, None
-            self.previous_lines, self.alignment, self.unresolved = [], None, 0
-            self.context_id = None
+            self.previous_lines, self.alignment = [], None
+            self.context_id = self.channel = None
+            self.capture_status, self.captured_at, self.context_status = None, None, 'unverified'
             self.cooldown, self.tightened = self._saved_cooldown(account), None
             self._retime()
             self.counts = dict.fromkeys(self.counts, 0)
@@ -435,6 +455,7 @@ class LiveCapture:
             except Exception as error:  # keep watching; a single failed capture should not end the session
                 with self.lock:
                     if generation == self.generation:
+                        self.capture_status, self.context_status = 'error', 'unverified'
                         self.state = f'Capture failed: {error}'
                         self._note(self.state)
             # Paced from the start of each capture, so slow OCR does not stretch the gap between captures.
@@ -443,9 +464,15 @@ class LiveCapture:
 
     def status(self):
         with self.lock:
+            account = self.account
+        unresolved = blocking_items(self.roots['review'], account) if account else 0
+        with self.lock:
             return {'running': self.running, 'account': self.account, 'bait': self.bait, 'state': self.state,
                     'username': self.identity.username if self.identity else None,
-                    'alignment': self.alignment, 'unresolved': self.unresolved,
+                    # Review items about your own replies (or replies that may be yours) still in the queue.
+                    'unresolved': unresolved, 'alignment': self.alignment,
+                    'capture_status': self.capture_status, 'captured_at': self.captured_at,
+                    'context': {'status': self.context_status, 'channel': self.channel},
                     'interval': self.interval, 'interval_reason': self.interval_reason,
                     'bait_state': {'bait': None if self.bait == NOT_RECORDED else self.bait,
                                    'status': self.bait_status},
@@ -458,21 +485,34 @@ class LiveCapture:
             if not self.running or (generation is not None and generation != self.generation):
                 return
             self.last_capture = datetime.now().strftime('%H:%M:%S')
+            observed_at = self.captured_at = self.clock().isoformat()
+            self.capture_status = result['status']
             if result['status'] != 'ok':
+                self.context_status = 'unverified'
                 self.state = STATUS_TEXT.get(result['status'], result['status'])
                 return
-            context = result.get('context')
+            context = result.get('context') or {}
             context_id = context_key(context) if context else None
+            channel = context.get('channel')
             if context_id and self.context_id is None:
                 self.context_id = context_id
-            elif context_id and context_id != self.context_id:
+            if channel and self.channel is None and context_id == self.context_id:
+                self.channel = channel
+            if (context_id and context_id != self.context_id) or (channel and self.channel
+                                                                  and channel.casefold() != self.channel.casefold()):
                 # Matching text in another channel says nothing about this one, so it is not read at all.
-                self.state = (f'Paused: Discord is showing a different window or channel ({context.get("title")}). '
-                              'Return to the channel capture started in, or stop and start again.')
+                self.capture_status, self.context_status = 'other_context', 'changed'
+                self.state = (f'Paused: Discord is showing a different window or channel '
+                              f'({channel or context.get("title")}). Return to the channel capture started in, or '
+                              'stop and start again.')
                 return
+            # Verified only when this capture shows the pinned window and title and its own pixels show the
+            # pinned channel; otherwise replies are still read (each is identity-checked) but no action may rely
+            # on the channel.
+            self.context_status = 'verified' if context_id and channel and self.channel else 'unverified'
             frame = capture_frame(result['lines'])
             messages = frame['messages']
-            capture_id, observed_at = token_hex(6), self.clock().isoformat()
+            capture_id = token_hex(6)
             for index, message in enumerate(messages):
                 message.update(capture_id=capture_id, observed_at=observed_at, context_id=context_id,
                                observation_id=f'{capture_id}-{index}')
@@ -500,7 +540,6 @@ class LiveCapture:
                                    ['Seen after the chat view changed; it may already be saved or may be new.'])
                 self._note('View changed for a while; continuing from what is on screen now.')
                 self.misses, self.previous, self.held = 0, frame, None
-                self.unresolved += 1
                 self.state = f'Watching. Last capture {self.last_capture}.'
                 return
             self.misses = 0
@@ -512,10 +551,10 @@ class LiveCapture:
                 evidence = fingerprint('\n'.join(self.previous_lines) + '\n\x00\n' + '\n'.join(result['lines']))
                 if any(line.startswith('You ran out of') for message in maybe for line in message['lines']):
                     self._set_bait(NOT_RECORDED, 'unknown', 'Bait may have run out in an uncertain message')
-                if maybe and self._flag(None if len({m['kind'] for m in maybe}) > 1 else maybe[0]['kind'],
-                                        '\n\n'.join('\n'.join(m['lines']) for m in maybe),
-                                        [alignment['reason']], evidence_id=evidence):
-                    self.unresolved += 1
+                if maybe:
+                    self._flag(None if len({m['kind'] for m in maybe}) > 1 else maybe[0]['kind'],
+                               '\n\n'.join('\n'.join(m['lines']) for m in maybe), [alignment['reason']],
+                               evidence_id=evidence)
             if self.held is not None and start >= 1:
                 now = messages[start - 1]
                 # Process the held newest message once something follows it or it reads the same twice.
@@ -543,9 +582,13 @@ class LiveCapture:
 
     def _flag(self, kind, text, reasons, observation=None, evidence_id=None):
         """Queue a message for review; returns False when the same evidence is already queued."""
+        # Only a reply clearly naming someone else leaves your state unaffected; anything else may be yours, so
+        # it blocks actions until it is dismissed or fixed.
+        blocks = not (observation and observation.identity_status == MISMATCH)
         item = add_item(self.roots['review'], self.account, kind or 'unknown', text, reasons,
                         identity_status=observation.identity_status if observation else None,
-                        observation_id=observation.observation_id if observation else None, evidence_id=evidence_id)
+                        observation_id=observation.observation_id if observation else None, evidence_id=evidence_id,
+                        blocks_actions=blocks)
         if item.get('duplicate'):
             return False
         self.counts['flagged'] += 1
@@ -566,13 +609,14 @@ class LiveCapture:
             self._note(f'{why}: ' + ('bait unknown' if bait == NOT_RECORDED else bait or 'no bait'))
         self.bait, self.bait_status = bait, status
 
-    def _ran_out(self, names):
-        """A verified "You ran out of …": no bait from the next trip, unless it names a different bait than the
-        one in use, which leaves the bait unknown."""
-        if self.bait in (None, NOT_RECORDED) or any(name.casefold() == self.bait.casefold() for name in names):
-            self._set_bait(None, 'verified', 'Bait ran out')
+    def _ran_out_during(self, names):
+        """The trip saying "You ran out of X" was fished with X. That confirms an assumed or unknown bait; when it
+        contradicts a confirmed one, that trip's bait is unknown."""
+        named = _bait_name(names[0])
+        if self.bait_status != 'verified' or (self.bait and named and self.bait.casefold() == named.casefold()):
+            self._set_bait(named, 'verified', 'The game named the bait in use')
         else:
-            self._set_bait(NOT_RECORDED, 'unknown', f'Ran out of {", ".join(names)}, not {self.bait}')
+            self._set_bait(NOT_RECORDED, 'unknown', f'Ran out of {named}, but {self.bait or "no bait"} was confirmed')
 
     def _process(self, messages):
         clean_fishing = []
@@ -609,13 +653,17 @@ class LiveCapture:
                 reasons = self._fishing_problems(text)
                 if reasons:
                     self._flag(kind, text, reasons, observation)
-                else:
-                    clean_fishing.append(observation)
-                # A credible depletion ends the bait even when the rest of the trip could not be read.
                 ran_out = parse_fishing(text)['bait_ran_out']
                 if ran_out:
+                    # "You ran out of X" says this trip used X: earlier trips keep the bait known before it.
                     flush()
-                    self._ran_out(ran_out)
+                    self._ran_out_during(ran_out)
+                if not reasons:
+                    clean_fishing.append(observation)
+                if ran_out:
+                    # A credible depletion ends the bait even when the rest of the trip could not be read.
+                    flush()
+                    self._set_bait(None, 'verified', 'Bait ran out')
             else:
                 reasons = self._player_problems(kind, text)
                 if reasons:
@@ -689,7 +737,13 @@ class LiveCapture:
 
     def _save_fishing(self, observations):
         text = '\n\n'.join(observation.text for observation in observations)
-        tally = assign_bait(parse_fishing(text), self.bait)
+        # Only a confirmed bait is recorded as the trips' bait; an assumed one is kept beside it, so comparisons
+        # (which use only recorded bait) are not built on a guess.
+        verified = self.bait_status == 'verified'
+        tally = assign_bait(parse_fishing(text), self.bait if verified else NOT_RECORDED)
+        tally['bait_status'] = self.bait_status
+        if self.bait_status == 'assumed':
+            tally['assumed_bait'] = self.bait
         seen = self.latest.get('profile')
         if seen is not None:
             # The conditions these trips were fished in, from your latest confirmed /profile this run, so money
@@ -697,6 +751,10 @@ class LiveCapture:
             profile = parse_responses(profile=seen.text)['profile']
             tally['conditions'] = {'biome': profile['biome'], 'rod': profile['rod'], 'pet': profile['pet'],
                                    'profile_observed_at': seen.observed_at}
+            buffs = self.latest.get('buffs')
+            if buffs is not None:
+                tally['conditions'].update(buff_conditions(parse_responses(buffs=buffs.text)),
+                                           buffs_observed_at=buffs.observed_at)
         provenance = {'source': 'live_capture', 'identity_status': VERIFIED,
                       'observations': [{field: value for field, value in observation.to_dict().items()
                                         if field not in ('text', 'reason')} for observation in observations]}

@@ -111,6 +111,31 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(result['model']['mismatches'], [{'level': 10, 'observed': 999, 'expected': 1_000}])
         self.assertEqual([target['level'] for target in result['targets']], [11])
 
+    def test_quest_reset_is_timed_from_when_the_quests_were_observed(self):
+        quests = 'Daily Fishing - 7/500\nCatch 500 fish\nQuests reset in 20h'
+        state = parse_responses(profile='Inventory of epicmouse\nBalance: $1,000\nLevel 10, 960/1,000 XP to next level',
+                                quests=quests)
+        seen = lambda at: {'observed_at': at, 'source_observation_id': at, 'identity_status': 'verified'}
+        quests_seen = seen('2026-10-05T12:00:00+00:00')
+        save_snapshot(state, self.snapshots, sections={'profile': seen('2026-10-06T08:00:00+00:00'),
+                                                       'quests': quests_seen})
+        # A later profile republishes the same quests; that must not push their reset later.
+        save_snapshot(state, self.snapshots, sections={'profile': seen('2026-10-06T09:00:00+00:00'),
+                                                       'quests': quests_seen})
+        result = self.make_plan(now=datetime(2026, 10, 6, 9, 0, tzinfo=timezone.utc))
+        self.assertTrue(result['quests_reset'], 'reset at 08:00, 20 h after the quests were seen')
+        self.assertEqual(result['quests_as_of'], '2026-10-05T12:00:00+00:00')
+
+    def test_republished_pasted_quests_keep_their_first_save_time(self):
+        quests = 'Daily Fishing - 7/500\nCatch 500 fish\nQuests reset in 20h'
+        first = self.snapshot(quests=quests)
+        path = next(self.snapshots.rglob(f'{first["snapshot_id"]}.json'))
+        stored = json.loads(path.read_text(encoding='utf-8'))
+        stored['captured_at'] = (datetime.now(timezone.utc) - timedelta(hours=21)).isoformat()
+        path.write_text(json.dumps(stored), encoding='utf-8')
+        self.snapshot(quests=quests, level=11, current=5)  # same quests, pasted again with a new profile
+        self.assertTrue(self.make_plan()['quests_reset'])
+
     def test_quest_estimates(self):
         quests = ('Daily Level-ups - 0/2\nLevel up 2 time(s)\nDaily Fishing - 100/500\nCatch 500 fish.\n'
                   'Daily Artifact Hunter - 1/5\nFind 5 chests.\nDaily Done - 3/3\nDo a thing\n'
@@ -178,17 +203,33 @@ class PlannerTests(unittest.TestCase):
         self.assertIsNone(money['gross_per_hour'], 'no cooldown observed')
 
     def test_strategy_uses_only_trips_under_current_conditions(self):
-        self.snapshot(buffs='Sell price: 2.00x', extra='Current biome: River\nCurrently using Steel Rod.\nBait: Worms (10)')
-        self.baited_session('You caught:\n4 Cod\n+40 XP', 'Worms', biome='River', rod='Steel Rod')
-        self.baited_session('You caught:\n9 Cod\n+90 XP', 'Worms', biome='Ocean', rod='Steel Rod')
-        self.baited_session('You caught:\n7 Cod\n+70 XP', 'Leeches', biome='River', rod='Steel Rod')
+        buffs = ('Sell price: 2.00x\nFish catch: 1.41x\nFish quality: 1.21x\nTreasure chance: 1.50x\n'
+                 'Treasure quality: 1.13x\nXP Multiplier: 2.12x')
+        self.snapshot(buffs=buffs, extra='Current biome: River\nCurrently using Steel Rod.\nPet: Dolphin (Level 51)\n'
+                                         'Bait: Worms (10)')
+        now = {'biome': 'River', 'rod': 'Steel Rod', 'pet': 'Dolphin (Level 51)', 'fish_catch': 1.41,
+               'fish_quality': 1.21, 'treasure_chance': 1.5, 'treasure_quality': 1.13, 'xp_multiplier': 2.12}
+        self.baited_session('You caught:\n4 Cod\n+40 XP\n\nYou caught:\n6 Cod\n+60 XP\nGlobal boost by A!',
+                            'Worms', **now)
+        self.baited_session('You caught:\n9 Cod\n+90 XP', 'Worms', **{**now, 'biome': 'Ocean'})
+        self.baited_session('You caught:\n7 Cod\n+70 XP', 'Leeches', **now)
+        self.baited_session('You caught:\n5 Cod\n+50 XP', 'Worms', **{**now, 'pet': 'Dolphin (Level 50)'})
+        self.baited_session('You caught:\n6 Cod\n+66 XP', 'Worms', **{**now, 'fish_catch': 1.61})  # a bought boost
         self.baited_session('You caught:\n8 Cod\n+80 XP', 'Worms')
         strategy = self.make_plan()['money']['strategy']
-        self.assertEqual(strategy['conditions'], {'biome': 'River', 'rod': 'Steel Rod', 'bait': 'Worms'})
-        self.assertEqual((strategy['trips'], strategy['excluded_trips']), (1, 3))
+        self.assertEqual(strategy['conditions'], {**now, 'bait': 'Worms'})
+        self.assertEqual((strategy['trips'], strategy['excluded_trips'], strategy['boosted_trips_left_out']),
+                         (1, 6, 1), 'the globally boosted trip is left out even under the same conditions')
         self.assertEqual(strategy['gross_per_trip'], 80)
         self.assertEqual(strategy['net_per_trip'], 76)
         self.assertEqual(strategy['missing_conditions'], [])
+
+    def test_strategy_reports_conditions_it_cannot_check(self):
+        self.snapshot(buffs='Sell price: 2.00x', extra='Current biome: River\nBait: Worms (10)')
+        strategy = self.make_plan()['money']['strategy']
+        self.assertEqual(strategy['trips'], 0)
+        self.assertIn('rod', strategy['missing_conditions'])
+        self.assertIn('fish_catch', strategy['missing_conditions'])
 
     def test_money_target_counts_unsold_fish(self):
         self.snapshot(buffs='Sell price: 2.00x', extra='Fish Value: $100')

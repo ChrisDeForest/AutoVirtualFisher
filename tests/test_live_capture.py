@@ -174,7 +174,10 @@ class LiveRunTests(unittest.TestCase):
                  for trip in session['tally']['trip_details']]
         self.assertEqual(len(trips), 2, 'two identical results are two trips; the baseline is not saved')
         self.assertEqual([trip['catches'] for trip in trips], [{'Salmon': 8, 'Cod': 6}] * 2)
-        self.assertEqual([trip['bait'] for trip in trips], ['Worms', 'Worms'])
+        self.assertEqual([trip.get('bait', 'not recorded') for trip in trips], ['not recorded'] * 2,
+                         'the bait chosen on the page is an assumption, not a recorded fact')
+        session = load_sessions('epicmouse', self.sessions)[0][0]
+        self.assertEqual((session['tally']['assumed_bait'], session['tally']['bait_status']), ('Worms', 'assumed'))
         self.assertEqual(self.live.status()['counts']['trips'], 2)
 
     def test_bait_stays_off_after_running_out(self):
@@ -364,7 +367,7 @@ class LiveRunTests(unittest.TestCase):
     def test_profile_bait_switch_applies_to_later_trips_only(self):
         leeches = PROFILE[:-3] + ['Bait: Leeches (5)'] + PROFILE[-3:]
         self.run_screens([fish(1, 1, 10)], [fish(1, 1, 10), fish(2, 2, 20), leeches, fish(3, 3, 30), fish(4, 4, 40)])
-        self.assertEqual(self.trip_baits(), ['Worms', 'Leeches', 'Leeches'])
+        self.assertEqual(self.trip_baits(), ['not recorded', 'Leeches', 'Leeches'])
         self.assertEqual(self.live.status()['bait_state'], {'bait': 'Leeches', 'status': 'verified'})
 
     def test_confirmed_selection_replaces_the_assumed_bait(self):
@@ -389,14 +392,19 @@ class LiveRunTests(unittest.TestCase):
     def test_another_players_bait_confirmation_changes_nothing(self):
         theirs = ['someoneelse used', '% bait', 'Virtual Fisher 11:41 AM', 'You are already using Leeches']
         self.run_screens([fish(1, 1, 10)], [fish(1, 1, 10), theirs, fish(2, 2, 20), fish(3, 3, 30)])
-        self.assertEqual(self.trip_baits(), ['Worms', 'Worms'])
+        self.assertEqual(self.trip_baits(), ['not recorded', 'not recorded'])
         self.assertEqual(self.live.status()['bait_state']['status'], 'assumed')
 
-    def test_unexplained_depletion_makes_bait_unknown(self):
+    def test_depletion_names_the_bait_that_was_in_use(self):
         self.run_screens([fish(1, 1, 10)], [fish(1, 1, 10), fish(2, 2, 20, 'You ran out of leeches.'),
                                             fish(3, 3, 30), fish(4, 4, 40)])
-        self.assertEqual(self.trip_baits(), ['Worms', 'not recorded', 'not recorded'],
-                         'the game named another bait, so later trips are not credited to either')
+        self.assertEqual(self.trip_baits(), ['Leeches', None, None],
+                         'the game says which bait ran out, which beats the assumed Worms')
+
+    def test_depletion_contradicting_confirmed_bait_leaves_that_trip_unknown(self):
+        self.run_screens([fish(1, 1, 10)], [fish(1, 1, 10), reply('You are already using Worms'),
+                                            fish(2, 2, 20, 'You ran out of leeches.'), fish(3, 3, 30), fish(4, 4, 40)])
+        self.assertEqual(self.trip_baits(), ['not recorded', None, None])
 
     def test_restart_during_a_blocked_capture_discards_the_old_result(self):
         import threading
@@ -491,6 +499,41 @@ class LiveRunTests(unittest.TestCase):
         self.assertFalse(any(paused))
         self.assertEqual(self.saved_trips(), len(replies) - 1)
 
+    def test_review_items_about_you_block_actions_until_dismissed(self):
+        broken = fish(2, 2, 20)
+        broken[5] = 'Salmon'
+        theirs = ['someoneelse used', '% fish', 'Virtual Fisher 11:41 AM', 'someoneelse77', 'You caught:',
+                  '9 Salmon', '+90 XP']
+        status = self.run_screens([fish(1, 1, 10)], [fish(1, 1, 10), theirs, broken, fish(3, 3, 30)], stop=False)
+        self.assertEqual(status['counts']['flagged'], 2)
+        self.assertEqual(status['unresolved'], 1, 'your unreadable trip blocks; another player\'s reply does not')
+        mine = next(item for item in list_items(self.review)[0] if item['kind'] == 'fishing'
+                    and item['identity_status'] == 'verified')
+        dismiss(self.review, mine['id'])
+        self.assertEqual(self.live.status()['unresolved'], 0)
+        self.live.stop()
+
+    def test_capture_and_channel_status_are_reported(self):
+        dm = {'window': 7, 'title': '@Virtual Fisher - Discord', 'channel': 'Virtual Fisher'}
+        cases = [({'status': 'blank', 'lines': []}, 'blank', None),
+                 ({'status': 'ok', 'lines': fish(1, 1, 10), 'context': dm}, 'ok', 'verified'),
+                 ({'status': 'ok', 'lines': fish(1, 1, 10), 'context': {**dm, 'channel': None}}, 'ok', 'unverified'),
+                 ({'status': 'ok', 'lines': fish(1, 1, 10), 'context': {**dm, 'channel': 'Fishing Club'}},
+                  'other_context', 'changed'),
+                 ({'status': 'ok', 'lines': fish(1, 1, 10), 'context': dm}, 'ok', 'verified')]
+        self.screens = [case for case, _, _ in cases]
+        self.live.capture = lambda: self.screens.pop(0)
+        self.live.start('epicmouse', 'Worms', thread=False, username='epicmouse9925')
+        for _, capture_status, context_status in cases:
+            self.live.step()
+            status = self.live.status()
+            self.assertEqual(status['capture_status'], capture_status)
+            if context_status:
+                self.assertEqual(status['context']['status'], context_status)
+            self.assertTrue(status['captured_at'])
+        self.live.stop()
+        self.assertFalse(self.live.status()['running'])
+
     def test_window_problems_are_reported(self):
         self.live = LiveCapture(self.snapshots, self.sessions, self.review,
                                 capture=lambda: {'status': 'minimized', 'lines': []})
@@ -575,6 +618,16 @@ class KeptCaptureTests(unittest.TestCase):
             self.assertEqual(sorted(path.name for path in folder.iterdir()),
                              sorted([f'{stamp}{suffix}' for stamp in stamps[-2:] for suffix in ('.json', '.png')]
                                     + ['notes.png']))
+
+
+class ChannelEvidenceTests(unittest.TestCase):
+    def test_channel_is_read_from_the_search_box_in_the_capture(self):
+        from src.live_capture import channel_name
+        self.assertEqual(channel_name(WINDOW['lines'], WINDOW['info']['height']), 'Virtual Fisher')
+        self.assertEqual(channel_name([{'text': 'Search Fishing Club', 'top': 40}], 1000), 'Fishing Club')
+        self.assertIsNone(channel_name([{'text': 'Search Fishing Club', 'top': 600}], 1000),
+                          'only the top bar counts, not chat text')
+        self.assertIsNone(channel_name([], 1000))
 
 
 class CapturePngTests(unittest.TestCase):

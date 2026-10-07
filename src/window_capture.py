@@ -18,6 +18,23 @@ class _BitmapInfoHeader(ctypes.Structure):
 # PrintWindow flag that makes Chromium-based apps such as Discord render their real content.
 PW_RENDERFULLCONTENT = 2
 _APIS = None
+_KERNEL32 = None
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+
+def _kernel32():
+    global _KERNEL32
+    if _KERNEL32 is None:
+        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.QueryFullProcessImageNameW.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                                                        ctypes.POINTER(wintypes.DWORD)]
+        kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        _KERNEL32 = kernel32
+    return _KERNEL32
 
 
 def _apis():
@@ -33,6 +50,7 @@ def _apis():
             (user32.ReleaseDC, [wintypes.HWND, wintypes.HDC], ctypes.c_int),
             (user32.PrintWindow, [wintypes.HWND, wintypes.HDC, wintypes.UINT], wintypes.BOOL),
             (user32.GetDpiForWindow, [wintypes.HWND], wintypes.UINT),
+            (user32.GetWindowThreadProcessId, [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)], wintypes.DWORD),
             (user32.SetProcessDPIAware, [], wintypes.BOOL),
             (gdi32.CreateCompatibleDC, [wintypes.HDC], wintypes.HDC),
             (gdi32.CreateCompatibleBitmap, [wintypes.HDC, ctypes.c_int, ctypes.c_int], wintypes.HBITMAP),
@@ -58,8 +76,27 @@ def capture_supported() -> bool:
     return sys.platform == 'win32'
 
 
+def window_process(hwnd: int) -> str | None:
+    """File name of the program that owns the window (e.g. 'Discord.exe'), or None if it cannot be read."""
+    user32, _ = _apis()
+    kernel32 = _kernel32()
+    pid = wintypes.DWORD()
+    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+    process = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+    if not process:
+        return None
+    try:
+        buffer, size = ctypes.create_unicode_buffer(1024), wintypes.DWORD(1024)
+        if not kernel32.QueryFullProcessImageNameW(process, 0, buffer, ctypes.byref(size)):
+            return None
+    finally:
+        kernel32.CloseHandle(process)
+    return Path(buffer.value).name
+
+
 def find_discord_window() -> tuple[int, str] | None:
-    """Return (window handle, title) of the first visible window whose title ends with 'Discord'."""
+    """Return (window handle, title) of the first visible window whose title ends with 'Discord' and whose
+    program is Discord (Discord.exe, DiscordPTB.exe, DiscordCanary.exe), not merely a window titled like it."""
     user32 = ctypes.windll.user32
     found = []
 
@@ -69,7 +106,7 @@ def find_discord_window() -> tuple[int, str] | None:
         if length and user32.IsWindowVisible(hwnd):
             buffer = ctypes.create_unicode_buffer(length + 1)
             user32.GetWindowTextW(hwnd, buffer, length + 1)
-            if buffer.value.endswith('Discord'):
+            if buffer.value.endswith('Discord') and (window_process(hwnd) or '').casefold().startswith('discord'):
                 found.append((hwnd, buffer.value))
                 return False
         return True

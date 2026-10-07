@@ -11,7 +11,7 @@ RECORD_ID = re.compile(r'^[0-9TZ.]+-[0-9a-f]{8}$')
 
 def add_item(root: Path, account: str, kind: str, text: str, reasons: list[str],
              identity_status: str | None = None, observation_id: str | None = None,
-             evidence_id: str | None = None) -> dict:
+             evidence_id: str | None = None, blocks_actions: bool = True) -> dict:
     """Queue an item. With `evidence_id` (what was captured, not just the reply text), an item already queued
     for the same evidence is returned with 'duplicate': True instead of adding another."""
     if evidence_id:
@@ -21,7 +21,7 @@ def add_item(root: Path, account: str, kind: str, text: str, reasons: list[str],
     captured_at, item_id = new_record_id()
     item = {'id': item_id, 'captured_at': captured_at, 'account': account, 'kind': kind, 'text': text,
             'reasons': reasons, 'identity_status': identity_status, 'observation_id': observation_id,
-            'evidence_id': evidence_id}
+            'evidence_id': evidence_id, 'blocks_actions': blocks_actions}
     write_json_atomically(Path(root), item_id, item)
     return item
 
@@ -43,6 +43,14 @@ def list_items(root: Path) -> tuple[list[dict], list[str]]:
         items.append(item)
     items.sort(key=lambda item: item.get('id', ''), reverse=True)
     return items, warnings
+
+
+def blocking_items(root: Path, account: str | None) -> int:
+    """Queued items that leave the account's state uncertain until a person dismisses or fixes them. Items
+    without the flag (queued before it existed) count as blocking."""
+    items, _ = list_items(root)
+    return sum(item.get('blocks_actions', True) is not False
+               and (item.get('account') or '').casefold() == (account or '').casefold() for item in items)
 
 
 def dismiss(root: Path, item_id: str) -> bool:
