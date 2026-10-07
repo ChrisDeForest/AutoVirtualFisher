@@ -12,7 +12,7 @@ from .automation_models import ActionIntent, CapabilityError, ContextStatus, Dis
 from .observation import Identity, Observation, check_identity, recipients
 
 # Outcomes a test can script per send (by send index):
-#   ok, unreadable (a catch count lost), missing (the game acts but no reply is seen), duplicate (the reply is
+#   ok, unreadable (a catch count, or profile/buffs digits, misread), missing (the game acts but no reply is seen), duplicate (the reply is
 #   delivered twice), other_player_first (another player's reply arrives first), uncorrelated (the reply carries
 #   no evidence of which action it answers), send_error (the hand-over fails).
 OUTCOMES = ('ok', 'unreadable', 'missing', 'duplicate', 'other_player_first', 'uncorrelated', 'send_error')
@@ -65,6 +65,10 @@ class SimulationTransport:
             lines = text.split('\n')
             lines[2] = lines[2].split(' ', 1)[1]  # OCR lost the count: "Salmon"
             text = '\n'.join(lines)
+        elif outcome == 'unreadable' and kind in ('profile', 'buffs'):
+            # OCR misread the digits: "$1,0O0", "Level 1O", "3.5?s".
+            text = text.replace('$1,000', '$1,0O0').replace('Level 10,', 'Level 1O,').replace(
+                f'{self.cooldown:g}s', f'{self.cooldown:g}?s')
         deliver = now + self.latency
         if outcome == 'other_player_first':
             self._queue(deliver, f'sim-{index}-other', 'fishing', 'someoneelse77\nYou caught:\n1 Cod\n+5 XP', None,

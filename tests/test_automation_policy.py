@@ -55,6 +55,14 @@ class ApplyObservationTests(unittest.TestCase):
         self.assertIs(apply_observation(state, seen('buffs', 'Fishing cooldown: 9s.', observation_id='o2')), state,
                       'the same observation is applied once')
 
+    def test_unreadable_replies_do_not_establish_state(self):
+        state = replace(READY, profile=None, cooldown_seconds=None)
+        for kind, text in (('profile', 'Inventory of sim\nBalance: $4?,2l0.\nLevel: 1O'),
+                           ('profile', 'Inventory of sim\nBalance: $5.\nLevel: 3\nSomething unreadable'),
+                           ('buffs', "sim0001's current multipliers (including bait):\nFishing cooldown: 3.?s.")):
+            with self.subTest(text=text):
+                self.assertIs(apply_observation(state, seen(kind, text)), state)
+
     def test_rejected_observations_change_nothing(self):
         state = replace(READY, profile=None)
         for observation in (seen('profile', 'Inventory of x\nBalance: $1.\nLevel: 1', status='mismatch'),

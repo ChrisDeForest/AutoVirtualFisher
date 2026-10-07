@@ -9,7 +9,7 @@ from datetime import datetime
 
 from .automation_models import ActionIntent
 from .observation import VERIFIED, Observation
-from .player_snapshots import SECTIONS
+from .player_snapshots import SECTIONS, validate_full_state
 from .player_state import parse_responses
 
 # Initial conservative default from the automation design: money decisions need /profile and /buffs seen within
@@ -119,12 +119,34 @@ class AutomationState:
     applied: frozenset = frozenset()
 
 
+def refresh_problems(kind: str | None, text: str) -> list[str]:
+    """Why a /profile or /buffs reply cannot establish state; empty when it reads cleanly. A profile needs a
+    readable account name, balance, and level; /buffs needs the fishing cooldown. Any parser warning or line the
+    parser did not understand counts too: a misread line may hide a misread value."""
+    if kind not in ('profile', 'buffs'):
+        return [f'Expected a profile or /buffs reply, got {kind or "an unrecognized reply"}.']
+    parsed = parse_responses(**{kind: text})
+    problems = list(parsed['warnings'])
+    if parsed['unparsed'][kind]:
+        problems.append('Lines not understood: ' + ' | '.join(parsed['unparsed'][kind]))
+    if kind == 'profile':
+        problems += validate_full_state(parsed)[1]
+    else:
+        cooldown = parsed['buffs']['fishing_cooldown']
+        if not (isinstance(cooldown, dict) and cooldown.get('unit') == 'seconds'):
+            problems.append('The fishing cooldown was not read.')
+    return problems
+
+
 def apply_observation(state: AutomationState, observation: Observation) -> AutomationState:
-    """Return the state with a verified profile or /buffs reply applied. Rejected observations (another player,
-    unknown identity, another channel) and ones already applied return the state unchanged."""
+    """Return the state with a verified, cleanly read profile or /buffs reply applied. Rejected observations
+    (another player, unknown identity, another channel, unreadable values) and ones already applied return the
+    state unchanged."""
     if observation.observation_id in state.applied or observation.identity_status != VERIFIED:
         return state
     if state.context_id and observation.context_id and observation.context_id != state.context_id:
+        return state
+    if observation.kind in ('profile', 'buffs') and refresh_problems(observation.kind, observation.text):
         return state
     applied = state.applied | {observation.observation_id}
     if observation.kind == 'profile':

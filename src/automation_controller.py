@@ -16,7 +16,7 @@ import time
 from .automation_journal import AutomationJournal
 from .automation_models import AutomationConfig, CapabilityError, TransportError
 from .automation_policy import next_action
-from .automation_state import AutomationState, apply_observation
+from .automation_state import AutomationState, apply_observation, refresh_problems
 from .fishing_log import parse_fishing
 from .fishing_sessions import save_session
 from .live_capture import fishing_problems
@@ -290,8 +290,10 @@ class AutomationController:
     def _acknowledge(self, action_id, kind, observation, this_run):
         wait = COOLDOWN_REPLY.search(observation.text)
         tally = None
+        problems = []
         if kind != 'fish':
-            result = 'refreshed' if observation.kind else 'unexpected'
+            problems = refresh_problems(observation.kind, observation.text)
+            result = 'unreadable' if problems else 'refreshed'
         elif wait:
             result = 'cooldown'
         elif fishing_problems(observation.text):
@@ -311,6 +313,16 @@ class AutomationController:
         now = self.monotonic()
         if result == 'cooldown':
             self.ready_at = now + float(wait[1]) + self.config.cooldown_margin
+        elif result == 'unreadable' and kind != 'fish':
+            # Answered, but the state it should establish is unknown: stop rather than act on guessed values
+            # or keep asking again.
+            add_item(self.roots['review'], self.config.account, observation.kind or 'unknown', observation.text,
+                     [f'Automation could not read this {observation.kind or "reply"} reliably.'] + problems,
+                     identity_status=observation.identity_status, observation_id=observation.observation_id)
+            self.unresolved[action_id] = (f'Its {observation.kind or "reply"} could not be read reliably '
+                                          f'({problems[0]}); see Needs review.')
+            self._safe_event('uncertain', action_id, reason=self.unresolved[action_id])
+            self._sync_uncertain()
         elif result == 'unreadable':
             reasons = fishing_problems(observation.text)
             add_item(self.roots['review'], self.config.account, 'fishing', observation.text,

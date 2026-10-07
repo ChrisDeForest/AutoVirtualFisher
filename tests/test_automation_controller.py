@@ -143,6 +143,25 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(self.saved_trips(), 1)
         self.assertEqual([item['kind'] for item in list_items(self.review)[0]], ['fishing'])
 
+    def test_unreadable_refresh_is_not_a_successful_bootstrap(self):
+        for index, kind in ((0, 'profile'), (1, 'buffs')):
+            with self.subTest(kind=kind):
+                self.setUp()
+                self.sim.script = {index: 'unreadable'}
+                self.make().start()
+                self.run_for(20)
+                self.assertEqual(len(self.sim.sent), index + 1, 'nothing is sent after the unreadable reply')
+                status = self.controller.status()
+                self.assertEqual(status['phase'], 'NEEDS_REVIEW')
+                self.assertIsNone(self.controller.state.profile if kind == 'profile'
+                                  else self.controller.state.cooldown_seconds)
+                [item] = list_items(self.review)[0]
+                self.assertEqual(item['kind'], kind)
+                result = AutomationJournal(self.journal_root).recover()['actions'][status['unresolved'][0]]
+                self.assertEqual(result['result'], 'unreadable')
+                self.tearDown()
+        self.setUp()
+
     def test_wrong_context_pauses_without_sending(self):
         self.sim.context = ContextStatus(False, 'sim:dm', 'Discord is minimized')
         self.make().start()
