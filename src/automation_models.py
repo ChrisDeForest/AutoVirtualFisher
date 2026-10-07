@@ -40,7 +40,7 @@ class AutomationConfig:
     max_seconds: float | None = None  # ...or this long, whichever comes first
     reply_timeout: float = 20.0    # seconds without a correlated reply before the action becomes uncertain
     cooldown_margin: float = 0.5   # seconds added to the verified cooldown
-    mode: str = 'simulation'       # only 'simulation' has a transport; see interaction-feasibility.md
+    mode: str = 'simulation'       # the separate native CLI explicitly selects 'live'
     capabilities: tuple = field(default=('refresh_profile', 'refresh_buffs', 'fish'))
 
 

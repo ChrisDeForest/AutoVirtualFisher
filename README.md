@@ -1,8 +1,43 @@
 # AutoVirtualFisher
+
+### Experimental Windows interaction adapter
+
+The native adapter supports `/profile`, `/buffs`, and `/fish` through Discord's
+visible command picker in a DM (server channels are not supported yet).
+It is disabled by default and has not yet been verified
+against a live Discord session. The existing web automation page remains simulation-only.
+
+Inspect the configured target without sending input (substitute your actual names):
+
+```powershell
+.venv/Scripts/python.exe -m src.automation_live --channel "Virtual Fisher" --account "YOUR_PROFILE_NAME" --username "YOUR_DISCORD_USERNAME"
+```
+
+The runner gives you five seconds to foreground Discord. Keep its composer empty
+and a complete VF reply visible. `--window HANDLE` pins a particular window.
+Add `--live` to enable a bounded run: the default is one confirmed fishing trip
+or 120 seconds, including profile/buffs bootstrap commands. `--trips` allows 1–25
+and `--seconds` allows 1–900. Ctrl+C stops the runner; input already sent cannot
+be undone. Do not manually invoke VF commands while it is running.
+
+Missing command-picker evidence, changed context, verification prompts, or
+uncertain replies stop dispatch. A failed entry may leave an unsent draft;
+inspect and clear it manually before restarting. Resolve an uncertain journal
+action using `--resolve ACTION_ID --outcome happened` or `--outcome not_sent`
+after checking the game. Resolution does not start a run and cannot reconstruct
+lost fishing results. Live journal, trips, and review items are stored separately
+under ignored `src/data/automation_live/`.
+
+The current picker matcher requires an exact slash-command OCR line, an adjacent
+Virtual Fisher label, and a confirmed command in the composer after selection.
+If Discord renders those differently, the adapter stops before submission; the
+matcher needs a supervised capture-based adjustment rather than a blind Enter.
+
 This repo contains my personal project of completely automating the Discord bot "Virtual Fisher".
 
 The current implementation collects commands and wiki pages, then exports game
-data as JSON. Gameplay automation is not implemented yet.
+data as JSON. The web logbook supports simulation; the experimental native
+adapter above adds a bounded live runner that still needs live verification.
 
 ## Player logbook: terminal and web
 
@@ -195,8 +230,8 @@ answers it, update state, and wait out the verified cooldown plus 0.5 s.
   logbook. Tests cover 100 simulated trips, with and without a crash in the
   middle, with exact totals.
 
-Live mode is not implemented: there is no live transport, so nothing here sends
-anything to Discord. A live transport would implement the same contract as the
+The web page remains simulation-only and sends nothing to Discord. The separate
+experimental `src.automation_live` runner implements the same contract as the
 simulation (`src/automation_transport.py`). Project direction and the platform
 rules on record are in `docs/planning/interaction-feasibility.md`.
 

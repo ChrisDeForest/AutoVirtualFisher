@@ -63,7 +63,8 @@ class AutomationWebTests(unittest.TestCase):
         html = self.get()
         self.assertIn('<h1>Automation</h1>', html)
         self.assertIn('Simulation', html)
-        self.assertIn('interaction-feasibility.md', html)
+        self.assertIn('This page sends nothing to Discord', html)
+        self.assertIn('separate command-line runner', html)
         self.assertNotIn('name="mode" value="live"', html, 'there is no live option to select')
         self.assertIn('href="/automation"', self.get('/'), 'the main page links here')
 

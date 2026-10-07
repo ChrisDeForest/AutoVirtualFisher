@@ -285,7 +285,7 @@ def context_key(context: dict) -> str:
     return f'{context.get("window")}:{context.get("title")}'
 
 
-def make_capture(keep_dir: Path | None = None, keep_limit: int = KEEP_LIMIT):
+def make_capture(keep_dir: Path | None = None, keep_limit: int = KEEP_LIMIT, window_provider=None):
     """Return a capture function for LiveCapture. Each call captures and reads the Discord window and returns
     {'status', 'lines', 'context'}; the image is deleted at once unless `keep_dir` is set, in which case captures whose
     chat text changed are kept there as PNG plus JSON (OCR boxes and final lines) for analysis."""
@@ -297,7 +297,7 @@ def make_capture(keep_dir: Path | None = None, keep_limit: int = KEEP_LIMIT):
 
         if not capture_supported() or not ocr_available():
             return {'status': 'unsupported', 'lines': []}
-        window = find_discord_window()
+        window = window_provider() if window_provider is not None else find_discord_window()
         if window is None:
             return {'status': 'no_window', 'lines': []}
         handle, temporary = tempfile.mkstemp(suffix='.bmp')
@@ -322,7 +322,7 @@ def make_capture(keep_dir: Path | None = None, keep_limit: int = KEEP_LIMIT):
             if keep_dir is not None and lines != last_kept['lines']:
                 _keep(image, Path(keep_dir), info, boxes, lines, bmp_to_png, keep_limit)
                 last_kept['lines'] = lines
-            return {'status': 'ok', 'lines': lines, 'context': {'window': window[0], 'title': window[1],
+            return {'status': 'ok', 'lines': lines, 'boxes': boxes, 'context': {'window': window[0], 'title': window[1],
                                                                  'channel': channel_name(boxes, info['height'])}}
         finally:
             image.unlink(missing_ok=True)
