@@ -456,6 +456,7 @@ class LiveCapture:
                 with self.lock:
                     if generation == self.generation:
                         self.capture_status, self.context_status = 'error', 'unverified'
+                        self.alignment = {'status': 'unknown', 'reason': f'Capture failed: {error}'}
                         self.state = f'Capture failed: {error}'
                         self._note(self.state)
             # Paced from the start of each capture, so slow OCR does not stretch the gap between captures.
@@ -486,6 +487,9 @@ class LiveCapture:
                 return
             self.last_capture = datetime.now().strftime('%H:%M:%S')
             observed_at = self.captured_at = self.clock().isoformat()
+            # Certainty belongs to one capture: it is restored only below, when this capture overlaps the last one
+            # placed. Unreadable, empty, or other-channel captures leave it unknown (or lost).
+            self.alignment = {'status': 'unknown', 'reason': 'The latest capture could not be placed.'}
             self.capture_status = result['status']
             if result['status'] != 'ok':
                 self.context_status = 'unverified'
@@ -517,6 +521,8 @@ class LiveCapture:
                 message.update(capture_id=capture_id, observed_at=observed_at, context_id=context_id,
                                observation_id=f'{capture_id}-{index}')
             if not messages:
+                # The previous view is kept: capture resumes once a capture overlaps it again.
+                self.alignment = {'status': 'lost', 'reason': 'No Virtual Fisher messages are visible.'}
                 self.state = 'No Virtual Fisher messages visible in Discord.'
                 return
             alignment = align(self.previous, frame)

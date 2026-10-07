@@ -513,6 +513,33 @@ class LiveRunTests(unittest.TestCase):
         self.assertEqual(self.live.status()['unresolved'], 0)
         self.live.stop()
 
+    def test_capture_without_a_fresh_overlap_is_never_certain(self):
+        from datetime import datetime, timezone
+        from src.automation_state import automation_view
+        dm = {'window': 7, 'title': '@Virtual Fisher - Discord', 'channel': 'Virtual Fisher'}
+        other = {**dm, 'channel': 'Fishing Club'}
+        ok = lambda *screens: {'status': 'ok', 'lines': sum(screens, []), 'context': dm}
+        cases = [(ok(fish(1, 1, 10)), 'certain'),
+                 (ok(['Some other conversation']), 'lost'),           # no Virtual Fisher messages visible
+                 (ok(fish(1, 1, 10)), 'certain'),                     # overlap established again
+                 ({'status': 'blank', 'lines': []}, 'unknown'),
+                 (ok(fish(1, 1, 10), fish(2, 2, 20)), 'certain'),
+                 ({'status': 'ok', 'lines': fish(1, 1, 10), 'context': other}, 'unknown'),
+                 (ok(fish(1, 1, 10), fish(2, 2, 20), fish(3, 3, 30)), 'certain')]
+        self.screens = [capture for capture, _ in cases]
+        self.live.capture = lambda: self.screens.pop(0)
+        self.live.clock = lambda: datetime(2026, 10, 6, 12, tzinfo=timezone.utc)
+        self.live.start('epicmouse', 'Worms', thread=False, username='epicmouse9925')
+        fresh_snapshot = {'schema_version': 2, 'captured_at': '', 'state': {}, 'sections': {}}
+        for capture, expected in cases:
+            self.live.step()
+            status = self.live.status()
+            self.assertEqual(status['alignment']['status'], expected, capture)
+            view = automation_view(fresh_snapshot, datetime(2026, 10, 6, 12, tzinfo=timezone.utc), live=status)
+            self.assertEqual(view['actions_allowed'], expected == 'certain', (capture, view['blockers']))
+        self.live.stop()
+        self.assertEqual(self.saved_trips(), 2, 'the empty and unreadable captures lost nothing')
+
     def test_capture_and_channel_status_are_reported(self):
         dm = {'window': 7, 'title': '@Virtual Fisher - Discord', 'channel': 'Virtual Fisher'}
         cases = [({'status': 'blank', 'lines': []}, 'blank', None),
