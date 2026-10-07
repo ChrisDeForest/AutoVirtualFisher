@@ -5,13 +5,20 @@ from math import ceil
 from pathlib import Path
 import re
 
+from .automation_state import section_freshness
+from .bait_compare import bait_cost_per_trip, load_bait_reference
 from .catch_check import load_fish_reference
 from .fish_value import base_value, latest_sell_multiplier, value_check
-from .fishing_sessions import DEFAULT_SESSION_ROOT, fishing_totals
-from .player_snapshots import DEFAULT_SNAPSHOT_ROOT, load_history
+from .fishing_sessions import DEFAULT_SESSION_ROOT, fishing_totals, load_sessions
+from .player_snapshots import DEFAULT_SNAPSHOT_ROOT, SECTIONS, load_history
 
 LEVEL_REFERENCE_PATH = Path(__file__).parent / 'reference' / 'level_xp.json'
 CHEST_NAME = re.compile(r'\b(box|chest|crate)\b', re.I)
+# Most recent matching trips used for a strategy estimate.
+STRATEGY_SAMPLE_TRIPS = 500
+STRATEGY_CONDITIONS = ('biome', 'rod')
+# A trip saved without any bait record (not the same as no bait).
+NOT_SET = object()
 
 
 def load_level_increments(path: Path = LEVEL_REFERENCE_PATH) -> list[int] | None:
@@ -88,8 +95,57 @@ def _quest_estimate(quest, totals, level, xp_to_next, xp_per_trip, increments, u
     return 'estimate', _trips(remaining, rate), f'{remaining:,} {unit} at {rate:,.2f} per trip'
 
 
-def _money(history, profile, totals, reference, money_target):
-    """Money per trip at the latest /buffs sell price, and trips until a target balance."""
+def _current_bait(profile):
+    """(known, bait): the profile's bait, None for "NONE"; unknown when the profile did not show one."""
+    bait = profile.get('bait')
+    if not isinstance(bait, str):
+        return False, None
+    return True, (None if bait.casefold() in ('none', 'no bait') else bait)
+
+
+def _net(gross, cost):
+    return gross - cost if gross is not None and cost is not None else None
+
+
+def _strategy(sessions, profile, reference, multiplier, bait_reference):
+    """Gross and net per trip from recent trips fished under the current biome, rod, and bait only.
+
+    Sessions without recorded conditions (pasted ones, or older live ones) cannot be matched and are excluded.
+    """
+    bait_known, bait = _current_bait(profile)
+    conditions = {name: profile.get(name) for name in STRATEGY_CONDITIONS}
+    conditions['bait'] = bait if bait_known else None
+    missing = [name for name in STRATEGY_CONDITIONS if not isinstance(conditions[name], str)]
+    missing += [] if bait_known else ['bait']
+    total = matched = 0
+    catches = {}
+    for session in sessions:
+        recorded = session['tally'].get('conditions') or {}
+        same = not missing and all(isinstance(recorded.get(name), str)
+                                   and recorded[name].casefold() == conditions[name].casefold()
+                                   for name in STRATEGY_CONDITIONS)
+        for trip in session['tally'].get('trip_details', []):
+            total += 1
+            trip_bait = trip.get('bait', NOT_SET)
+            if (same and matched < STRATEGY_SAMPLE_TRIPS and trip_bait is not NOT_SET
+                    and (trip_bait or '').casefold() == (bait or '').casefold()):
+                matched += 1
+                for name, count in trip['catches'].items():
+                    catches[name] = catches.get(name, 0) + count
+    gross = None
+    if matched and reference is not None and multiplier is not None:
+        base, unknown = base_value(catches, reference)
+        gross = None if unknown else base / matched * multiplier
+    cost = bait_cost_per_trip(bait, bait_reference) if bait_known else None
+    return {'conditions': conditions, 'missing_conditions': missing, 'trips': matched,
+            'excluded_trips': total - matched, 'gross_per_trip': gross, 'bait_cost_per_trip': cost,
+            'net_per_trip': _net(gross, cost)}
+
+
+
+def _money(history, profile, totals, reference, money_target, sessions=(), bait_reference=None):
+    """Gross catch value per trip at the latest /buffs sell price, net of bait when its cost is known, and trips
+    until a target balance. Gross per trip averages all saved trips, whatever conditions they were fished in."""
     sell = latest_sell_multiplier(history)
     multiplier, multiplier_as_of = sell if sell else (None, None)
     base_per_trip = unknown = None
@@ -97,8 +153,17 @@ def _money(history, profile, totals, reference, money_target):
         base, unknown = base_value(totals['catches'], reference)
         base_per_trip = base / totals['trips']
     per_trip = base_per_trip * multiplier if base_per_trip is not None and multiplier is not None else None
+    bait_known, bait = _current_bait(profile)
+    cost = bait_cost_per_trip(bait, bait_reference) if bait_known else None
+    cooldown = (history[0]['state'].get('buffs', {}).get('fishing_cooldown') if history else None) or {}
+    seconds = cooldown.get('value') if cooldown.get('unit') == 'seconds' else None
     money = {'multiplier': multiplier, 'multiplier_as_of': multiplier_as_of, 'base_per_trip': base_per_trip,
-             'per_trip': per_trip, 'unknown_fish': unknown or [],
+             'per_trip': per_trip, 'gross_per_trip': per_trip, 'bait': bait if bait_known else None,
+             'bait_cost_per_trip': cost, 'net_per_trip': _net(per_trip, cost),
+             # An upper bound: one trip per observed cooldown, with no time between trips.
+             'gross_per_hour': per_trip * 3600 / seconds if per_trip is not None and seconds else None,
+             'strategy': _strategy(sessions, profile, reference, multiplier, bait_reference),
+             'unknown_fish': unknown or [],
              'check': value_check(history, reference) if reference is not None else None, 'target': None}
     balance, fish_value = profile.get('balance'), profile.get('fish_value')
     if money_target and isinstance(balance, (int, float)):
@@ -124,6 +189,10 @@ def plan(account_name: str, snapshot_root: Path = DEFAULT_SNAPSHOT_ROOT,
     if not full:
         return {'status': 'needs_snapshot', 'warnings': warnings}
     latest = full[0]
+    moment = now or datetime.now(timezone.utc)
+    # How old each part of the latest snapshot is, by when it was observed; unknown for pasted or older snapshots.
+    section_ages = {section: section_freshness(latest, section, moment, max_age=float('inf'))
+                    for section in SECTIONS}
     profile = latest['state'].get('profile', {})
     level, xp_to_next = profile.get('level'), profile.get('xp_to_next_level')
     xp_per_trip = totals['xp_per_trip']
@@ -153,9 +222,11 @@ def plan(account_name: str, snapshot_root: Path = DEFAULT_SNAPSHOT_ROOT,
         minutes = state_quests.get('resets_in_minutes')
         if minutes is not None:
             reset_at = datetime.fromisoformat(with_quests['captured_at']) + timedelta(minutes=minutes)
-            quests_reset = (now or datetime.now(timezone.utc)) >= reset_at
+            quests_reset = moment >= reset_at
     return {'status': 'ok', 'as_of': latest['captured_at'], 'level': level, 'xp_to_next': xp_to_next,
             'xp_per_trip': xp_per_trip, 'fishing_trips': totals['trips'], 'model': model, 'targets': targets,
             'quests': quests, 'quests_as_of': with_quests['captured_at'] if with_quests else None,
-            'quests_reset': quests_reset, 'money': _money(history, profile, totals, fish_reference, money_target),
+            'quests_reset': quests_reset, 'section_ages': section_ages,
+            'money': _money(history, profile, totals, fish_reference, money_target,
+                            load_sessions(account_name, fishing_root)[0], load_bait_reference()),
             'warnings': warnings}

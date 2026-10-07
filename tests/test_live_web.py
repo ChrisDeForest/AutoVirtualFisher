@@ -25,7 +25,7 @@ class LiveWebTests(unittest.TestCase):
         cls.handler = type('LiveHandler', (Handler,), {
             'snapshot_root': cls.temporary / 'snapshots', 'fishing_root': cls.temporary / 'fishing',
             'review_root': cls.temporary / 'review', 'live_capture_function': staticmethod(no_window),
-            'live': None})
+            'identity_path': cls.temporary / 'identities' / 'identities.json', 'live': None})
         cls.server = ThreadingHTTPServer(('127.0.0.1', 0), cls.handler)
         cls.worker = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.worker.start()
@@ -64,13 +64,23 @@ class LiveWebTests(unittest.TestCase):
         self.assertIn('href="/live"', urlopen(self.url).read().decode(), 'main page links to live capture')
 
     def test_start_and_stop(self):
-        html = self.post(action='start', account='epicmouse', bait='Worms')
+        html = self.post(action='start', account='epicmouse', bait='Worms', username='epicmouse9925')
         self.assertIn('http-equiv="refresh"', html)
-        self.assertIn('Watching epicmouse with Worms', html)
+        self.assertIn('Watching epicmouse (epicmouse9925) with Worms', html)
         self.assertIn('Discord window not found', unescape(self.get()))
         html = self.post(action='stop')
         self.assertNotIn('http-equiv="refresh"', html)
         self.assertIn('Stopped', html)
+
+    def test_start_needs_a_discord_username_once(self):
+        shutil.rmtree(self.temporary / 'identities', ignore_errors=True)
+        html = self.post(action='start', account='epicmouse', bait='', username='')
+        self.assertIn('Enter your Discord username', html)
+        self.assertFalse(self.handler.live and self.handler.live.status()['running'])
+        self.post(action='start', account='epicmouse', bait='', username='epicmouse9925')
+        self.post(action='stop')
+        html = self.post(action='start', account='epicmouse', bait='', username='')
+        self.assertIn('Watching epicmouse (epicmouse9925)', html, 'the saved username is used')
 
     def test_start_needs_an_existing_account(self):
         html = self.post(action='start', account='Stranger', bait='')

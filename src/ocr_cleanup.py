@@ -12,8 +12,14 @@ TIME = re.compile(r'\d{1,2}:\d{2}\s*[AP]M', re.I)
 # A message header: the bot name, its APP tag as OCR reads it ("APP", "AP", "VAPP", "V APP"), and/or a time.
 # Rejects look-alikes such as the DM title "Virtual Fisher [fish" or the profile panel's "Virtual Fisher#7036".
 MESSAGE_HEADER = re.compile(r'Virtual Fisher(?:\s+[V✓]?\s*A?PP?)?(?:\s+\d{1,2}:\d{2}\s*[AP]M)?', re.I)
+# Any other author's header: a name, an optional APP tag, and a time. Keeps other bots' and players' messages
+# apart from Virtual Fisher's instead of letting them run into the message above.
+OTHER_HEADER = re.compile(r'(?P<name>\S.{0,40}?)(?P<tag>\s+[V✓]?\s*A?PP)?\s+(?:(?:Today|Yesterday) at\s+)?'
+                          r'(?P<time>\d{1,2}:\d{2}\s*[AP]M)', re.I)
 # Discord chrome that can sit inside the chat column: the message box and the slash-command list.
 CHROME = re.compile(r'Message\s*[@#].*|[/\[|]\w+')
+# Prefix of the lines capture=True adds after a header: who used the command, and when the reply was sent.
+META = '↪ '
 
 
 def _pet_names():
@@ -23,19 +29,33 @@ def _pet_names():
         return []
 
 
-def clean_ocr(lines: list[str], label: str) -> str:
-    """Return cleaned text with a Discord-style header per bot message, labelled by the screenshot name."""
+def clean_ocr(lines: list[str], label: str, capture: bool = False) -> str:
+    """Return cleaned text with a Discord-style header per message, labelled by the screenshot name.
+
+    With `capture`, each header is followed by META lines saying who used the command ("used by <name>") and
+    when the reply was sent ("sent 11:40 AM"), when OCR read them; live capture uses these as evidence.
+    """
     pet_names = _pet_names()
     pet_header = (re.compile(r'^.*?\b(' + '|'.join(map(re.escape, pet_names)) + r')\s*\((Lvl .*)$')
                   if pet_names else None)
-    cleaned, after_used, in_tip = [], False, False
+    cleaned, after_used, in_tip, invoker = [], False, False, None
+
+    def header(name, bot, when):
+        nonlocal invoker
+        cleaned.extend([name] + (['APP'] if bot else []) + [f' — screenshot {label}'])
+        if capture:
+            cleaned.extend(([f'{META}used by {invoker}'] if invoker else [])
+                           + ([f'{META}sent {when.upper()}'] if when else []))
+        invoker = None
+
     for raw in lines:
         line = raw.strip()
         if not line:
             continue
-        if re.match(r'^\S+ used\b', line):
+        if used := re.match(r'^(\S+) used\b', line):
             # "epicmouse used" is followed by the command name, unless OCR put both on one line.
             after_used = line.endswith(' used')
+            invoker = used[1]
             continue
         if after_used:
             after_used = False
@@ -49,10 +69,14 @@ def clean_ocr(lines: list[str], label: str) -> str:
         if re.fullmatch(r'[^\w]*\s*(' + '|'.join(map(re.escape, BUTTONS)) + ')', line):
             continue
         if MESSAGE_HEADER.fullmatch(line):
-            cleaned += ['Virtual Fisher', 'APP', f' — screenshot {label}']
+            header('Virtual Fisher', True, (TIME.search(line) or [None])[0])
             continue
         if CHROME.fullmatch(line):
             continue
+        if other := OTHER_HEADER.fullmatch(line):
+            header(other['name'], bool(other['tag']), other['time'])
+            continue
+        invoker = None
         # The game writes "(Lvl 30)"; OCR often reads the "l" as "1" ("Lv130").
         line = re.sub(r'\(Lv[1lI|]\s?(\d+)\)', r'(Lvl \1)', line)
         if pet_header and (match := pet_header.match(line)):

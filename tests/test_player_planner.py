@@ -5,6 +5,7 @@ import tempfile
 import unittest
 
 from src.fishing_log import fingerprint, parse_fishing
+from src.bait_compare import assign_bait
 from src.fishing_sessions import save_session
 from src.player_planner import load_level_increments, plan, xp_between, xp_required
 from src.player_snapshots import save_snapshot
@@ -56,6 +57,24 @@ class PlannerTests(unittest.TestCase):
 
     def make_plan(self, **options):
         return plan('epicmouse', self.snapshots, self.sessions, increments=INCREMENTS, **options)
+
+    def test_section_ages_come_from_observation_times(self):
+        state = parse_responses(profile='Inventory of epicmouse\nBalance: $1,000\nLevel 10, 960/1,000 XP to next level',
+                                buffs="epicmouse9925's current multipliers (including bait):\nSell price: 2.00x")
+        verified = lambda at: {'observed_at': at, 'source_observation_id': at, 'identity_status': 'verified'}
+        save_snapshot(state, self.snapshots, sections={'profile': verified('2026-10-06T12:00:00+00:00'),
+                                                       'buffs': verified('2026-10-06T12:09:00+00:00')})
+        result = self.make_plan(now=datetime(2026, 10, 6, 12, 10, tzinfo=timezone.utc))
+        self.assertEqual(result['section_ages']['profile']['age_seconds'], 600)
+        self.assertEqual(result['section_ages']['buffs']['age_seconds'], 60)
+        self.assertEqual(result['section_ages']['quests']['status'], 'unknown')
+        self.assertEqual(result['money']['multiplier_as_of'], '2026-10-06T12:09:00+00:00',
+                         'the sell price is dated by when /buffs was seen, not when the snapshot was written')
+
+    def test_pasted_snapshot_ages_are_unknown(self):
+        self.snapshot()
+        ages = self.make_plan()['section_ages']
+        self.assertEqual(ages['profile']['status'], 'unknown')
 
     def test_needs_a_full_snapshot(self):
         self.assertEqual(self.make_plan()['status'], 'needs_snapshot')
@@ -133,6 +152,43 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(money['per_trip'], 50)
         self.assertEqual(money['target'], {'amount': 2_000, 'have': 1_000, 'needed': 1_000, 'trips': 20,
                                            'includes_unsold_fish': False})
+
+    def baited_session(self, text, bait, **conditions):
+        tally = assign_bait(parse_fishing(text), bait)
+        if conditions:
+            tally['conditions'] = conditions
+        save_session(tally, 'epicmouse', fingerprint(text + repr(conditions)), self.sessions)
+
+    def test_gross_estimate_is_unchanged_and_labelled(self):
+        self.snapshot(buffs='Sell price: 2.00x\nFishing cooldown: 4s')
+        self.fish('You caught:\n3 Cod\n+30 XP\n\nYou caught:\n2 Cod\n+20 XP')
+        money = self.make_plan()['money']
+        self.assertEqual((money['per_trip'], money['gross_per_trip']), (50, 50))
+        self.assertEqual(money['gross_per_hour'], 50 * 3600 / 4, 'from the observed cooldown')
+
+    def test_net_needs_a_known_bait_cost(self):
+        self.snapshot(buffs='Sell price: 2.00x', extra='Bait: Worms (10)')
+        self.fish('You caught:\n3 Cod\n+30 XP\n\nYou caught:\n2 Cod\n+20 XP')
+        money = self.make_plan()['money']
+        self.assertEqual((money['bait'], money['bait_cost_per_trip'], money['net_per_trip']), ('Worms', 4, 46))
+        self.snapshot(buffs='Sell price: 2.00x', extra='Bait: Glitter Lure (10)')
+        money = self.make_plan()['money']
+        self.assertIsNone(money['bait_cost_per_trip'])
+        self.assertIsNone(money['net_per_trip'], 'unknown cost leaves net unknown')
+        self.assertIsNone(money['gross_per_hour'], 'no cooldown observed')
+
+    def test_strategy_uses_only_trips_under_current_conditions(self):
+        self.snapshot(buffs='Sell price: 2.00x', extra='Current biome: River\nCurrently using Steel Rod.\nBait: Worms (10)')
+        self.baited_session('You caught:\n4 Cod\n+40 XP', 'Worms', biome='River', rod='Steel Rod')
+        self.baited_session('You caught:\n9 Cod\n+90 XP', 'Worms', biome='Ocean', rod='Steel Rod')
+        self.baited_session('You caught:\n7 Cod\n+70 XP', 'Leeches', biome='River', rod='Steel Rod')
+        self.baited_session('You caught:\n8 Cod\n+80 XP', 'Worms')
+        strategy = self.make_plan()['money']['strategy']
+        self.assertEqual(strategy['conditions'], {'biome': 'River', 'rod': 'Steel Rod', 'bait': 'Worms'})
+        self.assertEqual((strategy['trips'], strategy['excluded_trips']), (1, 3))
+        self.assertEqual(strategy['gross_per_trip'], 80)
+        self.assertEqual(strategy['net_per_trip'], 76)
+        self.assertEqual(strategy['missing_conditions'], [])
 
     def test_money_target_counts_unsold_fish(self):
         self.snapshot(buffs='Sell price: 2.00x', extra='Fish Value: $100')

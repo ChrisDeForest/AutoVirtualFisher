@@ -21,11 +21,13 @@ def sell_multiplier(state: dict) -> float | None:
 
 
 def latest_sell_multiplier(history: list[dict]) -> tuple[float, str] | None:
-    """Return (multiplier, captured_at) from the newest snapshot that includes /buffs."""
+    """Return (multiplier, time) from the newest snapshot that includes /buffs. The time is when /buffs was
+    observed when that was recorded, otherwise when the snapshot was saved."""
     for snapshot in history:
         multiplier = sell_multiplier(snapshot['state'])
         if multiplier is not None:
-            return multiplier, snapshot['captured_at']
+            observed = ((snapshot.get('sections') or {}).get('buffs') or {}).get('observed_at')
+            return multiplier, observed or snapshot['captured_at']
     return None
 
 

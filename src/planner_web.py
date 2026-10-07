@@ -26,15 +26,44 @@ def _dollars(amount):
     return f'${round(amount):,}'
 
 
+def _strategy_text(strategy):
+    if strategy['missing_conditions']:
+        return (False, 'Needs your ' + ', '.join(strategy['missing_conditions'])
+                + ' from /profile to pick comparable trips')
+    shown = ', '.join(value or 'no bait' for value in strategy['conditions'].values())
+    if not strategy['trips']:
+        return False, f'No saved trips fished with {shown} yet ({strategy["excluded_trips"]:,} other trips left out)'
+    gross = 'unknown' if strategy['gross_per_trip'] is None else f'${strategy["gross_per_trip"]:,.2f}'
+    net = 'unknown' if strategy['net_per_trip'] is None else f'${strategy["net_per_trip"]:,.2f}'
+    return True, (f'Gross {gross}, net {net} per trip from {strategy["trips"]:,} recent trips with {shown} '
+                  f'({strategy["excluded_trips"]:,} other trips left out)')
+
+
 def _money_rows(money):
     rows = []
     if money['multiplier'] is None:
-        rows.append(('Money per trip', 'Paste /buffs to include your sell price', False))
+        rows.append(('Gross catch value per trip', 'Paste /buffs to include your sell price', False))
     elif money['per_trip'] is None:
-        rows.append(('Money per trip', 'Save a fishing session to estimate it', False))
+        rows.append(('Gross catch value per trip', 'Save a fishing session to estimate it', False))
     else:
-        rows.append(('Money per trip', f'${money["per_trip"]:,.2f} (${money["base_per_trip"]:,.2f} at wiki base '
-                                       f'prices × {money["multiplier"]:.2f} sell price)', True))
+        rows.append(('Gross catch value per trip', f'${money["per_trip"]:,.2f} (${money["base_per_trip"]:,.2f} at '
+                                                   f'wiki base prices × {money["multiplier"]:.2f} sell price)', True))
+    cost = money['bait_cost_per_trip']
+    if cost is not None:
+        rows.append(('Bait cost per trip', f'${cost:,.2f} (' + (f'{money["bait"]} at its wiki price, one per cast)'
+                                                                 if money['bait'] else 'no bait)'), True))
+    else:
+        rows.append(('Bait cost per trip', f'Unknown: no wiki price for {money["bait"]}' if money['bait']
+                     else 'Unknown: your profile does not show your bait', False))
+    if money['net_per_trip'] is not None:
+        rows.append(('Net per trip', f'${money["net_per_trip"]:,.2f} (gross minus bait)', True))
+    else:
+        rows.append(('Net per trip', 'Unknown until both the gross value and bait cost are known', False))
+    if money['gross_per_hour'] is not None:
+        rows.append(('Gross per hour', f'At most ${money["gross_per_hour"]:,.0f} (one trip per cooldown, '
+                                       'no pauses)', True))
+    known, text = _strategy_text(money['strategy'])
+    rows.append(('Same conditions as now', text, known))
     target = money['target']
     if target:
         held = 'balance + unsold fish' if target['includes_unsold_fish'] else 'balance'
@@ -60,6 +89,28 @@ def _value_note(check):
     return ''
 
 
+def _age(seconds):
+    if seconds < 90:
+        return f'{seconds:.0f} s ago'
+    if seconds < 5400:
+        return f'{seconds / 60:.0f} min ago'
+    if seconds < 172_800:
+        return f'{seconds / 3600:.0f} h ago'
+    return f'{seconds / 86400:.0f} days ago'
+
+
+def _ages_note(ages):
+    """'Profile seen 3 min ago · Buffs pasted, observation time unknown'; sections never observed are left out."""
+    parts = []
+    for section in ('profile', 'buffs', 'quests'):
+        age = ages.get(section, {})
+        if age.get('age_seconds') is not None:
+            parts.append(f'{section.capitalize()} seen {_age(age["age_seconds"])}')
+        elif 'not been observed' not in age.get('reason', 'not been observed'):
+            parts.append(f'{section.capitalize()}: observation time unknown')
+    return ' · '.join(parts)
+
+
 def planner_card(account, snapshot_root, fishing_root, target=None, money_target=None):
     try:
         result = plan(account, snapshot_root, fishing_root, target=target, money_target=money_target)
@@ -77,10 +128,15 @@ def planner_card(account, snapshot_root, fishing_root, target=None, money_target
                 True) for item in result['targets']]
     html = ('<h3>Planner</h3>'
             f'<p class="note">{escape(basis)} {escape(_model_note(result["model"]))} '
-            'Estimates count fishing XP only; quest rewards make progress faster.</p>' + _rows(targets)
+            'Estimates count fishing XP only; quest rewards make progress faster.</p>'
+            + (f'<p class="note">{escape(_ages_note(result["section_ages"]))}</p>'
+               if _ages_note(result['section_ages']) else '')
+            + _rows(targets)
             + '<h3>Money</h3>'
-            + (f'<p class="note">{escape(_value_note(result["money"]["check"]))} Money assumes you sell every fish '
-               'you catch.</p>')
+            + (f'<p class="note">{escape(_value_note(result["money"]["check"]))} Gross value assumes you sell every '
+               'fish you catch and averages all your saved trips, whatever bait, biome, boosts, or pets they had; '
+               'the same-conditions row uses only comparable trips. Unknown costs are shown as unknown, not '
+               'zero.</p>')
             + _rows(_money_rows(result['money'])))
     if result['quests']:
         if result['quests_reset']:

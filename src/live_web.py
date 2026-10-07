@@ -25,14 +25,15 @@ def _review(items):
     return html
 
 
-def render_live(head, status, accounts, bait_options, review_items, notice=''):
+def render_live(head, status, accounts, bait_options, review_items, notice='', keeping=None):
     """Render the page. `head` is the main page's <head> markup, reused for identical styling."""
     running = status['running']
     refresh = '<meta http-equiv="refresh" content="5;url=/live">' if running else ''
     head = head.replace('<title>Player logbook · AutoVirtualFisher</title>',
                         f'<title>Live capture · AutoVirtualFisher</title>{refresh}')
     if running:
-        watching = f'Watching {status["account"]}' + (f' with {status["bait"]}' if status['bait'] else '') + '.'
+        watching = (f'Watching {status["account"]}' + (f' ({status["username"]})' if status.get('username') else '')
+                    + (f' with {status["bait"]}' if status['bait'] else '') + '.')
         control = (f'<p class="save-status">{escape(watching)}</p>'
                    '<form method="post" action="/live"><input type="hidden" name="action" value="stop">'
                    '<div class="actions"><button type="submit">Stop</button></div></form>')
@@ -41,6 +42,11 @@ def render_live(head, status, accounts, bait_options, review_items, notice=''):
                    '<label for="live_account">Account you are playing</label>'
                    f'<select id="live_account" name="account"><option value="">Choose an account…</option>'
                    f'{_options(accounts)}</select>'
+                   '<label for="live_username">Discord username</label>'
+                   '<input id="live_username" name="username" autocomplete="off" '
+                   'placeholder="Leave blank to use the one saved for this account">'
+                   '<p class="note">The name above "You caught:" in your fishing results. Only replies naming your '
+                   'account or this username are saved; anything else goes to Needs review.</p>'
                    f'<label for="live_bait">Bait in use</label><select id="live_bait" name="bait">{bait_options}</select>'
                    '<div class="actions"><button type="submit">Start</button></div></form>')
     counts = status['counts']
@@ -50,6 +56,15 @@ def render_live(head, status, accounts, bait_options, review_items, notice=''):
                                             ('ignored', 'Ignored (shop, boosts, …)')))
     log = ''.join(f'<li><span>{escape(when)}</span> {escape(text)}</li>' for when, text in status['log'])
     notice_html = f'<p class="save-status">{escape(notice)}</p>' if notice else ''
+    if keeping:
+        notice_html += (f'<p class="status">Keeping full-window captures in {escape(str(keeping))} (newest 200). '
+                        'They show everything visible in Discord, including unrelated conversations; delete them '
+                        'when you are done.</p>')
+    if status.get('unresolved'):
+        notice_html += (f'<p class="status">{status["unresolved"]:,} uncertain placement'
+                        f'{"" if status["unresolved"] == 1 else "s"} this run: identical replies or a changed view '
+                        'meant some messages could not be counted exactly. They are in Needs review; trip counts '
+                        'may be incomplete until you check them.</p>')
     return (f'<!doctype html><html lang="en">{head}<body>'
             '<header><a class="brand" href="/">AutoVirtualFisher</a><span class="local">Live capture · Read-only</span></header>'
             '<main><h1>Live capture</h1>'

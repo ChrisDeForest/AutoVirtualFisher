@@ -2,8 +2,8 @@ from pathlib import Path
 import unittest
 
 from src.fishing_log import parse_fishing
-from src.ocr_cleanup import clean_ocr
-from src.paste_detect import detect
+from src.ocr_cleanup import META, clean_ocr
+from src.paste_detect import detect, split_messages
 from src.player_state import parse_responses
 
 FIXTURES = Path(__file__).parent / 'fixtures'
@@ -66,6 +66,21 @@ class CleanupRuleTests(unittest.TestCase):
     def test_level_misreads(self):
         self.assertEqual(self.clean('Tuna(Lv114)', 'Dolphin(Lvl 51)', 'Puffer(LvI 30)'),
                          ['Tuna(Lvl 14)', 'Dolphin(Lvl 51)', 'Puffer(Lvl 30)'])
+
+    def test_capture_keeps_who_used_the_command_and_the_time(self):
+        lines = ['epicmouse used', '% fish', 'Virtual Fisher 11:40 AM', 'You caught:']
+        self.assertEqual(self.clean(*lines), ['Virtual Fisher', 'APP', ' — screenshot shot.png', 'You caught:'],
+                         'pasted text stays free of markers')
+        self.assertEqual(clean_ocr(lines, 'shot.png', capture=True).splitlines(),
+                         ['Virtual Fisher', 'APP', ' — screenshot shot.png', f'{META}used by epicmouse',
+                          f'{META}sent 11:40 AM', 'You caught:'])
+
+    def test_other_authors_get_their_own_header(self):
+        lines = self.clean('Virtual Fisher 11:40 AM', 'You caught:', 'Fake Fisher APP 11:41 AM', 'You caught:',
+                           'epicmouse Today at 11:42 AM', 'hello')
+        messages = split_messages('\n'.join(lines))
+        self.assertEqual([(message['author'], message['bot']) for message in messages],
+                         [('Virtual Fisher', True), ('Fake Fisher', True), ('epicmouse', False)])
 
     def test_live_review_misreads(self):
         # From the user's first live-capture review queue.

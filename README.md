@@ -76,10 +76,24 @@ command and everything else works as before.
 ### Live capture
 
 Open **Live capture** (top right of the page, or <http://127.0.0.1:8765/live>),
-choose the account you are playing and your bait, and select **Start**. Every
-five seconds the logbook copies the Discord window's pixels, reads them with
-Windows OCR, and discards the image. It only reads the screen: nothing is typed,
-clicked, or sent to Discord. Needs Windows and the OCR packages above.
+choose the account you are playing, enter your Discord username (the name
+above "You caught:" in your fishing results; remembered per account), choose
+your bait, and select **Start**. Every three seconds (faster than the 3.5 s
+fishing cooldown) the logbook copies the Discord window's pixels, reads them
+with Windows OCR, and discards the image. It only reads the screen: nothing is
+typed, clicked, or sent to Discord. Needs Windows and the OCR packages above.
+
+- **Only your replies are saved.** Your display name (`Inventory of <name>`,
+  `<name> used /fish`) and Discord username (fishing results'
+  author line, `<username>'s current multipliers`) are kept as separate
+  settings and never assumed to match each other. A reply naming anyone else
+  goes to review; so does a reply that names no one (for example a `/pet`
+  reply whose `used /pet` line OCR missed), because the account chosen on the
+  page is not evidence of whose reply it is. Messages from other bots and
+  players are left out even if their text looks like Virtual Fisher's.
+- **One channel.** Capture pins the Discord window and channel it started in
+  (Discord titles its window after the open channel). If you switch channels,
+  nothing is read until you return or restart.
 
 - Only the chat column is used. It is found from the content itself: the left
   edge shared by Virtual Fisher's message text, with distances measured in OCR
@@ -90,14 +104,34 @@ clicked, or sent to Discord. Needs Windows and the OCR packages above.
   lined up against the previous one, and only messages below the overlap are
   new, so identical results in a row still count as separate trips. Captures
   are matched on the lines the parsers understand, so stray text such as the
-  message box below the newest message cannot break the matching. The newest
+  message box below the newest message cannot break the matching.
+- Identical replies can make a capture impossible to count exactly: `[A, A]`
+  on screen may be unchanged, or one `A` may have scrolled away as a new `A`
+  arrived. The cut-off text above the first message and the send times break
+  the tie when they differ. When nothing on screen tells, the possible repeat
+  goes to review once (never guessed into the trip count), and the page shows
+  an uncertain-placement warning for the rest of the run. The newest
   message is processed once something follows it or it reads the same in two
   captures in a row (or when you select **Stop**). A message whose header is
   cut off at the top is ignored until it is fully visible.
-- Clean fishing results are saved as fishing sessions with your bait (until a
-  "You ran out of …" line). Clean profile, buffs, prestige shop, and quests
-  replies are saved as snapshots. Shop, boost, and "You don't have enough…"
-  replies are ignored.
+- Clean fishing results are saved as fishing sessions, each recording the
+  observation it came from and, once a `/profile` has been seen this run, the
+  biome, rod, and pet it was fished with. The bait chosen on the page is an
+  assumption until a reply confirms it: your profile's `Bait:` line, `/bait`
+  (`Current bait: …`), `You are already using …`, or the bait shop's
+  `Selected: …`. A change applies to later trips only. `You ran out of …` ends
+  the bait even when the rest of that trip went to review; if it names a
+  different bait than the one in use, later trips are saved with bait unknown
+  (left out of bait comparisons) until a reply confirms it.
+- Clean profile, buffs, prestige shop, pet, and quests replies are saved as
+  snapshots. Each section keeps when it was observed, so a new `/buffs` does
+  not make an older balance look current, and charts plot each profile once at
+  the time it was seen. Boost and "You don't have enough…" replies, and shop
+  pages (`/shop …`, `/clan shop`; not parsed yet), are ignored.
+- Windows OCR sometimes drops a count together with the emoji beside it
+  (`Salmon` for `5 🐟 Salmon`). Such a line is reread from the same capture,
+  enlarged 2× and 3×, and the count is used only when both reads agree on the
+  same words with a number in front; otherwise the message goes to review.
 - Anything else goes to **Needs review** with its reasons: parser warnings,
   fish missing from the wiki table, a profile for another account, pet replies
   whose XP OCR could not read, and unrecognized messages. Use **Load into
@@ -111,6 +145,13 @@ clicked, or sent to Discord. Needs Windows and the OCR packages above.
 - Capture pauses while Discord is minimized. Over Remote Desktop, Windows may
   stop drawing the session while the Remote Desktop window is minimized; the
   page then reports a blank capture.
+- To analyse misreads, start the server with
+  `--keep-captures docs/screenshots/ocr`. Each capture whose chat text changed
+  is kept there as a PNG with a JSON file of the OCR lines (with positions) and
+  the final chat lines. These are full Discord window images that can include
+  unrelated conversations: the live page warns while they are kept, only the
+  newest 200 are kept, and you should delete the folder when done; `docs/` is
+  ignored by Git.
 
 ### Snapshot history
 
@@ -196,7 +237,8 @@ Set **Bait used** when reading or saving a fishing batch (smart paste fills it
 from the profile's `Bait:` line). Each trip records that bait until the trip
 with "You ran out of …"; later trips count as no bait. **Show history** then
 compares baits across saved sessions: trips (and how many were boosted), fish
-per trip, median XP ratio, value per trip at your sell price, and finds per
+per trip, median XP ratio, gross value per trip at your sell price, bait cost
+and net value per trip (unknown, not zero, when a price is missing), and finds per
 100 trips, beside the wiki's listed effects from `src/reference/bait.json`.
 Rows with fewer than 20 trips are marked as rough, and sessions saved without a
 bait are left out. Global boosts, purchased boosts (which do not appear in
@@ -211,8 +253,18 @@ your saved fishing sessions, it estimates:
 
 - XP and fishing trips to the next level, five and ten levels ahead, and the
   target level;
-- money per trip, and trips until your balance plus unsold fish reach the
-  target balance (assuming you sell everything you catch);
+- gross catch value per trip (all saved trips, whatever conditions they were
+  fished in), bait cost per trip (wiki price, one bait per cast as the bait
+  shop says), net per trip, an upper bound per hour from your observed
+  cooldown, and trips until your balance plus unsold fish reach the target
+  balance (assuming you sell everything you catch). Net is shown only when the
+  bait's price is known; an unknown cost is never treated as zero;
+- a same-conditions estimate from your most recent trips (up to 500) fished
+  with your current biome, rod, and bait, with how many trips were left out.
+  Pasted sessions and live sessions saved before a `/profile` record no
+  conditions, so they are not used for it;
+- how long ago your profile, buffs, and quests were observed (pasted ones say
+  their observation time is unknown);
 - trips to finish each quest from the latest pasted `/quests`: fish caught per
   trip for fishing quests, chest finds (boxes, chests, crates) per trip for
   chest quests, and the XP model for level-up quests. Pet quests and unfamiliar

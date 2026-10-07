@@ -54,7 +54,10 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertEqual(len(files), 1)
         self.assertEqual(list(self.root.rglob('*.tmp')), [])
         stored = json.loads(files[0].read_text(encoding='utf-8'))
-        self.assertEqual(stored['schema_version'], 1)
+        self.assertEqual(stored['schema_version'], 2)
+        self.assertEqual(stored['sections'], {'profile': {'observed_at': None, 'source_observation_id': None,
+                                                          'identity_status': 'user_attributed'}},
+                         'a pasted snapshot says who attributed it, and does not invent an observation time')
         self.assertEqual(stored['account_name'], 'BugParticle')
         self.assertEqual(stored['account_key'], account_key('BugParticle'))
         self.assertEqual(stored['save_mode'], 'automatic')
@@ -276,6 +279,60 @@ class GrowthSeriesTests(unittest.TestCase):
         result = growth_series('Nobody', self.root)
         self.assertEqual(result['series'], {'balance': [], 'level_progress': [], 'fish_value': [],
                                             'exotic_total': []})
+
+def observed(at, observation_id):
+    return {'observed_at': at, 'source_observation_id': observation_id, 'identity_status': 'verified'}
+
+
+T0, T1, T2 = '2026-10-06T12:00:00+00:00', '2026-10-06T12:05:00+00:00', '2026-10-06T12:10:00+00:00'
+BUFFS = "BugParticle's current multipliers (including bait):\nSell price: 2.00x"
+
+
+class SectionProvenanceTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def save(self, sections, buffs=''):
+        state = parse_responses(profile='Inventory of BugParticle\nBalance: $100\nLevel: 2', buffs=buffs)
+        return save_snapshot(state, self.root, sections=sections)
+
+    def test_buffs_later_keep_the_profile_observation_time(self):
+        self.save({'profile': observed(T0, 'p1')})
+        self.assertEqual(self.save({'profile': observed(T0, 'p1'), 'buffs': observed(T1, 'b1')}, BUFFS)['status'],
+                         'saved')
+        newest = load_history('BugParticle', self.root)[0][0]
+        self.assertEqual(newest['sections']['profile']['observed_at'], T0)
+        self.assertEqual(newest['sections']['buffs']['observed_at'], T1)
+        self.assertEqual(growth_series('BugParticle', self.root)['series']['balance'], [(T0, 100)],
+                         'one profile observation is one chart point, at the time it was observed')
+
+    def test_refreshed_profile_updates_only_profile_provenance(self):
+        self.save({'profile': observed(T0, 'p1'), 'buffs': observed(T1, 'b1')}, BUFFS)
+        result = self.save({'profile': observed(T2, 'p2'), 'buffs': observed(T1, 'b1')}, BUFFS)
+        self.assertEqual(result['status'], 'saved', 'the same values seen again are a newer observation')
+        sections = result['snapshot']['sections']
+        self.assertEqual((sections['profile']['observed_at'], sections['buffs']['observed_at']), (T2, T1))
+        self.assertEqual(self.save({'profile': observed(T2, 'p2'), 'buffs': observed(T1, 'b1')}, BUFFS)['status'],
+                         'unchanged')
+        self.assertEqual([time for time, _ in growth_series('BugParticle', self.root)['series']['balance']],
+                         [T0, T2])
+
+    def test_legacy_snapshots_still_load_without_provenance(self):
+        save_snapshot(parsed_state(), self.root)
+        path = next(self.root.rglob('*.json'))
+        stored = json.loads(path.read_text(encoding='utf-8'))
+        stored['schema_version'] = 1
+        del stored['sections']
+        path.write_text(json.dumps(stored), encoding='utf-8')
+        history, warnings = load_history('BugParticle', self.root)
+        self.assertEqual((len(history), warnings), (1, []))
+        self.assertEqual(list_accounts(self.root)[0], ['BugParticle'])
+        self.assertEqual(path.read_text(encoding='utf-8'), json.dumps(stored), 'old files are not rewritten')
+
 
 if __name__ == '__main__':
     unittest.main()

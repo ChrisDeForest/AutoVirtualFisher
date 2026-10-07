@@ -187,7 +187,7 @@ def bait_card(account, root, sell=None):
         sessions, _ = load_sessions(account, root)
     except OSError as error:
         return _warnings([f'Fishing sessions unavailable: {error}'])
-    result = compare_baits(sessions, load_fish_reference(), load_bait_reference())
+    result = compare_baits(sessions, load_fish_reference(), load_bait_reference(), sell=sell)
     if not result['rows']:
         return ('<h3>Bait comparison</h3><p class="status">Save fishing sessions with "Bait used" set to compare '
                 'baits.</p>')
@@ -196,12 +196,16 @@ def bait_card(account, root, sell=None):
         ratio = f'{row["xp_ratio"]:.2f}×' if row['xp_ratio'] else '—'
         value = ('—' if row['base_value_per_trip'] is None
                  else f'${round(row["base_value_per_trip"] * (sell or 1)):,}')
+        cost = '?' if row['bait_cost_per_trip'] is None else f'${row["bait_cost_per_trip"]:,.0f}'
+        net = '?' if row['net_value_per_trip'] is None else f'${round(row["net_value_per_trip"]):,}'
         rows.append(f'<tr><td>{escape(row["bait"])}{" *" if row["few_trips"] else ""}</td>'
                     f'<td>{row["trips"]:,} ({row["boosted_trips"]:,} boosted)</td><td>{row["fish_per_trip"]:.2f}</td>'
-                    f'<td>{ratio}</td><td>{value}</td><td>{row["finds_per_100_trips"]:.2f}</td>'
+                    f'<td>{ratio}</td><td>{value}</td><td>{cost}</td><td>{net}</td><td>{row["finds_per_100_trips"]:.2f}</td>'
                     f'<td>{escape(_wiki_effects(row["wiki"]))}</td></tr>')
     value_basis = f'at your sell price of {sell:.2f}×' if sell else 'at wiki base prices'
-    notes = [f'Value per trip is {value_basis}. Rows marked * have fewer than 20 trips, so treat them as rough.',
+    notes = [f'Gross value per trip is {value_basis}. Net subtracts the bait (wiki price, one per cast) and needs '
+             'your sell price; ? means unknown, not free. Rows marked * have fewer than 20 trips, so treat them as '
+             'rough.',
              'Global boosts, purchased boosts, charms, and pets change these numbers too; compare batches fished '
              'under similar conditions.']
     skipped = result['not_recorded_trips']
@@ -209,7 +213,8 @@ def bait_card(account, root, sell=None):
         notes.append(f'{skipped:,} trip{"" if skipped == 1 else "s"} from sessions saved without a bait '
                      f'{"is" if skipped == 1 else "are"} left out.')
     return ('<h3>Bait comparison</h3><div class="table-scroll"><table class="trips"><thead><tr><th>Bait</th>'
-            '<th>Trips</th><th>Fish per trip</th><th>XP ratio</th><th>Value per trip</th><th>Finds per 100 trips</th>'
+            '<th>Trips</th><th>Fish per trip</th><th>XP ratio</th><th>Gross value per trip</th><th>Bait cost</th>'
+            '<th>Net per trip</th><th>Finds per 100 trips</th>'
             '<th>Wiki says</th></tr></thead><tbody>' + ''.join(rows) + '</tbody></table></div>'
             + ''.join(f'<p class="note">{escape(note)}</p>' for note in notes))
 

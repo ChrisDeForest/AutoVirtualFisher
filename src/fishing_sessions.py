@@ -32,8 +32,13 @@ def load_sessions(account_name: str, root: Path = DEFAULT_SESSION_ROOT) -> tuple
     return sessions, warnings
 
 
+MANUAL_PROVENANCE = {'source': 'manual', 'identity_status': 'user_attributed'}
+
+
 def save_session(tally: dict, account_name: str | None, source_fingerprint: str,
-                 root: Path = DEFAULT_SESSION_ROOT) -> dict:
+                 root: Path = DEFAULT_SESSION_ROOT, provenance: dict | None = None) -> dict:
+    """Save a parsed tally. `provenance` says where it came from; by default the person saving it attributed it
+    to the account by hand."""
     name = account_name.strip() if isinstance(account_name, str) else ''
     if not name:
         return {'status': 'rejected', 'reason': 'Choose an account before saving a fishing session.'}
@@ -53,6 +58,7 @@ def save_session(tally: dict, account_name: str | None, source_fingerprint: str,
         'account_key': account_key(name),
         'source_fingerprint': source_fingerprint,
         'tally': stored_tally,
+        'provenance': provenance or MANUAL_PROVENANCE,
     }
     write_json_atomically(Path(root) / session['account_key'], session_id, session)
     return {'status': 'saved', 'session': session, 'warnings': warnings}

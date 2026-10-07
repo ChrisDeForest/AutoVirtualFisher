@@ -12,8 +12,9 @@ from .fishing_sessions import DEFAULT_SESSION_ROOT
 from .fishing_web import bait_card, bait_choice, bait_options, fishing_card, fishing_panel, handle_fishing
 from .paste_detect import detect
 from .fish_value import latest_sell_multiplier
-from .live_capture import LiveCapture, capture_discord
+from .live_capture import LiveCapture, capture_discord, make_capture
 from .live_web import render_live
+from .observation import DEFAULT_IDENTITY_PATH, Identity, load_identity, save_identity
 from .planner_web import planner_card
 from .player_charts import line_chart_svg
 from .player_snapshots import (DEFAULT_SNAPSHOT_ROOT, compare_latest, describe_changes, growth_series,
@@ -263,9 +264,12 @@ class Handler(BaseHTTPRequestHandler):
     snapshot_root = DEFAULT_SNAPSHOT_ROOT
     fishing_root = DEFAULT_SESSION_ROOT
     review_root = DEFAULT_REVIEW_ROOT
+    identity_path = DEFAULT_IDENTITY_PATH
     # One live capture per server, shared by every request.
     live = None
     live_capture_function = staticmethod(capture_discord)
+    # Set by --keep-captures; shown on the live page because kept images may include unrelated conversations.
+    keep_captures_dir = None
     ocr_reader = staticmethod(read_image)
     # None means "check whether the Windows OCR packages are installed".
     ocr_ready = None
@@ -293,7 +297,8 @@ class Handler(BaseHTTPRequestHandler):
         template = TEMPLATE.read_text(encoding='utf-8')
         head = template[template.index('<head>'):template.index('</head>') + len('</head>')]
         notice = ' '.join([notice] + warnings).strip()
-        self.send_content(render_live(head, self.live_capture().status(), accounts, bait_options(''), items, notice))
+        self.send_content(render_live(head, self.live_capture().status(), accounts, bait_options(''), items, notice,
+                                      keeping=self.keep_captures_dir))
 
     def live_action(self):
         try:
@@ -313,11 +318,20 @@ class Handler(BaseHTTPRequestHandler):
                 accounts, _ = list_accounts(self.snapshot_root)
             except OSError:
                 accounts = []
+            saved = load_identity(account, self.identity_path) if account else None
+            username = fields.get('username', [''])[0].strip() or (saved.username if saved else '')
             if account not in accounts:
                 notice = 'Choose a saved account to start. Save a snapshot for a new account first.'
+            elif not username:
+                notice = ('Enter your Discord username (the name above "You caught:" in your fishing results) so '
+                          'only your own replies are saved.')
             else:
+                try:
+                    save_identity(Identity(account, username), self.identity_path)
+                except OSError as error:
+                    notice = f'Your Discord username could not be remembered: {error}'
                 choice = bait_choice(fields.get('bait', [''])[0])
-                live.start(account, choice)
+                live.start(account, choice, username=username)
         elif action == 'stop':
             live.stop()
         elif action == 'dismiss':
@@ -434,7 +448,14 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser(description='Open the local player logbook')
     parser.add_argument('--port', type=int, default=8765)
+    parser.add_argument('--keep-captures', type=Path, metavar='DIR',
+                        help='Keep live-capture images whose chat text changed, with their OCR results, in DIR '
+                             '(for analysing misreads; e.g. docs/screenshots/ocr)')
     args = parser.parse_args()
+    if args.keep_captures:
+        Handler.live_capture_function = staticmethod(make_capture(args.keep_captures))
+        Handler.keep_captures_dir = args.keep_captures.resolve()
+        print(f'Keeping live captures in {args.keep_captures.resolve()}', flush=True)
     with ThreadingHTTPServer(('127.0.0.1', args.port), Handler) as server:
         print(f'Player logbook: http://127.0.0.1:{server.server_port}', flush=True)
         print(f'Press Ctrl+C to stop. Parsed snapshots are kept in {Handler.snapshot_root} and fishing '

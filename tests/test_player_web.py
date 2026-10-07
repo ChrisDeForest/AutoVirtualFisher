@@ -392,7 +392,7 @@ Gives you bonus XP and leads you to more treasure.
                   buffs=(FIXTURES / 'live_buffs.txt').read_text(encoding='utf-8'))
         self.post(fishing=LIVE_FISHING, action='fishing_save', account='BugParticle')
         html = self.get('/?account=BugParticle&money=3000000')
-        self.assertIn('<dt>Money per trip</dt><dd class="known">$499.10 ($103.33 at wiki base prices × 4.83 sell price)</dd>', html)
+        self.assertIn('<dt>Gross catch value per trip</dt><dd class="known">$499.10 ($103.33 at wiki base prices × 4.83 sell price)</dd>', html)
         self.assertIn('<dt>Reach $3,000,000</dt><dd class="known">$519,697 more (balance + unsold fish: $2,480,303) · about 1,042 trips</dd>', html)
         self.assertIn('Fish Value matches wiki base prices × your sell price in 1 of your snapshots.', html)
         self.assertIn('name="money" min="1" value="3000000"', html)
@@ -430,7 +430,8 @@ Gives you bonus XP and leads you to more treasure.
         self.post(fishing='You caught:\n9 Cod\n+90 XP', action='fishing_save', account='BugParticle', bait='')
         html = self.get('/?account=BugParticle')
         self.assertIn('<h3>Bait comparison</h3>', html)
-        self.assertIn('<td>Worms *</td><td>6 (6 boosted)</td><td>16.83</td><td>1.85×</td><td>$499</td><td>66.67</td>'
+        self.assertIn('<td>Worms *</td><td>6 (6 boosted)</td><td>16.83</td><td>1.85×</td><td>$499</td><td>$4</td><td>$495</td>'
+                      '<td>66.67</td>'
                       '<td>+2 fish, XP −10%</td>', html)
         self.assertIn('<td>No bait *</td><td>1 (0 boosted)</td><td>4.00</td><td>2.00×</td>', html)
         self.assertIn('1 trip from sessions saved without a bait is left out.', html)

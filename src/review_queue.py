@@ -9,10 +9,19 @@ DEFAULT_REVIEW_ROOT = Path(__file__).parent / 'data' / 'review_queue'
 RECORD_ID = re.compile(r'^[0-9TZ.]+-[0-9a-f]{8}$')
 
 
-def add_item(root: Path, account: str, kind: str, text: str, reasons: list[str]) -> dict:
+def add_item(root: Path, account: str, kind: str, text: str, reasons: list[str],
+             identity_status: str | None = None, observation_id: str | None = None,
+             evidence_id: str | None = None) -> dict:
+    """Queue an item. With `evidence_id` (what was captured, not just the reply text), an item already queued
+    for the same evidence is returned with 'duplicate': True instead of adding another."""
+    if evidence_id:
+        existing = next((item for item in list_items(root)[0] if item.get('evidence_id') == evidence_id), None)
+        if existing:
+            return {**existing, 'duplicate': True}
     captured_at, item_id = new_record_id()
     item = {'id': item_id, 'captured_at': captured_at, 'account': account, 'kind': kind, 'text': text,
-            'reasons': reasons}
+            'reasons': reasons, 'identity_status': identity_status, 'observation_id': observation_id,
+            'evidence_id': evidence_id}
     write_json_atomically(Path(root), item_id, item)
     return item
 

@@ -8,6 +8,8 @@ from .catch_check import check_batch
 
 BAIT_REFERENCE_PATH = Path(__file__).parent / 'reference' / 'bait.json'
 NOT_RECORDED = ''
+# The bait shop says "Bait is consumed PER CAST": one bait per fishing trip.
+BAIT_PER_TRIP = 1
 # Below this many trips, per-trip averages swing too much to compare baits fairly.
 FEW_TRIPS = 20
 
@@ -33,6 +35,16 @@ def assign_bait(tally: dict, bait: str | None) -> dict:
     return baited
 
 
+def bait_cost_per_trip(bait: str | None, bait_reference: dict | None) -> float | None:
+    """Wiki price × one bait per cast; 0 with no bait; None when the price is not known (never assumed zero)."""
+    if bait is None:
+        return 0
+    for known, row in (bait_reference or {}).items():
+        if known.casefold() == bait.casefold() and isinstance(row.get('cost'), (int, float)):
+            return row['cost'] * BAIT_PER_TRIP
+    return None
+
+
 def _canonical(name, bait_reference):
     if name is None:
         return 'No bait'
@@ -42,7 +54,11 @@ def _canonical(name, bait_reference):
     return name
 
 
-def compare_baits(sessions: list[dict], fish_reference: dict | None, bait_reference: dict | None) -> dict:
+def compare_baits(sessions: list[dict], fish_reference: dict | None, bait_reference: dict | None,
+                  sell: float | None = None) -> dict:
+    """Per-bait results. Gross value is the catch at wiki base prices × `sell`; net subtracts the bait's cost
+    and is None whenever the sell price or bait cost is unknown. Sessions mix boosts, pets, and biomes, so these
+    describe history, not a recommendation."""
     groups, not_recorded = {}, 0
     for session in sessions:
         details = session['tally'].get('trip_details', [])
@@ -65,7 +81,12 @@ def compare_baits(sessions: list[dict], fish_reference: dict | None, bait_refere
     rows = []
     for bait, group in sorted(groups.items(), key=lambda item: -item[1]['trips']):
         trips = group['trips']
+        base = group['value'] / trips if fish_reference is not None else None
+        gross = base * sell if base is not None and sell else None
+        cost = bait_cost_per_trip(None if bait == 'No bait' else bait, bait_reference)
         rows.append({'bait': bait, 'trips': trips, 'boosted_trips': group['boosted'],
+                     'gross_value_per_trip': gross, 'bait_cost_per_trip': cost,
+                     'net_value_per_trip': gross - cost if gross is not None and cost is not None else None,
                      'fish_per_trip': group['fish'] / trips,
                      'xp_ratio': median(group['ratios']) if group['ratios'] else None,
                      'base_value_per_trip': group['value'] / trips if fish_reference is not None else None,

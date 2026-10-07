@@ -67,6 +67,25 @@ class CompareBaitsTests(unittest.TestCase):
         self.assertIsNone(none['wiki'])
         self.assertTrue(none['few_trips'])
 
+    def test_net_value_subtracts_bait_cost(self):
+        self.save('You caught:\n4 Cod\n+40 XP', 'Pricey')
+        self.save('You caught:\n3 Cod\n+30 XP', 'Cheap')
+        self.save('You caught:\n3 Cod\n+33 XP', 'Mystery')
+        self.save('You caught:\n2 Cod\n+20 XP', None)
+        reference = {'Pricey': {'cost': 50}, 'Cheap': {'cost': 1}}
+        sessions = load_sessions('epicmouse', self.root)[0]
+        rows = {row['bait']: row for row in compare_baits(sessions, load_fish_reference(), reference, sell=2.0)['rows']}
+        self.assertGreater(rows['Pricey']['gross_value_per_trip'], rows['Cheap']['gross_value_per_trip'])
+        self.assertLess(rows['Pricey']['net_value_per_trip'], rows['Cheap']['net_value_per_trip'],
+                        'more fish but dearer bait earns less')
+        self.assertEqual((rows['Pricey']['bait_cost_per_trip'], rows['Pricey']['net_value_per_trip']), (50, 30))
+        self.assertIsNone(rows['Mystery']['bait_cost_per_trip'], 'unknown cost is not zero')
+        self.assertIsNone(rows['Mystery']['net_value_per_trip'])
+        self.assertEqual(rows['No bait']['bait_cost_per_trip'], 0)
+        self.assertEqual(rows['No bait']['net_value_per_trip'], 40)
+        without_sell = compare_baits(sessions, load_fish_reference(), reference)['rows']
+        self.assertTrue(all(row['net_value_per_trip'] is None for row in without_sell))
+
     def test_bait_names_match_the_wiki_ignoring_case(self):
         self.save('You caught:\n4 Cod\n+40 XP', 'magic bait')
         row = self.compare()['rows'][0]

@@ -12,7 +12,11 @@ from .player_state import display_value
 
 
 DEFAULT_SNAPSHOT_ROOT = Path(__file__).parent / 'data' / 'player_snapshots'
-SNAPSHOT_SCHEMA_VERSION = 1
+# Version 2 adds per-section provenance ('sections'); version 1 files stay readable and are never rewritten.
+SNAPSHOT_SCHEMA_VERSION = 2
+READABLE_SCHEMA_VERSIONS = (1, 2)
+# The parts of a state that are observed separately (the profile reply includes the inventory).
+SECTIONS = ('profile', 'buffs', 'prestige', 'pets', 'quests')
 # Parser warnings that quote a pasted line look like "<section>: <reason>: <line>".
 LINE_WARNING = re.compile(r'^(profile|buffs|quests): ([^:]+): .*$', re.DOTALL)
 
@@ -29,6 +33,33 @@ def validate_full_state(state: dict) -> tuple[bool, list[str]]:
     if isinstance(level, bool) or not isinstance(level, int) or level < 0:
         reasons.append('Level must be a nonnegative integer.')
     return not reasons, reasons
+
+
+def present_sections(state: dict) -> list[str]:
+    """Sections of a parsed state that hold any observed value."""
+    prestige = state.get('prestige', {})
+    pets = state.get('pets', {})
+    quests = state.get('quests', {})
+    present = {
+        'profile': any(value is not None for value in state.get('profile', {}).values()),
+        'buffs': any(value is not None for value in state.get('buffs', {}).values()),
+        'prestige': prestige.get('azure_fish') is not None
+        or any(value is not None for value in (prestige.get('upgrades') or {}).values()),
+        'pets': any(pets.get(field) is not None for field in ('status', 'current_pet', 'xp_per_fishing_trip_average')),
+        'quests': quests.get('daily') is not None or quests.get('special') is not None,
+    }
+    return [section for section in SECTIONS if present[section]]
+
+
+def manual_sections(state: dict) -> dict:
+    """Provenance for a pasted state: attributed by the person saving it, observation time unknown."""
+    return {section: {'observed_at': None, 'source_observation_id': None, 'identity_status': 'user_attributed'}
+            for section in present_sections(state)}
+
+
+def section_observed_at(snapshot: dict, section: str) -> str | None:
+    """When the section was observed, or None when that was not recorded (pasted or version 1 snapshots)."""
+    return ((snapshot.get('sections') or {}).get(section) or {}).get('observed_at')
 
 
 def account_key(name: str) -> str:
@@ -69,7 +100,7 @@ def load_history(account_name: str, root: Path = DEFAULT_SNAPSHOT_ROOT,
     for path in folder.glob('*.json'):
         try:
             snapshot = json.loads(path.read_text(encoding='utf-8'))
-            if snapshot.get('schema_version') != SNAPSHOT_SCHEMA_VERSION:
+            if snapshot.get('schema_version') not in READABLE_SCHEMA_VERSIONS:
                 raise ValueError('unsupported schema version')
             if snapshot.get('account_key') != account_key(account_name):
                 raise ValueError('account identity does not match its directory')
@@ -92,7 +123,7 @@ def list_accounts(root: Path = DEFAULT_SNAPSHOT_ROOT) -> tuple[list[str], list[s
     for path in root.glob('*/*.json'):
         try:
             snapshot = json.loads(path.read_text(encoding='utf-8'))
-            if snapshot.get('schema_version') != SNAPSHOT_SCHEMA_VERSION:
+            if snapshot.get('schema_version') not in READABLE_SCHEMA_VERSIONS:
                 raise ValueError('unsupported schema version')
             name = snapshot.get('account_name')
             if not isinstance(name, str) or not name.strip():
@@ -130,7 +161,10 @@ def write_json_atomically(folder: Path, record_id: str, document: dict) -> None:
 
 
 def save_snapshot(state: dict, root: Path = DEFAULT_SNAPSHOT_ROOT, mode: str = 'automatic',
-                  account_name: str | None = None) -> dict:
+                  account_name: str | None = None, sections: dict | None = None) -> dict:
+    """Save a parsed state. `sections` maps each section to {'observed_at', 'source_observation_id',
+    'identity_status'}; without it the state counts as pasted by hand. `captured_at` is when the snapshot was
+    written, which says nothing about how recent each section's values are."""
     if mode not in ('automatic', 'manual'):
         return {'status': 'rejected', 'reason': 'Save mode must be automatic or manual.'}
     parsed_name = state.get('profile', {}).get('account_name')
@@ -146,10 +180,13 @@ def save_snapshot(state: dict, root: Path = DEFAULT_SNAPSHOT_ROOT, mode: str = '
     if mode == 'automatic' and not full:
         return {'status': 'rejected', 'reason': ' '.join(reasons)}
     validity = 'full' if full else 'partial'
+    sections = manual_sections(state) if sections is None else sections
     history, history_warnings = load_history(chosen_name, root)
     if mode == 'automatic':
         latest_full = next((item for item in history if item.get('validity') == 'full'), None)
-        if latest_full and _canonical_state(latest_full['state']) == _canonical_state(state):
+        # The same values observed again are still a newer observation, so only identical provenance is unchanged.
+        if (latest_full and _canonical_state(latest_full['state']) == _canonical_state(state)
+                and latest_full.get('sections') == sections):
             return {'status': 'unchanged', 'snapshot': latest_full, 'warnings': history_warnings}
 
     captured_at, snapshot_id = new_record_id()
@@ -163,6 +200,7 @@ def save_snapshot(state: dict, root: Path = DEFAULT_SNAPSHOT_ROOT, mode: str = '
         'save_mode': mode,
         'validity': validity,
         'state': state,
+        'sections': sections,
         'parser_warnings': list(state.get('warnings', [])),
     }
     write_json_atomically(Path(root) / key, snapshot_id, snapshot)
@@ -302,18 +340,33 @@ def _growth_values(state: dict) -> dict:
 
 
 def growth_series(account_name: str, root: Path = DEFAULT_SNAPSHOT_ROOT) -> dict:
-    """Return each growth metric as oldest-first (captured_at, value) points from full snapshots."""
+    """Return each growth metric as oldest-first (time, value) points from full snapshots.
+
+    A point is placed at the profile's observation time when recorded (otherwise when the snapshot was saved),
+    and a snapshot that re-saves an already charted profile observation (e.g. only /buffs changed) adds no point.
+    """
     history, warnings = load_history(account_name, root)
     series = {metric: [] for metric in GROWTH_METRICS}
+    charted = set()
+    points = []
     for snapshot in reversed(history):
         if snapshot.get('validity') != 'full':
             continue
+        profile = (snapshot.get('sections') or {}).get('profile') or {}
+        source = profile.get('source_observation_id')
+        if source and source in charted:
+            continue
+        moment = section_observed_at(snapshot, 'profile') or snapshot['captured_at']
         try:
-            datetime.fromisoformat(snapshot['captured_at'])
-        except (TypeError, ValueError):
+            when = datetime.fromisoformat(moment.replace('Z', '+00:00'))
+        except (AttributeError, TypeError, ValueError):
             warnings.append(f'{snapshot.get("snapshot_id", "snapshot")}: unreadable timestamp; left out of growth charts')
             continue
-        for metric, value in _growth_values(snapshot['state']).items():
+        if source:
+            charted.add(source)
+        points.append((when, moment, snapshot['state']))
+    for _, moment, state in sorted(points, key=lambda point: point[0]):
+        for metric, value in _growth_values(state).items():
             if value is not None:
-                series[metric].append((snapshot['captured_at'], value))
+                series[metric].append((moment, value))
     return {'series': series, 'warnings': warnings}
