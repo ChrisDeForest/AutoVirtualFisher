@@ -60,6 +60,10 @@ def read_image_boxes(path: Path) -> list[dict]:
     return asyncio.run(_read(path, SCALE))
 
 
+def read_region_boxes(path: Path, region: tuple, scale: float = 2) -> list[dict]:
+    return asyncio.run(_read(path, scale, region))
+
+
 def read_region_lines(path: Path, left: float, top: float, right: float, bottom: float,
                       scale: float = 2) -> list[str]:
     """OCR one rectangle of an image, enlarged by `scale`, and return its text lines in reading order."""

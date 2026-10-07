@@ -9,9 +9,11 @@ BUTTONS = ('Fish Again', 'Sell', 'Return', 'Back', 'Deselect', 'Select', 'Invent
 BUFF_LABELS = ('Sell price', 'Fish catch', 'Fish quality', 'Treasure chance', 'Treasure quality',
                'XP Multiplier', 'Fishing cooldown')
 TIME = re.compile(r'\d{1,2}:\d{2}\s*[AP]M', re.I)
+DATED_TIME = re.compile(r'(?:Today|Yesterday) at\s+\d{1,2}:\d{2}\s*[AP]M', re.I)
 # A message header: the bot name, its APP tag as OCR reads it ("APP", "AP", "VAPP", "V APP"), and/or a time.
 # Rejects look-alikes such as the DM title "Virtual Fisher [fish" or the profile panel's "Virtual Fisher#7036".
-MESSAGE_HEADER = re.compile(r'Virtual Fisher(?:\s+[V✓]?\s*A?PP?)?(?:\s+\d{1,2}:\d{2}\s*[AP]M)?', re.I)
+MESSAGE_HEADER = re.compile(r'Virtual Fisher(?:\s+[V✓]?\s*A?PP?)?'
+                            r'(?:\s+(?:(?:Today|Yesterday) at\s+)?\d{1,2}:\d{2}\s*[AP]M)?', re.I)
 # Any other author's header: a name, an optional APP tag, and a time. Keeps other bots' and players' messages
 # apart from Virtual Fisher's instead of letting them run into the message above.
 OTHER_HEADER = re.compile(r'(?P<name>\S.{0,40}?)(?P<tag>\s+[V✓]?\s*A?PP)?\s+(?:(?:Today|Yesterday) at\s+)?'
@@ -64,7 +66,7 @@ def clean_ocr(lines: list[str], label: str, capture: bool = False) -> str:
         if in_tip and line[:1].islower():
             continue
         in_tip = line.startswith('TIP:')
-        if in_tip or TIME.fullmatch(line):
+        if in_tip or TIME.fullmatch(line) or DATED_TIME.fullmatch(line):
             continue
         if re.fullmatch(r'[^\w]*\s*(' + '|'.join(map(re.escape, BUTTONS)) + ')', line):
             continue

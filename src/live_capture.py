@@ -285,14 +285,14 @@ def context_key(context: dict) -> str:
     return f'{context.get("window")}:{context.get("title")}'
 
 
-def make_capture(keep_dir: Path | None = None, keep_limit: int = KEEP_LIMIT, window_provider=None):
+def make_capture(keep_dir: Path | None = None, keep_limit: int = KEEP_LIMIT, window_provider=None, input_region=False):
     """Return a capture function for LiveCapture. Each call captures and reads the Discord window and returns
     {'status', 'lines', 'context'}; the image is deleted at once unless `keep_dir` is set, in which case captures whose
     chat text changed are kept there as PNG plus JSON (OCR boxes and final lines) for analysis."""
     last_kept = {'lines': None}
 
     def capture() -> dict:
-        from .screenshot_ocr import ocr_available, read_image_boxes, read_region_lines
+        from .screenshot_ocr import ocr_available, read_image_boxes, read_region_lines, read_region_boxes
         from .window_capture import bmp_to_png, capture_supported, capture_window, find_discord_window
 
         if not capture_supported() or not ocr_available():
@@ -310,6 +310,7 @@ def make_capture(keep_dir: Path | None = None, keep_limit: int = KEEP_LIMIT, win
             if info['blank']:
                 return {'status': 'blank', 'lines': []}
             boxes = read_image_boxes(image)
+            input_boxes = read_region_boxes(image, (0, info['height'] * .75, info['width'], info['height']), 2) if input_region else boxes
             column, edge, height = chat_column(boxes)
 
             def reread(left, top, right, bottom):
@@ -322,7 +323,7 @@ def make_capture(keep_dir: Path | None = None, keep_limit: int = KEEP_LIMIT, win
             if keep_dir is not None and lines != last_kept['lines']:
                 _keep(image, Path(keep_dir), info, boxes, lines, bmp_to_png, keep_limit)
                 last_kept['lines'] = lines
-            return {'status': 'ok', 'lines': lines, 'boxes': boxes, 'context': {'window': window[0], 'title': window[1],
+            return {'status': 'ok', 'lines': lines, 'boxes': input_boxes, 'original_boxes': boxes, 'context': {'window': window[0], 'title': window[1],
                                                                  'channel': channel_name(boxes, info['height'])}}
         finally:
             image.unlink(missing_ok=True)

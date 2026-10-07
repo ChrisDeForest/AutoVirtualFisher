@@ -4,7 +4,7 @@ from ctypes import wintypes
 import time
 
 from .automation_models import TransportError
-from .automation_discord import CHALLENGE, composer_target, command_target
+from .automation_discord import CHALLENGE, composer_target, command_target, command_text
 from .live_capture import make_capture
 from .window_capture import window_process
 
@@ -16,7 +16,7 @@ class WindowsDiscordDriver:
             raise RuntimeError('Native dispatch requires Windows.')
         self.window, self.channel = window, channel
         self.title = None
-        self.capture = make_capture(window_provider=self._target_window)
+        self.capture = make_capture(window_provider=self._target_window, input_region=True)
         self.api = ctypes.WinDLL('user32', use_last_error=True)
         for name, args, result in (
             ('GetForegroundWindow', [], wintypes.HWND),
@@ -107,20 +107,20 @@ class WindowsDiscordDriver:
     def dispatch(self, command, cancelled):
         frame = self._frame(cancelled)
         initial_boxes = frame.get('boxes', [])
-        composer = composer_target(initial_boxes, self.channel)
+        composer = composer_target(frame.get('original_boxes', initial_boxes), self.channel)
         if composer is None:
             raise TransportError('An empty composer for the configured channel is not visible.')
         self._click(composer, cancelled)
         self._text(command, cancelled)
         # The picker is rendered asynchronously. No submit until an exact VF command row is seen.
         target = None
-        old_commands = {b['text'].strip().casefold() for b in initial_boxes}
+        old_commands = {command_text(b['text']) for b in initial_boxes}
         for _ in range(5):
             time.sleep(0.2)
             frame = self._frame(cancelled)
             # Text already visible before typing is not evidence of a newly opened picker.
             picker_boxes = [b for b in frame.get('boxes', [])
-                            if b['text'].strip().casefold() != command.casefold()
+                            if command_text(b['text']) != command.casefold()
                             or command.casefold() not in old_commands]
             target = command_target(picker_boxes, command, composer)
             if target is not None:
@@ -128,11 +128,17 @@ class WindowsDiscordDriver:
         if target is None:
             raise TransportError('VF slash-command picker could not be verified; command not submitted.')
         self._click(target, cancelled)
-        selected = self._frame(cancelled).get('boxes', [])
-        # Selection must remove the picker and leave exactly the selected command at the composer.
-        command_boxes = [b for b in selected if b['text'].strip().casefold() == command.casefold()
-                         and abs((b['top'] + b['bottom']) / 2 - composer[1]) <= 2 * (b['bottom'] - b['top'])]
-        remaining = [b for b in selected if b not in command_boxes]
-        if len(command_boxes) != 1 or command_target(remaining, command, composer) is not None:
+        confirmed = False
+        for _ in range(5):
+            time.sleep(0.2)
+            selected = self._frame(cancelled).get('boxes', [])
+            # Selection renders asynchronously too. Never repeat the selection click.
+            command_boxes = [b for b in selected if command_text(b['text']) == command.casefold()
+                             and abs((b['top'] + b['bottom']) / 2 - composer[1]) <= 2 * (b['bottom'] - b['top'])]
+            remaining = [b for b in selected if b not in command_boxes]
+            if len(command_boxes) == 1 and command_target(remaining, command, composer) is None:
+                confirmed = True
+                break
+        if not confirmed:
             raise TransportError('Selected composer command could not be confirmed; command not submitted.')
         self._key(0x0D, cancelled)

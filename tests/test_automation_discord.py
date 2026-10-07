@@ -145,6 +145,27 @@ class DiscordTests(unittest.TestCase):
 
 
 class TargetTests(unittest.TestCase):
+    def test_adjacent_other_bot_row_cannot_borrow_vf_label(self):
+        boxes = [box('/fish', x=458, y=1274), box('Other Bot', x=2130, y=1286),
+                 box('Virtual Fisher', x=2130, y=1250)]
+        self.assertIsNone(command_target(boxes, '/fish', (534, 1363)))
+
+    def test_wide_native_picker_and_draft(self):
+        boxes = [box('[profile', x=458, y=1274), box('[profile', x=449, y=1356),
+                 box('Virtual Fisher', x=2130, y=1286)]
+        self.assertEqual(command_target(boxes, '/profile', (534, 1363)), (538, 1284))
+        boxes[-1]['text'] = 'Virtual Asher'
+        self.assertIsNone(command_target(boxes, '/profile', (534, 1363)))
+
+    def test_real_yesterday_headers_preserve_invocations(self):
+        from src.live_capture import capture_frame
+        lines = ['epicmouse used', ':: fish', 'Virtual Fisher Yesterday at 12:09 PM',
+                 'You caught:', '10 Salmon', '2 Cod', '+63 XP']
+        messages = capture_frame(lines)['messages']
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0]['invoked_by'], 'epicmouse')
+        self.assertNotIn('Yesterday at 12:09 PM', messages[0]['lines'])
+
     def test_composer_from_pixels(self):
         self.assertEqual(composer_target([box('Message @Virtual Fisher')], 'Virtual Fisher'), (380, 810))
         self.assertIsNone(composer_target([box('Message @someoneelse')], 'Virtual Fisher'))

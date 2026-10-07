@@ -29,7 +29,8 @@ def composer_target(boxes, channel):
 
 def command_target(boxes, command, composer=None):
     """Accept one exact picker command with a nearby bot label; ambiguous layouts fail closed."""
-    found = [b for b in boxes if b['text'].strip().casefold() == command.casefold()]
+    found = [b for b in boxes if command_text(b['text']) == command.casefold()
+             and (composer is None or b['bottom'] < composer[1] - (b['bottom'] - b['top']))]
     if len(found) != 1:
         return None
     target = found[0]
@@ -37,10 +38,25 @@ def command_target(boxes, command, composer=None):
     if composer is not None and not (composer[1] - 15 * height <= target['top'] < composer[1] - height
                                      and abs(_center(target)[0] - composer[0]) <= 15 * height):
         return None
-    bot = [b for b in boxes if b['text'].strip() == 'Virtual Fisher'
-           and abs(b['top'] - target['top']) <= 2 * height
-           and abs(b['left'] - target['left']) <= 10 * height]
-    return _center(target) if len(bot) == 1 else None
+    labels = [b for b in boxes if b is not target
+              and command_text(b['text']) != command.casefold()
+              and abs(_center(b)[1] - _center(target)[1]) <= 2 * height
+              and target['left'] - height <= b['left'] <= target['left'] + 150 * height]
+    # Wide Discord rows put ownership at the far right. A VF label on an adjacent
+    # row must not override a nearer other-bot label belonging to this command.
+    far_labels = [b for b in labels if b['left'] >= target['right'] + 10 * height]
+    labels = far_labels or labels
+    if not labels:
+        return None
+    distance = min(abs(_center(b)[1] - _center(target)[1]) for b in labels)
+    nearest = [b for b in labels if abs(_center(b)[1] - _center(target)[1]) == distance]
+    return _center(target) if len(nearest) == 1 and nearest[0]['text'].strip() == 'Virtual Fisher' else None
+
+
+def command_text(text):
+    """Normalize only the observed OCR slash glyph; preserve the exact command name."""
+    text = text.strip().casefold()
+    return '/' + text[1:] if text.startswith('[') else text
 
 
 class DiscordTransport:

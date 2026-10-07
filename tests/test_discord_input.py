@@ -30,13 +30,43 @@ class NativeDispatchTests(unittest.TestCase):
     def driver(self, frames):
         driver = WindowsDiscordDriver.__new__(WindowsDiscordDriver)
         driver.channel = 'Virtual Fisher'
-        sequence = iter(frames)
+        from itertools import chain, repeat
+        sequence = chain(frames, repeat(frames[-1]))
         driver.events = []
         driver._frame = lambda cancelled: next(sequence)
         driver._click = lambda point, cancelled: driver.events.append(('click', point))
         driver._text = lambda text, cancelled: driver.events.append(('text', text))
         driver._key = lambda key, cancelled: driver.events.append(('key', key))
         return driver
+
+    @patch('src.discord_input.time.sleep')
+    def test_original_composer_read_survives_caret_in_enlarged_read(self, sleep):
+        driver = self.driver([
+            {'boxes': [box('IMessage@Virtual Fisher', 800)],
+             'original_boxes': [box('Message @Virtual Fisher', 800)]},
+            {'boxes': [box('[fish', 600), box('Virtual Fisher', 620)]},
+            {'boxes': [box('[fish', 800)]},
+        ])
+        driver.dispatch('/fish', lambda: False)
+        self.assertEqual(driver.events[-1], ('key', 13))
+
+    @patch('src.discord_input.time.sleep')
+    def test_historical_bracket_glyph_never_matches_picker(self, sleep):
+        old = [box('[fish', 600), box('Virtual Fisher', 620)]
+        driver = self.driver([{'boxes': [box('Message @Virtual Fisher', 800)] + old}]
+                             + [{'boxes': old}] * 5)
+        with self.assertRaises(TransportError): driver.dispatch('/fish', lambda: False)
+        self.assertFalse(any(kind == 'key' for kind, _ in driver.events))
+
+    @patch('src.discord_input.time.sleep')
+    def test_selection_waits_for_render(self, sleep):
+        driver = self.driver([
+            {'boxes': [box('Message @Virtual Fisher', 800)]},
+            {'boxes': [box('/fish', 600), box('Virtual Fisher', 620)]},
+            {'boxes': []}, {'boxes': [box('/fish', 800)]},
+        ])
+        driver.dispatch('/fish', lambda: False)
+        self.assertEqual(driver.events[-1], ('key', 13))
 
     @patch('src.discord_input.time.sleep')
     def test_submission_requires_verified_picker(self, sleep):
