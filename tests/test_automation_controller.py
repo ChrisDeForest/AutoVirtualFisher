@@ -147,20 +147,120 @@ class ControllerTests(unittest.TestCase):
         for index, kind in ((0, 'profile'), (1, 'buffs')):
             with self.subTest(kind=kind):
                 self.setUp()
-                self.sim.script = {index: 'unreadable'}
+                self.sim.script = {attempt: 'unreadable' for attempt in range(index, index + 3)}
                 self.make().start()
                 self.run_for(20)
-                self.assertEqual(len(self.sim.sent), index + 1, 'nothing is sent after the unreadable reply')
+                self.assertEqual(len(self.sim.sent), index + 3, 'stop after three unreadable replies')
                 status = self.controller.status()
                 self.assertEqual(status['phase'], 'NEEDS_REVIEW')
-                self.assertIsNone(self.controller.state.profile if kind == 'profile'
+                self.assertIsNone((self.controller.state.profile or {}).get('balance') if kind == 'profile'
                                   else self.controller.state.cooldown_seconds)
-                [item] = list_items(self.review)[0]
+                items = list_items(self.review)[0]
+                self.assertEqual(len(items), 3)
+                [item] = [item for item in items if item['blocks_actions']]
                 self.assertEqual(item['kind'], kind)
                 result = AutomationJournal(self.journal_root).recover()['actions'][status['unresolved'][0]]
                 self.assertEqual(result['result'], 'unreadable')
                 self.tearDown()
         self.setUp()
+
+    def test_identical_unreadable_retry_escalates_without_another_send(self):
+        # The same pixels give the same misread: a third /profile cannot read differently.
+        self.sim.script = {0: 'unreadable_fixed', 1: 'unreadable_fixed', 2: 'unreadable_fixed'}
+        self.make().start()
+        self.run_for(20)
+        self.assertEqual([intent.kind for _, intent in self.sim.sent], ['refresh_profile', 'refresh_profile'])
+        status = self.controller.status()
+        self.assertEqual(status['phase'], 'NEEDS_REVIEW')
+        self.assertIn('same unreadable text', status['reason'])
+        self.assertEqual(sum(item['blocks_actions'] for item in list_items(self.review)[0]), 1)
+
+    def test_startup_retries_only_failed_command_then_fishes(self):
+        self.sim.script = {1: 'unreadable', 2: 'unreadable'}
+        self.make(config=replace(CONFIG, max_trips=1)).start()
+        self.run_for(30)
+        self.assertEqual([intent.kind for _, intent in self.sim.sent],
+                         ['refresh_profile', 'refresh_buffs', 'refresh_buffs', 'refresh_buffs', 'fish'])
+        self.assertEqual(self.saved_trips(), 1)
+        self.assertFalse(self.controller.status()['unresolved'])
+        self.assertTrue(all(not item['blocks_actions'] for item in list_items(self.review)[0]))
+        buffs_times = [at for at, intent in self.sim.sent if intent.kind == 'refresh_buffs']
+        self.assertTrue(all(b - a >= 2.4 - STEP for a, b in zip(buffs_times, buffs_times[1:])))
+
+    def test_new_launch_fetches_fresh_data_and_unbounded_run_stops_on_request(self):
+        self.make().start()
+        self.run_for(12)
+        self.controller.stop()
+        previous = len(self.sim.sent)
+        self.make().start()
+        self.run_for(12)
+        self.assertEqual([intent.kind for _, intent in self.sim.sent[previous:]][:2],
+                         ['refresh_profile', 'refresh_buffs'])
+        self.assertTrue(self.controller.running)
+        self.controller.stop()
+        sends = len(self.sim.sent)
+        self.run_for(20)
+        self.assertEqual(len(self.sim.sent), sends)
+
+    def test_missing_startup_reply_is_not_retried(self):
+        self.sim.script = {0: 'missing'}
+        self.make().start()
+        self.run_for(40)
+        self.assertEqual(len(self.sim.sent), 1)
+        self.assertEqual(self.controller.status()['phase'], 'NEEDS_REVIEW')
+
+    def test_discord_sending_wait_is_bounded_and_never_resends(self):
+        self.sim.script = {0: 'missing'}
+        self.sim.sending_seen = True
+        self.make().start()
+        self.run_for(30)
+        self.assertEqual(self.controller.status()['phase'], 'WAITING_DELIVERY')
+        self.assertEqual(len(self.sim.sent), 1)
+        self.run_for(35)
+        self.assertEqual(self.controller.status()['phase'], 'NEEDS_REVIEW')
+        self.assertEqual(len(self.sim.sent), 1)
+
+    def test_timeout_preserves_transport_failure_reason(self):
+        self.sim.script = {0: 'missing'}
+        self.make().start()
+        self.run_for(1)
+        self.sim.context = ContextStatus(False, 'sim:dm', 'Reply placement uncertain: overlap lost')
+        self.run_for(40)
+        self.assertIn('overlap lost', self.controller.status()['reason'])
+        self.assertEqual(len(self.sim.sent), 1)
+
+    def test_profile_retry_recovers_before_buffs_and_stop_cancels_retry(self):
+        self.sim.script = {0: 'unreadable'}
+        self.make(config=replace(CONFIG, max_trips=1)).start()
+        self.run_for(20)
+        self.assertEqual([intent.kind for _, intent in self.sim.sent],
+                         ['refresh_profile', 'refresh_profile', 'refresh_buffs', 'fish'])
+        self.assertEqual(self.saved_trips(), 1)
+
+    def test_stop_during_startup_retry_sends_nothing_more(self):
+        self.sim.script = {0: 'unreadable'}
+        self.make().start()
+        self.run_for(1)
+        self.assertEqual(self.controller.status()['phase'], 'RETRYING_STARTUP')
+        self.assertEqual(len(self.sim.sent), 1)
+        self.controller.stop()
+        self.run_for(20)
+        self.assertEqual(len(self.sim.sent), 1)
+        self.assertFalse(AutomationJournal(self.journal_root).recover()['unresolved'])
+
+    def test_startup_ignores_optional_ocr_and_fishes_with_required_values(self):
+        original = self.sim._play
+        def play(intent, now):
+            if intent.kind == 'refresh_profile':
+                return ('Inventory of sim\nBalance: $50.\nP4 Level 30, xp to next leveL\nFish Invent«y\na777 Salmon', 'profile')
+            if intent.kind == 'refresh_buffs':
+                return ("sim0001's current multipliers (including bait):\nFish quality: ??\nFishing cooldown: 3.5s.", 'buffs')
+            return original(intent, now)
+        self.sim._play = play
+        self.make(config=replace(CONFIG, max_trips=1)).start()
+        self.run_for(20)
+        self.assertEqual([intent.kind for _, intent in self.sim.sent], ['refresh_profile', 'refresh_buffs', 'fish'])
+        self.assertEqual(self.saved_trips(), 1)
 
     def test_wrong_context_pauses_without_sending(self):
         self.sim.context = ContextStatus(False, 'sim:dm', 'Discord is minimized')

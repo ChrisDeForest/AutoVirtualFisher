@@ -4,8 +4,9 @@
 
 The native adapter supports `/profile`, `/buffs`, and `/fish` through Discord's
 visible command picker in a DM (server channels are not supported yet).
-It is disabled by default and has not yet been verified
-against a live Discord session. The existing web automation page remains simulation-only.
+It is disabled by default. A supervised live probe verified profile/buffs bootstrap
+and one fish submission; result reading was repaired against that existing reply.
+A clean automatic trip-to-stop run remains to be verified. The existing web automation page remains simulation-only.
 
 Inspect the configured target without sending input (substitute your actual names):
 
@@ -15,9 +16,18 @@ Inspect the configured target without sending input (substitute your actual name
 
 The runner gives you five seconds to foreground Discord. Keep its composer empty
 and a complete VF reply visible. `--window HANDLE` pins a particular window.
-Add `--live` to enable a bounded run: the default is one confirmed fishing trip
-or 120 seconds, including profile/buffs bootstrap commands. `--trips` allows 1–25
-and `--seconds` allows 1–900. Ctrl+C stops the runner; input already sent cannot
+Add `--live` to start fishing until stopped. Every launch first fetches fresh
+`/profile` and `/buffs` replies. Startup confirms the account name, balance, level
+and positive fishing cooldown individually. Readable fields are retained across
+confirmed replies during that launch, with observation times for each field.
+Garbled XP, inventory, equipment and optional multipliers do not block fishing;
+they are not imported as reliable player data by this startup reader. A confirmed
+startup reply missing required fields retries that command after two seconds, up to three
+attempts total. Other validated startup data is retained. After three failures,
+the runner stops and lists the unreadable fields in Needs review.
+
+Optional `--trips` allows 1–25 confirmed trips and `--seconds` allows 1–900 seconds;
+omit them for continuous fishing. Ctrl+C stops the runner; input already sent cannot
 be undone. Do not manually invoke VF commands while it is running.
 
 Missing command-picker evidence, changed context, verification prompts, or
@@ -28,16 +38,32 @@ after checking the game. Resolution does not start a run and cannot reconstruct
 lost fishing results. Live journal, trips, and review items are stored separately
 under ignored `src/data/automation_live/`.
 
-The current picker matcher requires an exact slash-command OCR line, an adjacent
-Virtual Fisher label, and a confirmed command in the composer after selection.
+Reply matching uses required startup values, own invocation and send times, with
+two stable captures; optional text changes do not break confirmation. Fishing
+results still require readable catch counts and XP, and uncertain delivery pauses.
+
+The current picker matcher requires an exact slash-command OCR line and an adjacent
+Virtual Fisher label. Entry focuses the empty composer, types the command, then
+presses Enter twice (selection, then submission), with a short pause between keys.
+The command-picker row is never clicked.
 If Discord renders those differently, the adapter stops before submission; the
-matcher needs a supervised capture-based adjustment rather than a blind Enter.
+matcher needs a supervised capture-based adjustment.
+
+Native reply rereads use Tesseract when its executable is already on PATH, alongside
+Windows OCR. A missing required field (balance, level, fishing cooldown) is first
+reread from a crop of its own line, prepared several ways (inverted and thresholded
+for Tesseract); it is accepted only when every readable value agrees and either both
+engines or three Tesseract preparations read it. Otherwise the whole reply is reread
+and both engines must agree on all parsed profile/buffs values. A startup retry
+whose reply reads exactly like the previous one stops at once instead of resending. Nothing is installed automatically; unreadable fishing replies and
+exhausted startup retries stop the run. Missing replies or uncertain sends are never
+automatically resent.
 
 This repo contains my personal project of completely automating the Discord bot "Virtual Fisher".
 
 The current implementation collects commands and wiki pages, then exports game
 data as JSON. The web logbook supports simulation; the experimental native
-adapter above adds a bounded live runner that still needs live verification.
+adapter above adds a live runner with optional limits that still needs end-to-end live verification.
 
 ## Player logbook: terminal and web
 
@@ -436,6 +462,21 @@ The pipeline was verified using fresh command HTML and existing wiki HTML;
 wiki values were not verified as current. Bait prices now come from the wiki
 table, but level rules and shared bait rules remain hard-coded. Some wiki
 parsers still depend on the source page's internal layout.
+
+## Run logs
+
+The live runner prints readable progress updates instead of raw JSON. Each
+launch saves the same timestamped output under `docs/runs/` and keeps the latest
+five run logs. Startup retries, confirmed commands, saved trips, and stop or
+review reasons are included. Logs are flushed as they happen, so partial runs
+remain available after a crash. This folder is ignored by Git. Detailed
+transport diagnostics remain in `src/data/automation_live/`.
+
+OCR fish labels are matched against the local fish reference. Exact names win;
+otherwise common `rn`/`m` and `vv`/`w` confusions and small letter errors are
+accepted only with a clear lead over other candidates. Short or ambiguous
+labels remain unreadable and are reread. Fish quantities and XP are never
+corrected by fuzzy matching.
 
 ## Tests
 

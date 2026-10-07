@@ -2,9 +2,11 @@
 
 At most one command is unresolved at a time. Every command is journaled before it is handed over, and its
 hand-over and reply after. A command whose outcome is not known (no reply in time, a failed or unrecorded
-hand-over, a reply without evidence of which command it answers, an unreadable result) is never resent: it
+hand-over, a reply without evidence of which command it answers, an unreadable fishing result) is never resent: it
 becomes uncertain, the loop stops sending, and a person resolves it. After a crash, start() rebuilds this from
-the journal and reconciles uncertain commands with replies still visible.
+the journal and reconciles uncertain commands with replies still visible. Confirmed read-only startup replies
+that fail OCR are retried up to three attempts, with a delay, unless a retry reads exactly as the last one did
+(the same pixels give the same misread); they never establish state until valid.
 """
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -16,7 +18,8 @@ import time
 from .automation_journal import AutomationJournal
 from .automation_models import AutomationConfig, CapabilityError, TransportError
 from .automation_policy import next_action
-from .automation_state import AutomationState, apply_observation, refresh_problems
+from .automation_state import AutomationState, apply_observation
+from .startup_fields import apply_startup, startup_problems
 from .fishing_log import parse_fishing
 from .fishing_sessions import save_session
 from .live_capture import fishing_problems
@@ -28,6 +31,8 @@ COOLDOWN_REPLY = re.compile(r'You must wait ([\d.]+) seconds? before fishing aga
 RESOLUTIONS = ('happened', 'not_sent')
 # The unresolved entry for journal records that could not be read.
 DAMAGED_JOURNAL = 'damaged-journal'
+STARTUP_ATTEMPTS = 3
+STARTUP_RETRY_DELAY = 2.0
 
 
 def _iso(moment: datetime) -> str:
@@ -55,11 +60,16 @@ class AutomationController:
         self.failed = None             # a journal failure: nothing more is sent until restart
         self.in_flight = None          # the command being handed over right now, if any
         self.sent_at = None            # (monotonic, UTC ISO) of the pending command's hand-over
+        self.delivery_wait_logged = set()
         self.ready_at = float('-inf')  # monotonic time the next fish may be sent
         self.last_trip_at = None       # monotonic time of the latest confirmed trip (its hand-over, or when seen)
         self.started_at = None
         self.last_result = None
         self.total_trips = 0
+        self.startup_failures = {}
+        self.startup_problems = {}
+        self.startup_texts = {}        # command -> the text of its last unreadable reply
+        self.startup_retry_at = float('-inf')
 
     # --- run control ---
 
@@ -77,6 +87,8 @@ class AutomationController:
             self.generation += 1
             self.stop_event = threading.Event()
             self.running, self.failed, self.started_at = True, None, self.monotonic()
+            self.startup_failures, self.startup_problems, self.startup_texts = {}, {}, {}
+            self.startup_retry_at = float('-inf')
             self.acknowledged = {action for action, info in recovered['actions'].items()
                                  if info['status'] in ('acknowledged', 'projected')}
             self.total_trips = sum(info.get('result') == 'trip' for info in recovered['actions'].values())
@@ -149,7 +161,10 @@ class AutomationController:
                     'next_eligible_in': max(0.0, self.ready_at - self.monotonic()) if self.running else None,
                     'context_ok': self.state.context_ok, 'config': {
                         'account': self.config.account, 'context_id': self.config.context_id,
-                        'max_trips': self.config.max_trips, 'max_seconds': self.config.max_seconds}}
+                        'max_trips': self.config.max_trips, 'max_seconds': self.config.max_seconds},
+                    'startup': {'failures': dict(self.startup_failures),
+                                'problems': dict(self.startup_problems),
+                                'confirmed_fields': dict(self.state.startup_observed_at)}}
 
     def _loop(self, generation, stop_event):
         while not stop_event.is_set():
@@ -178,15 +193,28 @@ class AutomationController:
             self.state = replace(self.state, context_ok=context_ok)
             for observation in self.transport.poll():
                 self._observe(observation)
+            # Native OCR may take seconds; waits must use the time after the capture.
+            now = self.monotonic()
             if self.failed:
                 self.phase, self.reason = 'FAILED', self.failed
                 return
             if self.state.pending is not None:
-                if now - self.sent_at[0] > self.config.reply_timeout:
+                sending_seen = getattr(self.transport, 'sending_seen', False)
+                timeout = max(self.config.reply_timeout, 60) if sending_seen else self.config.reply_timeout
+                if sending_seen and self.state.pending.action_id not in self.delivery_wait_logged:
+                    self.delivery_wait_logged.add(self.state.pending.action_id)
+                    self._safe_event('delivery_wait', self.state.pending.action_id,
+                                     reason='Discord displayed Sending command; retrying capture, not sending again.',
+                                     timeout=timeout)
+                if now - self.sent_at[0] > timeout:
+                    detail = context.reason
                     self._uncertain(self.state.pending.action_id,
-                                    f'No reply within {self.config.reply_timeout:g} s; not resent.')
+                                    f'No confirmed reply within {timeout:g} s; not resent.'
+                                    + (f' {detail}' if detail else ''))
                 else:
-                    self.phase, self.reason = 'WAITING_REPLY', f'Waiting for the reply to {self.state.pending.kind}.'
+                    self.phase = 'WAITING_DELIVERY' if sending_seen else 'WAITING_REPLY'
+                    self.reason = ('Discord displayed Sending command; retrying reply capture without resending.'
+                                   if sending_seen else f'Waiting for the reply to {self.state.pending.kind}.')
                     return
             if self.unresolved:
                 self.phase, self.reason = 'NEEDS_REVIEW', self._unresolved_text()
@@ -197,6 +225,10 @@ class AutomationController:
                 return
             if self.config.max_trips is not None and self.state.trips >= self.config.max_trips:
                 self._finish('Bounded run complete: trip limit reached.')
+                return
+            if now < self.startup_retry_at:
+                self.phase = 'RETRYING_STARTUP'
+                self.reason = f'Retrying startup read in {self.startup_retry_at - now:.1f} s.'
                 return
             if self.last_trip_at is not None and self.state.cooldown_seconds is not None:
                 # Also covers a trip reconciled after a restart, before this run had seen /buffs.
@@ -261,7 +293,6 @@ class AutomationController:
     # --- replies ---
 
     def _observe(self, observation):
-        self.state = apply_observation(self.state, observation)
         correlation = observation.correlation
         if observation.identity_status != VERIFIED or (
                 self.config.context_id and observation.context_id != self.config.context_id):
@@ -278,6 +309,10 @@ class AutomationController:
         if pending is not None and correlation == pending.action_id:
             if observation.observed_at < self.sent_at[1]:
                 return  # seen before this command was sent: cannot be its reply
+            if observation.kind != pending.expected_reply_kind and not (
+                    pending.kind == 'fish' and COOLDOWN_REPLY.search(observation.text)):
+                return
+            self.state = apply_startup(self.state, observation) if observation.kind in ('profile', 'buffs') else apply_observation(self.state, observation)
             self.state = replace(self.state, pending=None)
             self._acknowledge(pending.action_id, pending.kind, observation, this_run=True)
         elif correlation in self.unresolved:
@@ -292,7 +327,7 @@ class AutomationController:
         tally = None
         problems = []
         if kind != 'fish':
-            problems = refresh_problems(observation.kind, observation.text)
+            problems = startup_problems(self.state, observation.kind)
             result = 'unreadable' if problems else 'refreshed'
         elif wait:
             result = 'cooldown'
@@ -314,15 +349,33 @@ class AutomationController:
         if result == 'cooldown':
             self.ready_at = now + float(wait[1]) + self.config.cooldown_margin
         elif result == 'unreadable' and kind != 'fish':
-            # Answered, but the state it should establish is unknown: stop rather than act on guessed values
-            # or keep asking again.
+            # Delivery is confirmed: repeating this read-only command cannot duplicate a fishing trip.
+            attempts = self.startup_failures.get(kind, 0) + 1
+            self.startup_failures[kind] = attempts
+            self.startup_problems[kind] = problems
+            # The same pixels give the same misread: another send cannot read differently.
+            repeated = self.startup_texts.get(kind) == observation.text
+            self.startup_texts[kind] = observation.text
+            exhausted = attempts >= STARTUP_ATTEMPTS or not this_run or repeated
             add_item(self.roots['review'], self.config.account, observation.kind or 'unknown', observation.text,
                      [f'Automation could not read this {observation.kind or "reply"} reliably.'] + problems,
-                     identity_status=observation.identity_status, observation_id=observation.observation_id)
-            self.unresolved[action_id] = (f'Its {observation.kind or "reply"} could not be read reliably '
-                                          f'({problems[0]}); see Needs review.')
-            self._safe_event('uncertain', action_id, reason=self.unresolved[action_id])
-            self._sync_uncertain()
+                     identity_status=observation.identity_status, observation_id=observation.observation_id,
+                     blocks_actions=exhausted)
+            if exhausted:
+                self.unresolved[action_id] = (f'Its {observation.kind or "reply"} could not be read after '
+                                              f'{attempts} attempt(s)'
+                                              + (' (the same unreadable text each time)' if repeated else '')
+                                              + f': {"; ".join(problems)}; see Needs review.')
+                self._safe_event('uncertain', action_id, reason=self.unresolved[action_id])
+                self._sync_uncertain()
+            else:
+                self.startup_retry_at = now + STARTUP_RETRY_DELAY
+                self._safe_event('startup_retry_scheduled', action_id, command=kind,
+                                 attempt=attempts, problems=problems, delay=STARTUP_RETRY_DELAY)
+        elif result == 'refreshed':
+            self.startup_problems.pop(kind, None)
+            self.startup_texts.pop(kind, None)
+            self.startup_retry_at = float('-inf')
         elif result == 'unreadable':
             reasons = fishing_problems(observation.text)
             add_item(self.roots['review'], self.config.account, 'fishing', observation.text,

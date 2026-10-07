@@ -7,6 +7,27 @@ LIVE = (Path(__file__).parent / 'fixtures' / 'live_fishing.txt').read_text(encod
 
 
 class LiveFishingTests(unittest.TestCase):
+    def test_saved_money_chest_reply(self):
+        tally = parse_fishing('You caught:\n1 Fish\n5 Salmon\n9 Cod\nYou found an uncornmon chest\nYou got $296 from the chest\n+119 xp\nGlobal boost by')
+        self.assertEqual(tally['warnings'], [])
+        self.assertEqual(tally['chest_money'], 296)
+        self.assertEqual(tally['finds'], {'uncommon chest': 1})
+        self.assertEqual(tally['fishing_xp'], 119)
+
+    def test_wrapped_level_up_and_ocr_one_in_quest_reward(self):
+        tally = parse_fishing('You caught:\n2 Fish\n4 Salmon\n9 Cod\n+117 xp\nLEVEL UP! You are\nnow level 31.\n'
+                              '$6,200 received for leveling up.\nQUEST COMPLETE!\nDaily Level-ups Tier 1\n'
+                              'Reward:\nlx uncommon chest\nYou got 150 XP from the chest')
+        self.assertEqual(tally['warnings'], [])
+        self.assertEqual(tally['level_ups'], [31])
+        self.assertEqual(tally['quests_completed'][0]['items'], {'uncommon chest': 1})
+
+    def test_level_up_without_its_level_stays_unreadable(self):
+        # Observed: OCR dropped "now level 31" entirely. A guessed level must not be recorded.
+        tally = parse_fishing('You caught:\n2 Fish\n+117 xp\nLEVEL UP! You are\n$6,200 received for leveling up.')
+        self.assertEqual(tally['warnings'], ['Unrecognized line: LEVEL UP! You are'])
+        self.assertEqual(tally['level_ups'], [])
+
     def setUp(self):
         self.tally = parse_fishing(LIVE)
 
@@ -97,3 +118,13 @@ class FishingEdgeTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+class BoostCaptionTests(unittest.TestCase):
+    def test_missing_booster_name_keeps_exact_catch(self):
+        from src.fishing_log import parse_fishing
+        from src.live_capture import fishing_problems
+        text = 'You caught:\n7 Salmon\n7 Cod\n+104 XP\nGlobal boost by'
+        self.assertEqual(fishing_problems(text), [])
+        tally = parse_fishing(text)
+        self.assertEqual(tally['catches'], {'Salmon': 7, 'Cod': 7})
+        self.assertEqual(tally['fishing_xp'], 104)
+        self.assertEqual(tally['boosted_trips'], 1)

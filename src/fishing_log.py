@@ -21,7 +21,7 @@ def _add(counts, name, amount):
 
 def parse_fishing(text: str) -> dict:
     tally = {'schema_version': FISHING_SCHEMA_VERSION, 'trips': 0, 'boosted_trips': 0, 'catches': {},
-             'fishing_xp': 0, 'chest_xp': 0, 'finds': {}, 'chest_contents': {}, 'charm_levels': {}, 'level_ups': [],
+             'fishing_xp': 0, 'chest_xp': 0, 'chest_money': 0, 'finds': {}, 'chest_contents': {}, 'charm_levels': {}, 'level_ups': [],
              'level_up_money': 0, 'unlocks': [], 'quests_completed': [], 'bait_ran_out': [],
              'trip_details': [], 'warnings': [], 'unparsed_line_count': 0}
     mode = None
@@ -37,6 +37,8 @@ def parse_fishing(text: str) -> dict:
         tally['warnings'].append(f'Unrecognized line: {line}')
         tally['unparsed_line_count'] += 1
 
+    # A narrow chat column wraps "LEVEL UP! You are now level 31." after "You are".
+    text = re.sub(r'(LEVEL UP!.*You are)[ \t]*\r?\n[ \t]*(now level \d+)', r'\1 \2', text, flags=re.I)
     for original in text.splitlines():
         line = _clean(original)
         if not line:
@@ -65,14 +67,15 @@ def parse_fishing(text: str) -> dict:
             reward = tally['quests_completed'][-1] if tally['quests_completed'] else None
             money = re.fullmatch(rf'\+\$({NUMBER})', line)
             xp = re.fullmatch(rf'\+({NUMBER}) XP', line, re.I)
-            item = re.fullmatch(r'(\d+)x (.+)', line)
+            # Observed OCR reads "1x" as "lx"; only a lone l/I before x, never inside a number.
+            item = re.fullmatch(r'(\d+|[lI])x (.+)', line)
             if reward is not None and (money or xp or item):
                 if money:
                     reward['money'] += _number(money[1])
                 elif xp:
                     reward['xp'] += _number(xp[1])
                 else:
-                    _add(reward['items'], _name(item[2]), int(item[1]))
+                    _add(reward['items'], _name(item[2]), 1 if item[1] in 'lI' else int(item[1]))
                 continue
             mode = None
         in_catch_list = mode == 'catch'
@@ -87,7 +90,7 @@ def parse_fishing(text: str) -> dict:
             tally['fishing_xp'] += _number(match[1])
             if trip is not None:
                 trip['xp'] = (trip['xp'] or 0) + _number(match[1])
-        elif re.fullmatch(r'Global boost by .+', line, re.I):
+        elif re.fullmatch(r'Global boost by(?: .+)?', line, re.I):
             tally['boosted_trips'] += 1
             if trip is not None:
                 trip['boosted'] = True
@@ -103,6 +106,9 @@ def parse_fishing(text: str) -> dict:
             mode = 'quest_name'
         elif line == 'Reward:' and mode == 'await_reward':
             mode = 'reward'
+        elif match := re.fullmatch(rf'You got \$({NUMBER}) from the chest[.!]?', line, re.I):
+            tally['chest_money'] += _number(match[1])
+            event(f'Chest: ${match[1]}')
         elif match := re.fullmatch(rf'You got ({NUMBER}) XP from the chest[.!]?', line, re.I):
             # Chest XP is already included in the trip's "+N XP" line.
             tally['chest_xp'] += _number(match[1])
@@ -113,8 +119,12 @@ def parse_fishing(text: str) -> dict:
             _add(tally['chest_contents'], _name(match[2]), _number(match[1]))
             event(f'Chest: {match[1]} {_name(match[2])}')
         elif match := re.fullmatch(r'You found (?:an? )?(.+?)\s*!?', line, re.I):
-            _add(tally['finds'], _name(match[1]), 1)
-            event(f'Found {_name(match[1])}')
+            name = _name(match[1])
+            # Exact observed OCR substitution: rn for m in this chest label only.
+            if name.lower() == 'uncornmon chest':
+                name = 'uncommon chest'
+            _add(tally['finds'], name, 1)
+            event(f'Found {name}')
         elif match := re.fullmatch(r'Your (.+?) is now level (\d+)!?', line, re.I):
             tally['charm_levels'][_name(match[1])] = int(match[2])
             event(f'{_name(match[1])} now level {match[2]}')

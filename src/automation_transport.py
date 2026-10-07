@@ -12,10 +12,11 @@ from .automation_models import ActionIntent, CapabilityError, ContextStatus, Dis
 from .observation import Identity, Observation, check_identity, recipients
 
 # Outcomes a test can script per send (by send index):
-#   ok, unreadable (a catch count, or profile/buffs digits, misread), missing (the game acts but no reply is seen), duplicate (the reply is
+#   ok, unreadable (a catch count, or profile/buffs digits, misread; the misread differs per attempt, as a reply
+#   caught mid-render would), unreadable_fixed (the same misread every time, as the same pixels give), missing (the game acts but no reply is seen), duplicate (the reply is
 #   delivered twice), other_player_first (another player's reply arrives first), uncorrelated (the reply carries
 #   no evidence of which action it answers), send_error (the hand-over fails).
-OUTCOMES = ('ok', 'unreadable', 'missing', 'duplicate', 'other_player_first', 'uncorrelated', 'send_error')
+OUTCOMES = ('ok', 'unreadable', 'unreadable_fixed', 'missing', 'duplicate', 'other_player_first', 'uncorrelated', 'send_error')
 FISH = ('Salmon', 'Cod')
 VISIBLE_REPLIES = 12
 
@@ -61,14 +62,15 @@ class SimulationTransport:
         if outcome == 'send_error':
             raise TransportError('Simulated hand-over failure.')
         text, kind = self._play(intent, now)
-        if outcome == 'unreadable' and kind == 'fishing':
+        if outcome in ('unreadable', 'unreadable_fixed') and kind == 'fishing':
             lines = text.split('\n')
             lines[2] = lines[2].split(' ', 1)[1]  # OCR lost the count: "Salmon"
             text = '\n'.join(lines)
-        elif outcome == 'unreadable' and kind in ('profile', 'buffs'):
+        elif outcome in ('unreadable', 'unreadable_fixed') and kind in ('profile', 'buffs'):
             # OCR misread the digits: "$1,0O0", "Level 1O", "3.5?s".
+            glyph = '?' if outcome == 'unreadable_fixed' else '?' * (index + 1)
             text = text.replace('$1,000', '$1,0O0').replace('Level 10,', 'Level 1O,').replace(
-                f'{self.cooldown:g}s', f'{self.cooldown:g}?s')
+                f'{self.cooldown:g}s', f'{self.cooldown:g}{glyph}s').replace('Balance: $1,0O0.', f'Balance: ${glyph}1,0O0.')
         deliver = now + self.latency
         if outcome == 'other_player_first':
             self._queue(deliver, f'sim-{index}-other', 'fishing', 'someoneelse77\nYou caught:\n1 Cod\n+5 XP', None,
