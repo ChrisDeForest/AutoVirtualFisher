@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch
 
 from src.discord_input import WindowsDiscordDriver
-from src.automation_models import TransportError
+from src.automation_models import NotDispatched, TransportError
 
 
 def box(text, y):
@@ -37,7 +37,18 @@ class NativeDispatchTests(unittest.TestCase):
         driver._click = lambda point, cancelled: driver.events.append(('click', point))
         driver._text = lambda text, cancelled: driver.events.append(('text', text))
         driver._key = lambda key, cancelled: driver.events.append(('key', key))
+        driver._clear = lambda cancelled: driver.events.append(('clear', None))
         return driver
+
+    @patch('src.discord_input.time.sleep')
+    def test_submission_does_not_depend_on_selected_composer_ocr(self, sleep):
+        driver = self.driver([
+            {'boxes': [box('Message @Virtual Fisher', 800)]},
+            {'boxes': [box('/profile', 600), box('Virtual Fisher', 620)]},
+            {'boxes': [box('[profile I', 800)], 'original_boxes': [box("'profile", 800)]},
+        ])
+        driver.dispatch('/profile', lambda: False)
+        self.assertEqual(driver.events[-1], ('key', 13))
 
     @patch('src.discord_input.time.sleep')
     def test_original_composer_read_survives_caret_in_enlarged_read(self, sleep):
@@ -55,11 +66,11 @@ class NativeDispatchTests(unittest.TestCase):
         old = [box('[fish', 600), box('Virtual Fisher', 620)]
         driver = self.driver([{'boxes': [box('Message @Virtual Fisher', 800)] + old}]
                              + [{'boxes': old}] * 5)
-        with self.assertRaises(TransportError): driver.dispatch('/fish', lambda: False)
+        with self.assertRaises(NotDispatched): driver.dispatch('/fish', lambda: False)
         self.assertFalse(any(kind == 'key' for kind, _ in driver.events))
 
     @patch('src.discord_input.time.sleep')
-    def test_selection_waits_for_render(self, sleep):
+    def test_enter_selection_does_not_require_an_extra_capture(self, sleep):
         driver = self.driver([
             {'boxes': [box('Message @Virtual Fisher', 800)]},
             {'boxes': [box('/fish', 600), box('Virtual Fisher', 620)]},
@@ -76,48 +87,55 @@ class NativeDispatchTests(unittest.TestCase):
             {'boxes': [box('/fish', 800)]},
         ])
         driver.dispatch('/fish', lambda: False)
-        self.assertEqual([event[0] for event in driver.events], ['click', 'text', 'click', 'key'])
+        self.assertEqual([event[0] for event in driver.events], ['click', 'text', 'key', 'key'])
         self.assertEqual(driver.events[-1], ('key', 13))
-
-    @patch('src.discord_input.time.sleep')
-    def test_unconfirmed_selection_never_submits(self, sleep):
-        driver = self.driver([
-            {'boxes': [box('Message @Virtual Fisher', 800)]},
-            {'boxes': [box('/fish', 600), box('Virtual Fisher', 620)]},
-            {'boxes': []},
-        ])
-        with self.assertRaises(TransportError): driver.dispatch('/fish', lambda: False)
-        self.assertFalse(any(kind == 'key' for kind, _ in driver.events))
-
-    @patch('src.discord_input.time.sleep')
-    def test_picker_still_open_never_submits(self, sleep):
-        picker = [box('/fish', 600), box('Virtual Fisher', 620)]
-        driver = self.driver([
-            {'boxes': [box('Message @Virtual Fisher', 800)]},
-            {'boxes': picker},
-            {'boxes': picker + [box('/fish', 800)]},
-        ])
-        with self.assertRaises(TransportError): driver.dispatch('/fish', lambda: False)
-        self.assertFalse(any(kind == 'key' for kind, _ in driver.events))
 
     @patch('src.discord_input.time.sleep')
     def test_historical_command_never_matches_picker(self, sleep):
         old = [box('/fish', 600), box('Virtual Fisher', 620)]
         driver = self.driver([{'boxes': [box('Message @Virtual Fisher', 800)] + old}]
                              + [{'boxes': old}] * 5)
-        with self.assertRaises(TransportError): driver.dispatch('/fish', lambda: False)
+        with self.assertRaises(NotDispatched): driver.dispatch('/fish', lambda: False)
         self.assertFalse(any(kind == 'key' for kind, _ in driver.events))
 
     @patch('src.discord_input.time.sleep')
     def test_missing_picker_never_presses_enter(self, sleep):
         driver = self.driver([{'boxes': [box('Message @Virtual Fisher', 800)]}] + [{'boxes': []}] * 5)
-        with self.assertRaises(TransportError): driver.dispatch('/fish', lambda: False)
+        # Enter was never pressed, so nothing reached the game; the typed draft is cleared for the next run.
+        with self.assertRaises(NotDispatched): driver.dispatch('/fish', lambda: False)
         self.assertFalse(any(kind == 'key' for kind, _ in driver.events))
+        self.assertEqual(driver.events[-1], ('clear', None))
 
     def test_existing_draft_never_types(self):
         driver = self.driver([{'boxes': [box('already typing', 800)]}])
-        with self.assertRaises(TransportError): driver.dispatch('/fish', lambda: False)
+        with self.assertRaises(NotDispatched) as refused: driver.dispatch('/fish', lambda: False)
+        self.assertIn('draft', str(refused.exception))
         self.assertEqual(driver.events, [])
+
+    def test_changed_target_before_click_is_not_dispatched(self):
+        driver = self.driver([{'boxes': []}])
+        def changed(cancelled):
+            raise TransportError('Target changed or capture unavailable during command entry.')
+        driver._frame = changed
+        with self.assertRaises(NotDispatched): driver.dispatch('/fish', lambda: False)
+        self.assertEqual(driver.events, [])
+
+    @patch('src.discord_input.time.sleep')
+    def test_cancellation_between_enters_prevents_second_key(self, sleep):
+        driver = self.driver([
+            {'boxes': [box('Message @Virtual Fisher', 800)]},
+            {'boxes': [box('/fish', 600), box('Virtual Fisher', 620)]},
+        ])
+        stopped = [False]
+        def key(value, cancelled):
+            if cancelled():
+                raise TransportError('Stopped')
+            driver.events.append(('key', value))
+            stopped[0] = True
+        driver._key = key
+        with self.assertRaises(TransportError):
+            driver.dispatch('/fish', lambda: stopped[0])
+        self.assertEqual([event for event in driver.events if event[0] == 'key'], [('key', 13)])
 
     @patch('src.discord_input.window_process', return_value='notepad.exe')
     def test_non_discord_selected_window_is_rejected(self, process):

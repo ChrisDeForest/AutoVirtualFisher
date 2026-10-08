@@ -1,6 +1,40 @@
 from pathlib import Path
 import unittest
 
+
+class FishNameRegressionTests(unittest.TestCase):
+    def test_emoji_fragment_before_fuzzy_fish_name(self):
+        text = clean_ocr(['You caught:', "4 Y' Salrnon", '+83 XP', "5 Y' Imaginaryfish"], 'reply')
+        self.assertIn('4 Salmon', text)
+        self.assertIn("5 Y' Imaginaryfish", text)
+
+    def test_fuzzy_names_preserve_quantities(self):
+        text = clean_ocr(['You caught:', '4 Salmom', '12 Salrnon', '7 Salmn', '+83 XP'], 'reply')
+        self.assertIn('4 Salmon', text)
+        self.assertIn('12 Salmon', text)
+        self.assertIn('7 Salmon', text)
+        self.assertIn('+83 XP', text)
+
+    def test_ambiguous_and_short_names_are_not_guessed(self):
+        from src.ocr_cleanup import match_fish_name
+        reference = {name.casefold(): {'name': name} for name in ('Salmon', 'Salman', 'Cod', 'Fish')}
+        self.assertIsNone(match_fish_name('Salmen', reference))
+        self.assertIsNone(match_fish_name('sn', reference))
+        self.assertIsNone(match_fish_name('Co', reference))
+        self.assertIsNone(match_fish_name('Imaginaryfish', reference))
+        self.assertEqual(match_fish_name('Salmon', reference), 'Salmon')
+
+    def test_missing_reference_leaves_ocr_unchanged(self):
+        from src.ocr_cleanup import match_fish_name
+        self.assertIsNone(match_fish_name('Salmom', {}))
+
+    def test_known_salmon_rn_error_preserves_numbers_and_unknown_names(self):
+        from src.ocr_cleanup import clean_ocr
+        text = clean_ocr(['You caught:', '4 Salrnon', '6 Cod', '+83 XP', '5 Imaginaryfish'], 'reply')
+        self.assertIn('4 Salmon', text)
+        self.assertIn('+83 XP', text)
+        self.assertIn('5 Imaginaryfish', text)
+
 from src.fishing_log import parse_fishing
 from src.ocr_cleanup import META, clean_ocr
 from src.paste_detect import detect, split_messages
@@ -52,6 +86,20 @@ class OcrScreenshotTests(unittest.TestCase):
 
 
 class CleanupRuleTests(unittest.TestCase):
+    def test_split_and_dated_headers_keep_time_and_invoker(self):
+        from src.live_capture import capture_frame
+        for header, following in [('Virtual Fisher', ['8:55 AM']),
+                                  ('Virtual Fisher — Yesterday at 12:09 PM', [])]:
+            message = capture_frame(['epicmouse used profile', header, *following,
+                                     'Inventory of epicmouse', 'Balance: $1'])['messages'][0]
+            self.assertEqual(message['invoked_by'], 'epicmouse')
+            self.assertIsNotNone(message['sent'])
+
+    def test_observed_fish_emoji_fragments_preserve_counts(self):
+        self.assertEqual(self.clean('7 y cod', '2 t cod', "3,764 y' Salmon", '296 s° Fish'),
+                         ['7 Cod', '2 Cod', '3,764 Salmon', '296 Fish'])
+        self.assertEqual(self.clean('1° Emerald Fish'), ['1 Emerald Fish'])
+
     def clean(self, *lines):
         return clean_ocr(list(lines), 'shot.png').splitlines()
 
@@ -90,3 +138,10 @@ class CleanupRuleTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class HeaderDashTests(unittest.TestCase):
+    def test_header_dash_without_space_is_virtual_fisher(self):
+        from src.ocr_cleanup import MESSAGE_HEADER
+        self.assertTrue(MESSAGE_HEADER.fullmatch('Virtual Fisher— 8:46 PM'))
+        self.assertFalse(MESSAGE_HEADER.fullmatch('Virtual Fisher [fish'))

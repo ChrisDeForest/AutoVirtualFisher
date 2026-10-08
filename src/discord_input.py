@@ -3,7 +3,7 @@ import ctypes
 from ctypes import wintypes
 import time
 
-from .automation_models import TransportError
+from .automation_models import NotDispatched, TransportError
 from .automation_discord import CHALLENGE, composer_target, command_target, command_text
 from .live_capture import make_capture
 from .window_capture import window_process
@@ -104,12 +104,28 @@ class WindowsDiscordDriver:
         self.title = title
         return frame
 
+    def _clear(self, cancelled):
+        """Select all of the focused message box and delete it. Never presses Enter."""
+        self._event(1, (0x11, 0, 0), cancelled)                      # Ctrl down
+        try:
+            self._event(1, (0x41, 0, 0), cancelled)                  # A
+            self._event(1, (0x41, 0, 2), lambda: False, release=True)
+        finally:
+            self._event(1, (0x11, 0, 2), lambda: False, release=True)
+        self._key(0x08, cancelled)                                   # Backspace
+
     def dispatch(self, command, cancelled):
-        frame = self._frame(cancelled)
+        # Until the first click nothing has reached Discord: a refusal here certainly sent nothing.
+        try:
+            frame = self._frame(cancelled)
+        except TransportError as error:
+            raise NotDispatched(str(error)) from error
         initial_boxes = frame.get('boxes', [])
         composer = composer_target(frame.get('original_boxes', initial_boxes), self.channel)
         if composer is None:
-            raise TransportError('An empty composer for the configured channel is not visible.')
+            # Discord hides the "Message @..." placeholder whenever the box holds anything, even a space.
+            raise NotDispatched('The message box placeholder is not visible: it may hold a draft (even a space '
+                                'or new line). Click it, clear it (Ctrl+A, Delete), then start again.')
         self._click(composer, cancelled)
         self._text(command, cancelled)
         # The picker is rendered asynchronously. No submit until an exact VF command row is seen.
@@ -126,19 +142,15 @@ class WindowsDiscordDriver:
             if target is not None:
                 break
         if target is None:
-            raise TransportError('VF slash-command picker could not be verified; command not submitted.')
-        self._click(target, cancelled)
-        confirmed = False
-        for _ in range(5):
-            time.sleep(0.2)
-            selected = self._frame(cancelled).get('boxes', [])
-            # Selection renders asynchronously too. Never repeat the selection click.
-            command_boxes = [b for b in selected if command_text(b['text']) == command.casefold()
-                             and abs((b['top'] + b['bottom']) / 2 - composer[1]) <= 2 * (b['bottom'] - b['top'])]
-            remaining = [b for b in selected if b not in command_boxes]
-            if len(command_boxes) == 1 and command_target(remaining, command, composer) is None:
-                confirmed = True
-                break
-        if not confirmed:
-            raise TransportError('Selected composer command could not be confirmed; command not submitted.')
+            # Enter was never pressed, so the game received nothing. Clear the typed draft for the next run.
+            try:
+                self._clear(cancelled)
+                note = 'the typed draft was cleared'
+            except TransportError:
+                note = 'clear the typed draft from the message box before starting again'
+            raise NotDispatched(f'VF slash-command picker could not be verified; command not submitted ({note}).')
+        # Keyboard selection followed by submission, as Discord's slash-command flow requires.
+        # Each key retains foreground/cancellation guards. Never click the picker command.
+        self._key(0x0D, cancelled)
+        time.sleep(0.2)
         self._key(0x0D, cancelled)

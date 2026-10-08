@@ -32,3 +32,12 @@ class LiveReviewRegressionTests(unittest.TestCase):
     def test_lost_level_number_is_the_only_remaining_fishing_problem(self):
         text = clean_ocr(REPLIES['20261007T161758.']['text'].splitlines(), 'regression')
         self.assertEqual(fishing_problems(text), ['Unrecognized line: LEVEL UP! You are'])
+
+    def test_buffs_glyphs_from_2026_10_08_read_cleanly(self):
+        self.assertEqual(reply_fields('buffs', REPLIES['20261008T004634.']['text']),
+                         {'username': 'epicmouse9925', 'cooldown_seconds': 3.5})
+
+    def test_header_dash_without_space_still_gives_a_baseline(self):
+        from src.automation_discord import stable_frame
+        frame = stable_frame(REPLIES['20261008T164024.']['text'].splitlines())
+        self.assertEqual([message['kind'] for message in frame['messages']], ['buffs', 'buffs'])
