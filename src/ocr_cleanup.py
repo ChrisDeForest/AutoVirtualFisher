@@ -57,6 +57,15 @@ def match_fish_name(name, reference):
     return reference[candidate]['name']
 
 
+def _garbled_button(line):
+    """A misread long button label ("ISh Agam" for "Fish Again"). Only labels of nine or more letters, at most
+    three letter edits, and never a line with digits: short labels are too close to real reply words."""
+    key = re.sub(r'^[^\w]+', '', line).casefold()
+    if re.search(r'\d', key) or len(key) > 20:
+        return False
+    return any(len(button) >= 9 and _name_distance(key, button.casefold()) <= 3 for button in BUTTONS)
+
+
 def _pet_names():
     try:
         return sorted(json.loads(PET_REFERENCE_PATH.read_text(encoding='utf-8'))['pets'], key=len, reverse=True)
@@ -110,6 +119,8 @@ def clean_ocr(lines: list[str], label: str, capture: bool = False) -> str:
         if in_tip:
             continue
         if re.fullmatch(r'[^\w]*\s*(' + '|'.join(map(re.escape, BUTTONS)) + ')', line):
+            continue
+        if _garbled_button(line):
             continue
         if MESSAGE_HEADER.fullmatch(line):
             header('Virtual Fisher', True, (TIME.search(line) or [None])[0])

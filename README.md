@@ -30,19 +30,20 @@ Optional `--trips` allows 1–25 confirmed trips and `--seconds` allows 1–900 
 omit them for continuous fishing. Ctrl+C stops the runner; input already sent cannot
 be undone. Do not manually invoke VF commands while it is running.
 
-Missing command-picker evidence, changed context, verification prompts, or
-uncertain replies stop dispatch. A failed entry may leave an unsent draft;
-inspect and clear it manually before restarting. An uncertain action pauses only
-its own run: the next start notes it once in Needs review (non-blocking) and
-fishes. To settle one without starting a run, use `--resolve ACTION_ID --outcome
-happened` or `--outcome not_sent`. Resolution cannot reconstruct lost fishing
-results; enter those by hand. Refusals before any input (wrong window, no reply
-on screen to compare against) stop the run but are never uncertain. Live journal, trips, and review items are stored separately
-under ignored `src/data/automation_live/`.
+The run is about progress, not a perfect logbook. A command whose outcome is
+unknown (no reply within 20 s, an unreadable result, a failed hand-over) is noted
+in Needs review without blocking; the run waits one full cooldown and carries on.
+Three unknown outcomes in a row stop the run. Verification prompts, a changed
+window or channel, and a message box that is not empty (Discord hides its
+`Message @...` placeholder when it holds anything) stop or pause it. A typed
+command whose picker cannot be verified is cleared and never submitted. Live
+journal, trips, and review items are stored separately under ignored
+`src/data/automation_live/`.
 
-Reply matching uses required startup values, own invocation and send times, with
-two stable captures; optional text changes do not break confirmation. Fishing
-results still require readable catch counts and XP, and uncertain delivery pauses.
+A reply is the newest message at the bottom of the chat: it must differ from the
+newest message before sending (or repeat it once more in a row), be invoked by
+you, be of the expected kind, and read the same twice. Nothing above it is
+compared, so scrolling and older OCR noise cannot stop a run.
 
 The current picker matcher requires an exact slash-command OCR line and an adjacent
 Virtual Fisher label. Entry focuses the empty composer, types the command, then
@@ -57,9 +58,7 @@ reread from a crop of its own line, prepared several ways (inverted and threshol
 for Tesseract); it is accepted only when every readable value agrees and either both
 engines or three Tesseract preparations read it. Otherwise the whole reply is reread
 and both engines must agree on all parsed profile/buffs values. A startup retry
-whose reply reads exactly like the previous one stops at once instead of resending. Nothing is installed automatically; unreadable fishing replies and
-exhausted startup retries stop the run. Missing replies or uncertain sends are never
-automatically resent.
+whose reply reads exactly like the previous one stops at once instead of resending. Nothing is installed automatically.
 
 This repo contains my personal project of completely automating the Discord bot "Virtual Fisher".
 
@@ -246,10 +245,10 @@ answers it, update state, and wait out the verified cooldown plus 0.5 s.
 - At most one command is unanswered at a time. Every command is journaled
   (`src/data/automation_sim/journal/`) before it is sent, and its hand-over and
   reply after.
-- A command whose outcome is unknown is never resent: no reply within 20 s, a
-  failed or unrecorded hand-over, a reply with no evidence of which command it
-  answers, or an unreadable result. The loop stops sending and the page asks
-  you what happened.
+- A command whose outcome is unknown (no reply within 20 s, a failed hand-over,
+  a reply with no evidence of which command it answers, or an unreadable result)
+  is noted in Needs review without blocking. The loop waits one cooldown and
+  carries on; three in a row stop the run.
 - After a crash, the next start rebuilds the state from the journal. Commands
   that were never sent are dropped, unfinished logbook saves are redone (each
   trip is saved once, keyed by its command), and commands that may have been

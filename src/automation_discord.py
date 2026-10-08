@@ -1,7 +1,8 @@
 """Pixel-observed Discord transport. Native input is opt-in and targets one foreground window.
 
-Correlation uses a pre-dispatch baseline, unambiguous overlap, a new own invocation/reply,
-and two stable captures. It cannot reconcile an action from a previous process automatically.
+A reply is the newest message at the bottom of the chat: one that differs from the newest message before
+sending (or repeats it once more), invoked by this account, of the expected kind, read the same twice.
+Nothing above the bottom message is compared, so scrolling and older OCR noise cannot block a run.
 Do not manually invoke VF commands while this adapter owns the command stream.
 """
 from datetime import datetime, timezone
@@ -11,7 +12,7 @@ import threading
 from secrets import token_hex
 
 from .automation_models import CapabilityError, ContextStatus, DispatchReceipt, NotDispatched, TransportError
-from .live_capture import align, capture_frame
+from .live_capture import capture_frame
 from .observation import Identity, Observation, VERIFIED, check_identity, recipients
 
 
@@ -53,6 +54,20 @@ def stable_frame(lines):
     return frame
 
 COMMANDS = {'refresh_profile': '/profile', 'refresh_buffs': '/buffs', 'fish': '/fish'}
+# Identical reads of a fishing reply with problems before it is delivered as it is.
+FISHING_REREADS = 2
+
+
+def _bottom(messages):
+    """(key, how many times it repeats in a row) of the newest message at the bottom, or None."""
+    if not messages:
+        return None
+    key, run = messages[-1]['key'], 0
+    for message in reversed(messages):
+        if message['key'] != key:
+            break
+        run += 1
+    return key, run
 CHALLENGE = re.compile(r'captcha|\bverify\b|verification|anti.bot', re.I)
 
 
@@ -176,23 +191,31 @@ class DiscordTransport:
             problem = self._check(before)
             if problem:
                 raise NotDispatched(problem)
-            baseline = stable_frame(before['lines'])
-            self.last_frame = baseline
-            if not baseline['messages']:
-                raise NotDispatched('No complete VF reply visible to establish a baseline.')
+            frame = stable_frame(before['lines'])
+            self.last_frame = frame
             if self.cancelled.is_set():
                 raise NotDispatched('Stopped before input.')
             try:
-                self.baseline, self.pending = baseline, intent
+                # Only the bottom of the chat matters: what was newest before sending.
+                self.baseline, self.pending = _bottom(frame['messages']), intent
                 self.sending_seen = False
                 self.candidate = None
+                self.rereads = 0
                 self.last_issue = None
                 self.driver.dispatch(COMMANDS[intent.kind], self.cancelled.is_set)
                 return DispatchReceipt(intent.action_id, self.utc().isoformat(), 'Native UI command submitted')
             except Exception as error:
-                # Even a partially typed command leaves the input state uncertain. Never repeat it automatically.
+                # Enter may or may not have been pressed. Not repeated; the controller decides when to move on.
                 self.blocked = f'Dispatch could not be confirmed: {error}'
                 raise TransportError(self.blocked) from error
+
+    def forget(self):
+        """Stop waiting for the pending command's reply (the controller has moved on without it)."""
+        with self.lock:
+            self.pending = self.baseline = self.candidate = None
+            self.blocked = None
+            self.sending_seen = False
+            self.last_issue = None
 
     def poll(self):
         if self.pending is None or self.blocked or self.cancelled.is_set():
@@ -202,7 +225,9 @@ class DiscordTransport:
                 capture = self.driver.capture()
                 problem = self._check(capture)
                 if problem:
-                    self.blocked = problem
+                    # Reported by inspect_context while it lasts; nothing is blocked for later.
+                    self.candidate = None
+                    self.last_issue = problem
                     return []
                 lines = capture['lines']
                 invocations = [index for index, line in enumerate(lines) if re.match(r'^\S+ used\b', line)]
@@ -221,45 +246,40 @@ class DiscordTransport:
                 self.last_lines = list(capture['lines'])
                 frame = stable_frame(capture['lines'])
                 self.last_frame = frame
-                placement = align(self.baseline, frame)
-                if placement['status'] != 'certain':
+                # The reply is the newest message at the bottom of the chat: new when it differs from what was
+                # newest before sending, or when the same reply now appears one more time in a row.
+                bottom = _bottom(frame['messages'])
+                if bottom is None or bottom == self.baseline or (
+                        self.baseline is not None and bottom[0] == self.baseline[0] and bottom[1] < self.baseline[1]):
                     self.candidate = None
-                    self.last_issue = 'Reply placement uncertain: ' + placement['reason']
-                    if placement['status'] == 'ambiguous':
-                        self.blocked = self.last_issue
+                    self.last_issue = f'Waiting for the reply to {COMMANDS[self.pending.kind]}.'
+                    return []
+                message = frame['messages'][-1]
+                status, recipient, reason = check_identity(self.identity, recipients(
+                    message['kind'], message['lines'], message.get('invoked_by')))
+                expected = message['kind'] == self.pending.expected_reply_kind
+                cooldown = self.pending.kind == 'fish' and any(
+                    line.startswith('You must wait') for line in message['lines'])
+                # An own invocation is required in addition to recipient identity.
+                if not (status == VERIFIED and message.get('invoked_by') == self.identity.display_name
+                        and (expected or cooldown)):
+                    self.candidate = None
+                    self.last_issue = 'The newest message is not the reply to this command yet.'
                     return []
                 self.last_issue = None
-                fresh = frame['messages'][placement['start']:]
-                matches = []
-                for message in fresh:
-                    status, recipient, reason = check_identity(self.identity, recipients(
-                        message['kind'], message['lines'], message.get('invoked_by')))
-                    expected = message['kind'] == self.pending.expected_reply_kind
-                    cooldown = self.pending.kind == 'fish' and any(
-                        line.startswith('You must wait') for line in message['lines'])
-                    # An invocation is required in addition to recipient identity for UI correlation.
-                    if status == VERIFIED and message.get('invoked_by') == self.identity.display_name \
-                            and (expected or cooldown):
-                        matches.append((message, recipient))
-                if len(matches) > 1:
-                    self.blocked = 'Multiple own replies after dispatch; correlation ambiguous.'
-                    return []
-                if not matches:
-                    self.last_issue = 'No new reply with the expected kind, recipient and own invocation was confirmed.'
-                    self.candidate = None
-                    return []
-                message, recipient = matches[0]
+                problems = []
                 if message['kind'] == 'fishing' and not cooldown:
                     from .live_capture import fishing_problems
                     problems = fishing_problems('\n'.join(message['lines']))
-                    if problems:
-                        self.candidate = None
-                        self.last_issue = 'Rereading incomplete fishing reply: ' + '; '.join(problems)
-                        return []
                 evidence = (message['key'], message.get('invoked_by'), message.get('sent')) if message['kind'] in ('profile', 'buffs') else (
                     message['key'], tuple(message['lines']), message.get('sent'))
                 if self.candidate != evidence:
-                    self.candidate = evidence
+                    self.candidate, self.rereads = evidence, 0
+                    return []
+                if problems and self.rereads < FISHING_REREADS:
+                    # A reply may still be rendering. After a few identical reads it is delivered as it is.
+                    self.rereads += 1
+                    self.last_issue = 'Rereading incomplete fishing reply: ' + '; '.join(problems)
                     return []
                 action = self.pending
                 stamp = self.utc().isoformat()
@@ -269,5 +289,6 @@ class DiscordTransport:
                 self.pending = self.baseline = self.candidate = None
                 return [observation]
             except Exception as error:
-                self.blocked = f'Reply capture failed: {error}'
+                self.candidate = None
+                self.last_issue = f'Reply capture failed: {error}'
                 return []

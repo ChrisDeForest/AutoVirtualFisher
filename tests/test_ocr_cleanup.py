@@ -145,3 +145,18 @@ class HeaderDashTests(unittest.TestCase):
         from src.ocr_cleanup import MESSAGE_HEADER
         self.assertTrue(MESSAGE_HEADER.fullmatch('Virtual Fisher— 8:46 PM'))
         self.assertFalse(MESSAGE_HEADER.fullmatch('Virtual Fisher [fish'))
+
+
+class GarbledButtonTests(unittest.TestCase):
+    def test_garbled_long_button_label_is_dropped(self):
+        # Observed 2026-10-08: the "Fish Again" button under a fishing reply read as "ISh Agam".
+        from src.ocr_cleanup import clean_ocr
+        lines = ['You caught:', '6 Salmon', '6 Cod', '+89 xp', 'Global boost by Someone', 'ISh Agam']
+        self.assertEqual(clean_ocr(lines, 't').splitlines()[-1], 'Global boost by Someone')
+
+    def test_lines_that_are_not_close_to_a_button_are_kept(self):
+        # A catch line that lost its count must still reach review, never be dropped as chrome.
+        from src.ocr_cleanup import clean_ocr
+        for line in ('Salmon', 'Fish', 'Reward:', 'Exotic Fish', 'Special'):
+            with self.subTest(line=line):
+                self.assertIn(line, clean_ocr(['You caught:', line], 't').splitlines())

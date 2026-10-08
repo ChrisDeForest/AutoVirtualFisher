@@ -41,3 +41,8 @@ class LiveReviewRegressionTests(unittest.TestCase):
         from src.automation_discord import stable_frame
         frame = stable_frame(REPLIES['20261008T164024.']['text'].splitlines())
         self.assertEqual([message['kind'] for message in frame['messages']], ['buffs', 'buffs'])
+
+    def test_garbled_fish_again_button_is_not_part_of_the_reply(self):
+        from src.automation_discord import stable_frame
+        reply = stable_frame(REPLIES['20261008T170125.']['text'].splitlines())['messages'][-1]
+        self.assertEqual(fishing_problems('\n'.join(reply['lines'])), [])

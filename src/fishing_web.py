@@ -74,6 +74,7 @@ def _batch(tally):
         ('Fishing XP', _per_trip(tally['fishing_xp'], tally['fishing_xp'] / trips if trips else None)),
         ('Finds', _counts(tally['finds'])),
         ('Chest contents', _counts(tally['chest_contents'])),
+        ('Chest money', f'${tally.get("chest_money", 0):,}'),
         ('Charm levels', _counts(tally['charm_levels'])),
         ('Level-ups', f'{level_ups} (+${tally["level_up_money"]:,})' if level_ups else 'None'),
         ('Unlocks', ', '.join(tally['unlocks']) or 'None'),
@@ -235,6 +236,7 @@ def fishing_card(account, root):
         ('Fishing XP', _per_trip(totals['fishing_xp'], totals['xp_per_trip'])),
         ('Finds per 100 trips', _counts(totals['finds_per_100_trips'], rate)),
         ('Chest contents', _counts(totals['chest_contents'])),
+        ('Chest money', f'${totals.get("chest_money", 0):,}'),
         ('Quests completed', f'{totals["quests_completed"]:,} (+${totals["quest_money"]:,}, +{totals["quest_xp"]:,} XP)'),
         ('Level-ups', f'{totals["level_ups"]:,} (+${totals["level_up_money"]:,})'),
     ]) + f'<p class="note">{escape(OVERLAP_NOTE)}</p>')

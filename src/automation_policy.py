@@ -3,6 +3,7 @@ from datetime import datetime
 
 from .automation_models import EXPECTED_REPLY, ActionIntent, AutomationConfig
 from .automation_state import AutomationState
+from .startup_fields import startup_problems
 
 
 def _intent(state: AutomationState, kind: str, now_utc: datetime, *preconditions) -> ActionIntent:
@@ -21,7 +22,7 @@ def next_action(state: AutomationState, config: AutomationConfig, now_utc: datet
         return None
     if config.max_trips is not None and state.trips >= config.max_trips:
         return None
-    if state.profile is None:
+    if startup_problems(state, 'profile'):
         choice = _intent(state, 'refresh_profile', now_utc, 'no verified profile yet')
     elif state.cooldown_seconds is None:
         choice = _intent(state, 'refresh_buffs', now_utc, 'fishing cooldown not observed yet')

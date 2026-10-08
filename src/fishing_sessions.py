@@ -75,13 +75,13 @@ def fishing_totals(account_name: str, root: Path = DEFAULT_SESSION_ROOT) -> dict
     sessions, warnings = load_sessions(account_name, root)
     totals = {'sessions': len(sessions), 'trips': 0, 'boosted_trips': 0, 'catches': {}, 'fishing_xp': 0,
               'finds': {}, 'chest_contents': {}, 'quests_completed': 0, 'quest_money': 0, 'quest_xp': 0,
-              'level_ups': 0, 'level_up_money': 0, 'warnings': warnings}
+              'level_ups': 0, 'level_up_money': 0, 'chest_money': 0, 'warnings': warnings}
     for session in sessions:
         tally = session['tally']
         if tally.get('schema_version') != FISHING_SCHEMA_VERSION:
             warnings.append(f'{session.get("session_id", "session")}: unsupported tally version')
             continue
-        for field in ('trips', 'boosted_trips', 'fishing_xp', 'level_up_money'):
+        for field in ('trips', 'boosted_trips', 'fishing_xp', 'level_up_money', 'chest_money'):
             totals[field] += tally.get(field, 0)
         for field in ('catches', 'finds', 'chest_contents'):
             _merge(totals[field], tally.get(field))

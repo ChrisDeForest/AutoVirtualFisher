@@ -79,6 +79,26 @@ def fishing_problems(text: str) -> list[str]:
     return reasons
 
 
+def join_boost_caption(boxes):
+    """Join a split boost caption only when its text shares the same visual row."""
+    result, consumed = [], set()
+    for index, box in enumerate(boxes):
+        if index in consumed:
+            continue
+        if box['text'].strip() == 'Global boost by':
+            height = max(1, box['bottom'] - box['top'])
+            neighbors = [(i, other) for i, other in enumerate(boxes) if i != index
+                         and box['right'] <= other['left'] <= box['right'] + 3 * height
+                         and abs((other['top'] + other['bottom'] - box['top'] - box['bottom']) / 2)
+                         <= height / 2]
+            if len(neighbors) == 1:
+                i, other = neighbors[0]
+                consumed.add(i)
+                box = {**box, 'text': box['text'] + ' ' + other['text'], 'right': other['right']}
+        result.append(box)
+    return result
+
+
 def chat_column(boxes: list[dict]) -> tuple[list[dict], float | None, float | None]:
     """Return (boxes in Virtual Fisher's message column in reading order, text left edge, text height)."""
     anchors = [box for box in boxes if _kind(_clean(box['text']))]
@@ -190,13 +210,21 @@ def _understood(kind, lines):
 
 def _same(older, newer):
     """Two readings may be the same message: same understood content, and no conflicting send time."""
-    return (older['key'] == newer['key']
+    if older.get('position_key') is not None and newer.get('position_key') is not None:
+        content_matches = older['position_key'] == newer['position_key']
+        if older.get('invoked_by') and newer.get('invoked_by') and older['invoked_by'] != newer['invoked_by']:
+            return False
+    else:
+        content_matches = older['key'] == newer['key']
+    return (content_matches
             and not (older.get('sent') and newer.get('sent') and older['sent'] != newer['sent']))
 
 
 def _could_be_cut_off(top, above):
     """Whether the current top message, skipped as cut off, can be what scrolled into that place."""
-    if top['key'] == above['key'] or not top.get('lines') or not above.get('lines'):
+    if top.get('sent') and above.get('sent') and top['sent'] != above['sent']:
+        return False
+    if _same(top, above) or not top.get('lines') or not above.get('lines'):
         return True
     return set(top['lines']) <= set(above['lines'])
 
@@ -310,7 +338,7 @@ def make_capture(keep_dir: Path | None = None, keep_limit: int = KEEP_LIMIT, win
             if info['blank']:
                 return {'status': 'blank', 'lines': []}
             boxes = read_image_boxes(image)
-            input_boxes = read_region_boxes(image, (0, info['height'] * .75, info['width'], info['height']), 2) if input_region else boxes
+            input_boxes = read_region_boxes(image, (0, info['height'] * .5, info['width'], info['height']), 2) if input_region else boxes
             column, edge, height = chat_column(boxes)
 
             def reread(left, top, right, bottom):
@@ -320,6 +348,10 @@ def make_capture(keep_dir: Path | None = None, keep_limit: int = KEEP_LIMIT, win
             if column:
                 column = repair_counts(column, edge, height, reread)
             lines = [box['text'] for box in column]
+            if input_region and column:
+                from .reply_ocr import repair_reply_regions
+                controls = read_region_boxes(image, (0, info['height'] * .5, info['width'], info['height']), 3)
+                lines = repair_reply_regions(join_boost_caption(column), image, info['height'], controls)
             if keep_dir is not None and lines != last_kept['lines']:
                 _keep(image, Path(keep_dir), info, boxes, lines, bmp_to_png, keep_limit)
                 last_kept['lines'] = lines

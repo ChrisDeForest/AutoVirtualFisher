@@ -220,11 +220,50 @@ class DiscordTests(unittest.TestCase):
         self.transport.poll()
         self.assertEqual(self.transport.poll(), [])
 
-    def test_identical_ambiguous_replacement_pauses(self):
+    def test_unchanged_identical_replies_neither_acknowledge_nor_pause(self):
         self.driver.lines = fish(1, 1, 10) * 2
         self.send()
-        self.transport.poll()
-        self.assertFalse(self.transport.inspect_context().ok)
+        self.assertEqual(self.transport.poll(), [])
+        self.assertEqual(self.transport.poll(), [])
+        self.assertTrue(self.transport.inspect_context().ok)
+
+    def test_repeated_identical_reply_at_the_bottom_is_new(self):
+        from tests.test_live_capture import BUFFS
+        self.driver.lines = list(BUFFS)
+        self.intent = ActionIntent('b1', 'refresh_buffs', self.transport.context_id, self.now.isoformat(), 'buffs')
+        self.send()
+        self.driver.lines = BUFFS + BUFFS
+        self.assertEqual(self.transport.poll(), [])
+        self.assertEqual([reply.correlation for reply in self.transport.poll()], ['b1'])
+
+    def test_reply_found_after_old_messages_scroll_off(self):
+        # Observed 2026-10-08 17:06: the oldest reply scrolled off and the title bar read as a lone
+        # "Virtual fisher" line; the new reply at the bottom was readable the whole time.
+        from tests.test_live_capture import PROFILE, BUFFS
+        self.driver.lines = fish(6, 10, 131) + PROFILE + BUFFS
+        self.send()
+        self.driver.lines = ['Virtual fisher', "'fish", 'Reward:', '+370 xp'] + PROFILE + BUFFS + fish(4, 6, 83)
+        self.assertEqual(self.transport.poll(), [])
+        [reply] = self.transport.poll()
+        self.assertIn('4 Salmon', reply.text)
+
+    def test_persistently_unreadable_fishing_reply_is_delivered_after_rereads(self):
+        self.send()
+        self.driver.lines += fish(2, 4, 117, 'LEVEL UP! You are')
+        replies = []
+        for _ in range(4):
+            replies += self.transport.poll()
+        self.assertEqual(len(replies), 1, 'the controller decides what an unreadable result means')
+
+    def test_forget_lets_the_run_move_on(self):
+        def fail(command, cancelled):
+            raise OSError('input unavailable')
+        self.driver.dispatch = fail
+        with self.assertRaises(TransportError): self.send()
+        self.transport.forget()
+        self.assertTrue(self.transport.inspect_context().ok)
+        self.driver.dispatch = Driver().dispatch
+        self.assertEqual(self.transport.send(self.intent).action_id, 'a1')
 
     def test_second_send_and_stopped_send_rejected(self):
         self.send()
@@ -239,15 +278,13 @@ class DiscordTests(unittest.TestCase):
         with self.assertRaises(CapabilityError):
             self.transport.send(replace(self.intent, kind='sell'))
 
-    def test_missing_baseline_rejected(self):
+    def test_empty_chat_still_sends_and_finds_the_first_reply(self):
         self.driver.lines = ['epicmouse used', 'profile']
-        with self.assertRaises(NotDispatched): self.send()
-        self.assertEqual(self.driver.sent, [])
-        # Nothing was typed: the transport stays usable, and the screen it saw is kept for diagnosis.
-        self.assertTrue(self.transport.inspect_context().ok)
+        self.send()
         self.assertEqual(self.transport.last_lines, ['epicmouse used', 'profile'])
         self.driver.lines = fish(1, 1, 10)
-        self.assertEqual(self.transport.send(self.intent).action_id, 'a1')
+        self.assertEqual(self.transport.poll(), [])
+        self.assertEqual(len(self.transport.poll()), 1)
 
     def test_partial_dispatch_failure_blocks_another_send(self):
         def fail(command, cancelled):

@@ -125,24 +125,6 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(self.saved_trips(), 4)
         self.assertEqual(self.sim.totals['trips'], 4)
 
-    def test_reply_without_correlation_evidence_is_not_acknowledged(self):
-        self.sim.script = {2: 'uncorrelated'}
-        self.make().start()
-        self.run_for(40)
-        status = self.controller.status()
-        self.assertEqual(status['phase'], 'NEEDS_REVIEW')
-        self.assertEqual(len(self.fish_sends()), 1, 'nothing more is sent while the outcome is uncertain')
-        self.assertEqual(self.saved_trips(), 0)
-
-    def test_unreadable_result_pauses_and_goes_to_review(self):
-        self.sim.script = {3: 'unreadable'}
-        self.make().start()
-        self.run_for(40)
-        self.assertEqual(self.controller.status()['phase'], 'NEEDS_REVIEW')
-        self.assertEqual(len(self.fish_sends()), 2)
-        self.assertEqual(self.saved_trips(), 1)
-        self.assertEqual([item['kind'] for item in list_items(self.review)[0]], ['fishing'])
-
     def test_unreadable_refresh_is_not_a_successful_bootstrap(self):
         for index, kind in ((0, 'profile'), (1, 'buffs')):
             with self.subTest(kind=kind):
@@ -202,12 +184,14 @@ class ControllerTests(unittest.TestCase):
         self.run_for(20)
         self.assertEqual(len(self.sim.sent), sends)
 
-    def test_missing_startup_reply_is_not_retried(self):
+    def test_missing_startup_reply_is_asked_again_after_the_timeout(self):
         self.sim.script = {0: 'missing'}
-        self.make().start()
+        self.make(config=replace(CONFIG, max_trips=1)).start()
         self.run_for(40)
-        self.assertEqual(len(self.sim.sent), 1)
-        self.assertEqual(self.controller.status()['phase'], 'NEEDS_REVIEW')
+        kinds = [intent.kind for _, intent in self.sim.sent]
+        self.assertEqual(kinds[:3], ['refresh_profile', 'refresh_profile', 'refresh_buffs'])
+        self.assertGreaterEqual(self.sim.sent[1][0] - self.sim.sent[0][0], 20)
+        self.assertEqual(self.saved_trips(), 1)
 
     def test_discord_sending_wait_is_bounded_and_never_resends(self):
         self.sim.script = {0: 'missing'}
@@ -217,8 +201,7 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(self.controller.status()['phase'], 'WAITING_DELIVERY')
         self.assertEqual(len(self.sim.sent), 1)
         self.run_for(35)
-        self.assertEqual(self.controller.status()['phase'], 'NEEDS_REVIEW')
-        self.assertEqual(len(self.sim.sent), 1)
+        self.assertGreaterEqual(self.sim.sent[1][0] - self.sim.sent[0][0], 60, 'waits the full delivery bound')
 
     def test_timeout_preserves_transport_failure_reason(self):
         self.sim.script = {0: 'missing'}
@@ -274,35 +257,50 @@ class ControllerTests(unittest.TestCase):
 
     # --- failures: never a blind resend ---
 
-    def test_missing_reply_times_out_into_uncertain_and_is_not_resent(self):
-        self.sim.script = {2: 'missing'}
+    # --- unknown outcomes: noted, never stop the run ---
+
+    def assert_moves_on(self, outcome):
+        self.sim.script = {2: outcome}
         self.make().start()
-        self.run_for(19)
-        self.assertEqual(self.controller.status()['phase'], 'WAITING_REPLY')
         self.run_for(60)
         status = self.controller.status()
-        self.assertEqual(status['phase'], 'NEEDS_REVIEW')
-        self.assertIn('20', status['reason'])
-        self.assertEqual(len(self.fish_sends()), 1)
-        [action] = status['unresolved']
-        self.controller.resolve(action, 'happened')
-        self.run_for(10)
-        self.assertGreater(len(self.fish_sends()), 1, 'fishing resumes once a person has resolved it')
+        self.assertNotIn(status['phase'], ('NEEDS_REVIEW', 'FAILED'))
+        sends = self.fish_sends()
+        self.assertGreater(len(sends), 2, 'fishing continues')
+        self.assertGreaterEqual(sends[1] - sends[0], 3.5, 'the next fish waits at least a cooldown')
+        self.assertTrue(all(not item['blocks_actions'] for item in list_items(self.review)[0]))
+        return status
 
-    def test_uncertain_command_blocks_only_its_own_run(self):
-        self.sim.script = {2: 'missing'}
+    def test_missing_reply_is_noted_and_fishing_continues(self):
+        self.assert_moves_on('missing')
+        self.assertTrue(list_items(self.review)[0])
+
+    def test_unreadable_result_is_noted_and_fishing_continues(self):
+        self.assert_moves_on('unreadable')
+        self.assertIn('fishing', [item['kind'] for item in list_items(self.review)[0]])
+
+    def test_reply_without_correlation_is_noted_and_fishing_continues(self):
+        self.assert_moves_on('uncorrelated')
+
+    def test_send_failure_is_noted_and_fishing_continues(self):
+        self.assert_moves_on('send_error')
+
+    def test_three_unknown_outcomes_in_a_row_stop_the_run(self):
+        self.sim.script = {2: 'missing', 3: 'missing', 4: 'missing'}
         self.make().start()
-        self.run_for(40)
-        self.assertEqual(self.controller.status()['phase'], 'NEEDS_REVIEW')
-        self.controller.stop()
-        for _ in range(2):
-            self.make(config=replace(CONFIG, max_trips=1)).start()
-            self.run_for(20)
-            self.assertNotEqual(self.controller.status()['phase'], 'NEEDS_REVIEW')
-            self.controller.stop()
-        self.assertEqual(self.saved_trips(), 2)
-        notes = [item for item in list_items(self.review)[0] if 'earlier run' in ' '.join(item['reasons'])]
-        self.assertEqual(len(notes), 1, 'noted once, not on every later start')
+        self.run_for(200)
+        status = self.controller.status()
+        self.assertEqual(status['phase'], 'FAILED')
+        self.assertIn('3 commands in a row', status['reason'])
+        self.assertEqual(len(self.fish_sends()), 3)
+
+    def test_noted_outcome_is_not_carried_into_the_next_run(self):
+        self.sim.script = {2: 'missing'}
+        self.make(config=replace(CONFIG, max_trips=1)).start()
+        self.run_for(60)
+        self.make(config=replace(CONFIG, max_trips=1)).start()
+        self.run_for(20)
+        self.assertFalse([item for item in list_items(self.review)[0] if 'earlier run' in ' '.join(item['reasons'])])
 
     def test_crash_before_send_is_forgotten_safely(self):
         self.make(journal=FaultyJournal(self.journal_root, on='dispatching', nth=3)).start()
@@ -389,13 +387,6 @@ class ControllerTests(unittest.TestCase):
         self.run_for(5)
         self.assertNotEqual(self.controller.status()['phase'], 'NEEDS_REVIEW')
         self.assertTrue(self.sim.sent, 'a later run is not blocked by a command that was never typed')
-
-    def test_send_failure_is_uncertain_not_retried(self):
-        self.sim.script = {2: 'send_error'}
-        self.make().start()
-        self.run_for(30)
-        self.assertEqual(len(self.fish_sends()), 1)
-        self.assertEqual(self.controller.status()['phase'], 'NEEDS_REVIEW')
 
     def test_stop_during_a_blocked_send_prevents_later_dispatch(self):
         entered, release = threading.Event(), threading.Event()

@@ -64,6 +64,46 @@ def read_region_boxes(path: Path, region: tuple, scale: float = 2) -> list[dict]
     return asyncio.run(_read(path, scale, region))
 
 
+async def _save_region(path, output, region, scale, nearest=False):
+    from winrt.windows.graphics.imaging import (BitmapAlphaMode, BitmapBounds, BitmapDecoder,
+        BitmapEncoder, BitmapInterpolationMode, BitmapPixelFormat, BitmapTransform,
+        ColorManagementMode, ExifOrientationMode)
+    from winrt.windows.storage import FileAccessMode, StorageFile
+    source = await StorageFile.get_file_from_path_async(str(Path(path).resolve()))
+    source_stream = await source.open_async(FileAccessMode.READ)
+    destination_stream = None
+    try:
+        decoder = await BitmapDecoder.create_async(source_stream)
+        left, top, right, bottom = region
+        left, top = max(0, int(left)), max(0, int(top))
+        right, bottom = min(decoder.pixel_width, int(right)), min(decoder.pixel_height, int(bottom))
+        if right <= left or bottom <= top:
+            raise ValueError('Empty OCR region.')
+        transform = BitmapTransform()
+        transform.scaled_width, transform.scaled_height = int(decoder.pixel_width * scale), int(decoder.pixel_height * scale)
+        transform.interpolation_mode = BitmapInterpolationMode.NEAREST_NEIGHBOR if nearest else BitmapInterpolationMode.FANT
+        transform.bounds = BitmapBounds(int(left * scale), int(top * scale),
+                                        int((right-left) * scale), int((bottom-top) * scale))
+        bitmap = await decoder.get_software_bitmap_transformed_async(
+            BitmapPixelFormat.BGRA8, BitmapAlphaMode.PREMULTIPLIED, transform,
+            ExifOrientationMode.IGNORE_EXIF_ORIENTATION, ColorManagementMode.DO_NOT_COLOR_MANAGE)
+        destination = await StorageFile.get_file_from_path_async(str(Path(output).resolve()))
+        destination_stream = await destination.open_async(FileAccessMode.READ_WRITE)
+        encoder = await BitmapEncoder.create_async(BitmapEncoder.png_encoder_id, destination_stream)
+        encoder.set_software_bitmap(bitmap)
+        await encoder.flush_async()
+        bitmap.close()
+    finally:
+        if destination_stream is not None:
+            destination_stream.close()
+        source_stream.close()
+
+
+def save_region(path, output, region, scale=3, nearest=False):
+    """Write a cropped, enlarged image for an independent local OCR engine."""
+    asyncio.run(_save_region(path, output, region, scale, nearest))
+
+
 def read_region_lines(path: Path, left: float, top: float, right: float, bottom: float,
                       scale: float = 2) -> list[str]:
     """OCR one rectangle of an image, enlarged by `scale`, and return its text lines in reading order."""

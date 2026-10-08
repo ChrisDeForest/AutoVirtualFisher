@@ -10,7 +10,7 @@ from src.observation import Observation
 NOW = datetime(2026, 10, 6, 12, tzinfo=timezone.utc)
 CONFIG = AutomationConfig(account='sim', username='sim0001', context_id='sim:dm')
 READY = AutomationState(run_id='run', account='sim', username='sim0001', context_id='sim:dm', context_ok=True,
-                        profile={'account_name': 'sim'}, profile_observed_at=NOW.isoformat(), cooldown_seconds=3.5)
+                        profile={'account_name': 'sim', 'balance': 50, 'level': 30}, profile_observed_at=NOW.isoformat(), cooldown_seconds=3.5)
 
 
 def seen(kind, text, status='verified', observation_id='o1', context_id='sim:dm'):

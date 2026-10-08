@@ -4,7 +4,7 @@ This is separate from the logbook. A snapshot's save time is not evidence that i
 section counts as fresh only when it was observed, confirmed as the configured player's, and is recent enough.
 Pasted (user-attributed) and version 1 snapshots have no observation time and are unknown here.
 """
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, replace, field
 from datetime import datetime
 
 from .automation_models import ActionIntent
@@ -117,6 +117,7 @@ class AutomationState:
     trips: int = 0
     sequence: int = 0
     applied: frozenset = frozenset()
+    startup_observed_at: dict = field(default_factory=dict)
 
 
 def refresh_problems(kind: str | None, text: str) -> list[str]:

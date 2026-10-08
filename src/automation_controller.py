@@ -1,10 +1,10 @@
 """Run the fishing loop: choose an action, journal it, send it, confirm its reply, update state, wait.
 
-At most one command is unresolved at a time. Every command is journaled before it is handed over, and its
-hand-over and reply after. A command whose outcome is not known (no reply in time, a failed or unrecorded
-hand-over, a reply without evidence of which command it answers, an unreadable fishing result) is never resent: it
-becomes uncertain and this run stops sending until a person resolves it. A later run is never blocked by it:
-start() notes an earlier run's uncertain commands in Needs review and still counts any reply to them it sees. Confirmed read-only startup replies
+At most one command is pending at a time. Every command is journaled before it is handed over, and its
+hand-over and reply after. A command whose outcome is not known (no reply in time, a failed hand-over, a reply
+without evidence of which command it answers, an unreadable fishing result) is noted in Needs review without
+blocking; the run waits one cooldown and carries on, and UNKNOWN_LIMIT in a row stop it. A later run is never
+blocked by an earlier one. Confirmed read-only startup replies
 that fail OCR are retried up to three attempts, with a delay, unless a retry reads exactly as the last one did
 (the same pixels give the same misread); they never establish state until valid.
 """
@@ -31,6 +31,8 @@ COOLDOWN_REPLY = re.compile(r'You must wait ([\d.]+) seconds? before fishing aga
 RESOLUTIONS = ('happened', 'not_sent')
 STARTUP_ATTEMPTS = 3
 STARTUP_RETRY_DELAY = 2.0
+# Unknown outcomes in a row (no reply, unreadable, failed hand-over) before a run gives up.
+UNKNOWN_LIMIT = 3
 
 
 def _iso(moment: datetime) -> str:
@@ -69,6 +71,7 @@ class AutomationController:
         self.startup_problems = {}
         self.startup_texts = {}        # command -> the text of its last unreadable reply
         self.startup_retry_at = float('-inf')
+        self.unknown_streak = 0
 
     # --- run control ---
 
@@ -87,6 +90,7 @@ class AutomationController:
             self.stop_event = threading.Event()
             self.running, self.failed, self.started_at = True, None, self.monotonic()
             self.startup_failures, self.startup_problems, self.startup_texts = {}, {}, {}
+            self.unknown_streak = 0
             self.startup_retry_at = float('-inf')
             self.acknowledged = {action for action, info in recovered['actions'].items()
                                  if info['status'] in ('acknowledged', 'projected')}
@@ -207,9 +211,10 @@ class AutomationController:
                                      timeout=timeout)
                 if now - self.sent_at[0] > timeout:
                     detail = context.reason
-                    self._uncertain(self.state.pending.action_id,
-                                    f'No confirmed reply within {timeout:g} s; not resent.'
-                                    + (f' {detail}' if detail else ''))
+                    self._move_on(self.state.pending, f'No confirmed reply within {timeout:g} s.'
+                                  + (f' {detail}' if detail else ''))
+                    if not self.running or self.failed:
+                        return
                 else:
                     self.phase = 'WAITING_DELIVERY' if sending_seen else 'WAITING_REPLY'
                     self.reason = ('Discord displayed Sending command; retrying reply capture without resending.'
@@ -270,9 +275,7 @@ class AutomationController:
                 self.phase, self.reason = 'FAILED', failure[1]
                 return
             if failure:
-                self._safe_event('uncertain', intent.action_id, reason=failure[1])
-                self.unresolved[intent.action_id] = failure[1]
-                self._sync_uncertain()
+                self._move_on(intent, failure[1])
                 return
             try:
                 self._event('dispatched', intent.action_id, sent_at=receipt.sent_at, detail=receipt.detail)
@@ -301,7 +304,7 @@ class AutomationController:
             if pending is not None and observation.kind == pending.expected_reply_kind \
                     and observation.observed_at >= self.sent_at[1]:
                 # It looks like the answer, but nothing ties it to this command (it could be an older one).
-                self._uncertain(pending.action_id, 'A reply arrived without evidence of which command it answers.')
+                self._move_on(pending, 'A reply arrived without evidence of which command it answers.')
             return
         if correlation in self.acknowledged:
             return
@@ -344,6 +347,7 @@ class AutomationController:
             self._sync_uncertain()
             return self._journal_failed(f'Could not record the reply to {action_id}: {error}')
         self.acknowledged.add(action_id)
+        self.unknown_streak = 0
         self.last_result = {'action_id': action_id, 'result': result, 'at': observation.observed_at}
         now = self.monotonic()
         if result == 'cooldown':
@@ -378,12 +382,14 @@ class AutomationController:
             self.startup_retry_at = float('-inf')
         elif result == 'unreadable':
             reasons = fishing_problems(observation.text)
+            # The trip happened; only its catch could not be read. Noted, and the run carries on.
             add_item(self.roots['review'], self.config.account, 'fishing', observation.text,
-                     ['Automation could not read this result exactly; enter the trip by hand.'] + reasons,
-                     identity_status=observation.identity_status, observation_id=observation.observation_id)
-            self.unresolved[action_id] = 'Its fishing result could not be read exactly (see Needs review).'
-            self._safe_event('uncertain', action_id, reason=self.unresolved[action_id])
-            self._sync_uncertain()
+                     ['Automation could not read this result exactly; it was not added to the logbook.'] + reasons,
+                     identity_status=observation.identity_status, observation_id=observation.observation_id,
+                     blocks_actions=False)
+            self.last_trip_at = self.sent_at[0] if this_run else now
+            if this_run:
+                self.state = replace(self.state, trips=self.state.trips + 1)
         elif result == 'trip':
             self.total_trips += 1
             # A reconciled trip's hand-over time is not known to this run; when it was seen is a safe bound.
@@ -413,6 +419,31 @@ class AutomationController:
             self._event(kind, action_id, **fields)
         except OSError as error:
             self._journal_failed(f'Could not record {kind} for {action_id}: {error}')
+
+    def _move_on(self, intent, reason):
+        """An unknown outcome is noted in Needs review (non-blocking) and settled in the journal. The run waits a
+        full cooldown, so a command that did reach the game is not followed too soon, then carries on."""
+        self.state = replace(self.state, pending=None)
+        forget = getattr(self.transport, 'forget', None)
+        if forget is not None:
+            forget()
+        self._safe_event('resolved', intent.action_id, outcome='unknown', reason=reason)
+        add_item(self.roots['review'], self.config.account, 'automation', f'{intent.kind}: {reason}',
+                 [f'This {intent.kind} may or may not have reached the game; the run carried on.', reason],
+                 blocks_actions=False)
+        self.last_result = {'action_id': intent.action_id, 'result': 'unknown', 'at': _iso(self.utc())}
+        self.unknown_streak += 1
+        if self.unknown_streak >= UNKNOWN_LIMIT:
+            stopped = f'{UNKNOWN_LIMIT} commands in a row had no confirmed outcome, so the run stopped. Last: {reason}'
+            try:
+                self._finish(stopped)
+            except OSError:
+                self.running = False
+            self.failed = stopped
+            self.phase, self.reason = 'FAILED', stopped
+            return
+        self.ready_at = max(self.ready_at, self.monotonic() + (self.state.cooldown_seconds or 0)
+                            + self.config.cooldown_margin)
 
     def _uncertain(self, action_id, reason):
         self.state = replace(self.state, pending=None)
