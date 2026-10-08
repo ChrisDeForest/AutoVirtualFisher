@@ -19,7 +19,8 @@ from .automation_controller import AutomationController
 from .automation_journal import AutomationJournal
 from .automation_models import AutomationConfig
 from .automation_transport import SimulationTransport
-from .automation_web import parse_limits, render_automation
+from .automation_live import DEFAULT_LIVE_ROOT, build_live, live_problem, save_diagnostics
+from .automation_web import DEFAULT_CHANNEL, parse_limits, render_automation
 from .live_web import render_live
 from .observation import DEFAULT_IDENTITY_PATH, Identity, load_identity, save_identity
 from .planner_web import planner_card
@@ -280,6 +281,13 @@ class Handler(BaseHTTPRequestHandler):
     automation_game_factory = staticmethod(lambda monotonic, utc: SimulationTransport(monotonic, utc))
     automation_game = None
     automation_tick = 0.2
+    # The current run's mode ('live' or 'simulation') and, for live runs, its Discord transport.
+    automation_mode = None
+    automation_transport = None
+    # Live runs keep their journal, trips, review items, diagnostics and last settings here.
+    automation_live_root = DEFAULT_LIVE_ROOT
+    automation_live_factory = staticmethod(build_live)
+    automation_live_problem = staticmethod(live_problem)
     # One live capture per server, shared by every request.
     live = None
     live_capture_function = staticmethod(capture_discord)
@@ -374,8 +382,40 @@ class Handler(BaseHTTPRequestHandler):
     def automation_page(self, notice=''):
         template = TEMPLATE.read_text(encoding='utf-8')
         head = template[template.index('<head>'):template.index('</head>') + len('</head>')]
-        status = type(self).automation.status() if type(self).automation else None
-        self.send_content(render_automation(head, status, notice))
+        cls = type(self)
+        status = cls.automation.status() if cls.automation else None
+        self.send_content(render_automation(head, status, notice, cls.automation_live_problem(),
+                                            self.live_settings(), cls.automation_mode))
+
+    def live_settings(self):
+        """The last live account, username and channel, with the username from the saved identity."""
+        try:
+            settings = json.loads((Path(self.automation_live_root) / 'settings.json').read_text(encoding='utf-8'))
+            if not isinstance(settings, dict):
+                settings = {}
+        except (OSError, json.JSONDecodeError):
+            settings = {}
+        if not settings.get('account'):
+            try:
+                saved = json.loads(Path(self.identity_path).read_text(encoding='utf-8'))['identities']
+                entry = next(iter(saved.values()))
+                settings = {'account': entry['display_name'], 'username': entry.get('username')}
+            except (OSError, json.JSONDecodeError, KeyError, TypeError, AttributeError, StopIteration):
+                pass
+        if settings.get('account') and not settings.get('username'):
+            identity = load_identity(settings['account'], self.identity_path)
+            settings['username'] = identity.username if identity else None
+        return settings
+
+    def stop_automation(self):
+        """Stop the current run; a live run also stops input and saves what it last saw."""
+        cls = type(self)
+        if cls.automation:
+            cls.automation.stop()
+        if cls.automation_transport is not None:
+            cls.automation_transport.stop()
+            save_diagnostics(cls.automation, cls.automation_transport, cls.automation_live_root)
+            cls.automation_transport = None
 
     def automation_action(self):
         try:
@@ -383,7 +423,7 @@ class Handler(BaseHTTPRequestHandler):
             if length < 0 or length > 4096:
                 self.send_error(413, 'Request is too large')
                 return
-            fields = parse_qs(self.rfile.read(length).decode('utf-8'), max_num_fields=5)
+            fields = parse_qs(self.rfile.read(length).decode('utf-8'), max_num_fields=10)
         except (ValueError, UnicodeDecodeError):
             self.send_error(400, 'Invalid form input')
             return
@@ -392,9 +432,13 @@ class Handler(BaseHTTPRequestHandler):
             current = cls.automation
             if action == 'start':
                 trips, minutes, notice = parse_limits(fields)
+                mode = fields.get('mode', ['simulation'])[0]
                 if current and current.status()['running']:
                     notice = 'A run is already running; stop it first.'
+                elif not notice and mode == 'live':
+                    notice = self.start_live(fields, trips, minutes)
                 elif not notice:
+                    self.stop_automation()
                     root = Path(cls.automation_root)
                     clock = time.monotonic
                     utc = lambda: datetime.now(timezone.utc)
@@ -402,18 +446,49 @@ class Handler(BaseHTTPRequestHandler):
                         cls.automation_game = cls.automation_game_factory(clock, utc)
                     game = cls.automation_game
                     config = AutomationConfig(account='sim', username='sim0001', context_id='sim:dm',
-                                              max_trips=trips, max_seconds=minutes * 60)
+                                              max_trips=trips, max_seconds=minutes * 60 if minutes else None)
                     cls.automation = AutomationController(game, config, AutomationJournal(root / 'journal'),
                                                           root / 'fishing', root / 'review', monotonic=clock,
                                                           utc=utc, interval=cls.automation_tick)
+                    cls.automation_mode = 'simulation'
                     cls.automation.start(thread=True)
             elif action == 'stop' and current:
-                current.stop()
+                self.stop_automation()
             elif action == 'resolve' and current:
                 outcome = fields.get('outcome', [''])[0]
                 if outcome not in ('happened', 'not_sent') or not current.resolve(fields.get('id', [''])[0], outcome):
                     notice = 'That command was already resolved.'
         self.automation_page(notice)
+
+    def start_live(self, fields, trips, minutes):
+        """Start a live run; returns a problem to show, or '' once it is running (paused until Discord is in
+        front). Called with AUTOMATION_LOCK held."""
+        cls = type(self)
+        problem = cls.automation_live_problem()
+        if problem:
+            return problem
+        account, username, channel = (fields.get(name, [''])[0].strip() for name in ('account', 'username', 'channel'))
+        channel = channel or DEFAULT_CHANNEL
+        if not account or not username:
+            return 'Enter your Virtual Fisher name and Discord username.'
+        self.stop_automation()
+        try:
+            controller, transport = cls.automation_live_factory(channel, account, username, Path(cls.automation_live_root),
+                                                                trips, minutes * 60 if minutes else None, 0.5)
+        except RuntimeError as error:
+            return str(error)
+        try:
+            root = Path(cls.automation_live_root)
+            root.mkdir(parents=True, exist_ok=True)
+            (root / 'settings.json').write_text(json.dumps({'account': account, 'username': username,
+                                                            'channel': channel}), encoding='utf-8')
+            save_identity(Identity(account, username), self.identity_path)
+        except OSError:
+            pass  # remembering the names is a convenience only
+        cls.automation, cls.automation_transport, cls.automation_mode = controller, transport, 'live'
+        controller.start(thread=True)
+        transport.enable()
+        return ''
 
     def do_GET(self):
         url = urlsplit(self.path)
@@ -535,6 +610,8 @@ def main():
                 Handler.live.stop()
             if Handler.automation:
                 Handler.automation.stop()
+            if Handler.automation_transport is not None:
+                Handler.automation_transport.stop()
 
 
 if __name__ == '__main__':

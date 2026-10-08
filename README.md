@@ -6,7 +6,8 @@ The native adapter supports `/profile`, `/buffs`, and `/fish` through Discord's
 visible command picker in a DM (server channels are not supported yet).
 It is disabled by default. A supervised live probe verified profile/buffs bootstrap
 and one fish submission; result reading was repaired against that existing reply.
-A clean automatic trip-to-stop run remains to be verified. The existing web automation page remains simulation-only.
+Live runs have since completed dozens of trips in a row. The web automation page
+starts live runs too (see Automation below); the command-line runner remains.
 
 Inspect the configured target without sending input (substitute your actual names):
 
@@ -234,10 +235,17 @@ Windows and the OCR packages above.
   newest 200 are kept, and you should delete the folder when done; `docs/` is
   ignored by Git.
 
-### Automation (simulation)
+### Automation
 
-Open **Automation** (<http://127.0.0.1:8765/automation>) to run the fishing loop
-against a simulated Virtual Fisher, bounded by a trip count and a time limit.
+Start the server with the project's `.venv` Python (it has the Windows OCR
+packages): `.venv/Scripts/python.exe -m src.player_web`. Open **Automation**
+(<http://127.0.0.1:8765/automation>), choose **Live** or **Simulation**, enter your
+Virtual Fisher name and Discord username (remembered for next time), and
+optionally a trip or minute limit; blank means run until **Stop now**. A live run
+waits until Discord is in front, so click **Start**, then switch to Discord. If
+Discord leaves the foreground, the run pauses and resumes when you come back.
+Keep the message box empty. Live data stays in `src/data/automation_live/`.
+Simulation runs the loop against a simulated Virtual Fisher.
 Each step is: choose the next action (refresh `/profile`, then `/buffs` for the
 cooldown, then fish), record it in the journal, send it, confirm the reply that
 answers it, update state, and wait out the verified cooldown plus 0.5 s.

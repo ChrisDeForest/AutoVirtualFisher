@@ -16,7 +16,7 @@ import threading
 import time
 
 from .automation_journal import AutomationJournal
-from .automation_models import AutomationConfig, CapabilityError, TransportError
+from .automation_models import AutomationConfig, CapabilityError, NotDispatched, TransportError
 from .automation_policy import next_action
 from .automation_state import AutomationState, apply_observation
 from .startup_fields import apply_startup, startup_problems
@@ -33,6 +33,8 @@ STARTUP_ATTEMPTS = 3
 STARTUP_RETRY_DELAY = 2.0
 # Unknown outcomes in a row (no reply, unreadable, failed hand-over) before a run gives up.
 UNKNOWN_LIMIT = 3
+# After a refusal before any input (Discord not in front, message box not empty), the wait before trying again.
+REFUSAL_RETRY_DELAY = 2.0
 
 
 def _iso(moment: datetime) -> str:
@@ -72,6 +74,7 @@ class AutomationController:
         self.startup_texts = {}        # command -> the text of its last unreadable reply
         self.startup_retry_at = float('-inf')
         self.unknown_streak = 0
+        self.refused_until, self.refused_reason = float('-inf'), ''
 
     # --- run control ---
 
@@ -91,6 +94,7 @@ class AutomationController:
             self.running, self.failed, self.started_at = True, None, self.monotonic()
             self.startup_failures, self.startup_problems, self.startup_texts = {}, {}, {}
             self.unknown_streak = 0
+            self.refused_until, self.refused_reason = float('-inf'), ''
             self.startup_retry_at = float('-inf')
             self.acknowledged = {action for action, info in recovered['actions'].items()
                                  if info['status'] in ('acknowledged', 'projected')}
@@ -230,6 +234,9 @@ class AutomationController:
             if self.config.max_trips is not None and self.state.trips >= self.config.max_trips:
                 self._finish('Bounded run complete: trip limit reached.')
                 return
+            if now < self.refused_until:
+                self.phase, self.reason = 'PAUSED', f'{self.refused_reason} Trying again shortly.'
+                return
             if now < self.startup_retry_at:
                 self.phase = 'RETRYING_STARTUP'
                 self.reason = f'Retrying startup read in {self.startup_retry_at - now:.1f} s.'
@@ -260,6 +267,8 @@ class AutomationController:
         # The hand-over happens outside the lock so stop() is never blocked behind it; it is recorded either way.
         try:
             receipt, failure = self.transport.send(intent), None
+        except NotDispatched as error:
+            receipt, failure = None, ('refused', str(error))
         except CapabilityError as error:
             receipt, failure = None, ('abandoned', str(error))
         except TransportError as error:
@@ -269,6 +278,13 @@ class AutomationController:
             self.in_flight = None
             if failure or generation != self.generation:
                 self.state = replace(self.state, pending=None)
+            if failure and failure[0] == 'refused':
+                # Nothing was typed: pause and try again once Discord is ready. The run is not over.
+                self._safe_event('abandoned', intent.action_id, reason=failure[1])
+                self.refused_until = self.monotonic() + REFUSAL_RETRY_DELAY
+                self.refused_reason = failure[1]
+                self.phase, self.reason = 'PAUSED', f'{failure[1]} Trying again shortly.'
+                return
             if failure and failure[0] == 'abandoned':
                 self._safe_event('abandoned', intent.action_id, reason=failure[1])
                 self.failed = failure[1]

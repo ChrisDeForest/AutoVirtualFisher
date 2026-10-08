@@ -1,5 +1,6 @@
 from html import unescape
 from http.server import ThreadingHTTPServer
+from datetime import datetime, timezone
 from pathlib import Path
 import shutil
 import tempfile
@@ -18,6 +19,40 @@ def fast_game(monotonic, utc):
     return SimulationTransport(monotonic, utc, cooldown=0.05, latency=0.01)
 
 
+class FakeLive(SimulationTransport):
+    """Stands in for the Discord transport: the same contract, plus the live controls the page uses."""
+    def __init__(self, monotonic, utc, display_name, username):
+        super().__init__(monotonic, utc, display_name=display_name, username=username,
+                         context_id='discord:1:virtual fisher', cooldown=0.05, latency=0.01)
+        self.context_id = self.context.context_id
+        self.enabled = self.stopped = False
+        self.baseline = self.last_frame = self.last_lines = self.blocked = self.last_issue = None
+
+    def enable(self):
+        self.enabled = True
+
+    def stop(self):
+        self.stopped = True
+
+
+def fake_live_factory(calls):
+    def build(channel, account, username, root, max_trips, max_seconds, interval):
+        from src.automation_controller import AutomationController
+        from src.automation_journal import AutomationJournal
+        from src.automation_models import AutomationConfig
+        clock = time.monotonic
+        utc = lambda: datetime.now(timezone.utc)
+        transport = FakeLive(clock, utc, account, username)
+        calls.append(dict(channel=channel, account=account, username=username, root=root,
+                          max_trips=max_trips, max_seconds=max_seconds, transport=transport))
+        config = AutomationConfig(account, username, transport.context_id, max_trips=max_trips,
+                                  max_seconds=max_seconds, mode='live')
+        controller = AutomationController(transport, config, AutomationJournal(root / 'journal'), root / 'fishing',
+                                          root / 'review', monotonic=clock, utc=utc, interval=interval)
+        return controller, transport
+    return build
+
+
 class AutomationWebTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -26,7 +61,11 @@ class AutomationWebTests(unittest.TestCase):
             'snapshot_root': cls.temporary / 'snapshots', 'fishing_root': cls.temporary / 'fishing',
             'review_root': cls.temporary / 'review', 'automation_root': cls.temporary / 'simulation',
             'automation_game_factory': staticmethod(fast_game), 'automation_game': None,
-            'automation_tick': 0.005, 'automation': None})
+            'automation_tick': 0.005, 'automation': None, 'automation_transport': None,
+            'automation_live_root': cls.temporary / 'live', 'identity_path': cls.temporary / 'identities.json',
+            'automation_live_problem': staticmethod(lambda: '')})
+        cls.calls = []
+        cls.handler.automation_live_factory = staticmethod(fake_live_factory(cls.calls))
         cls.server = ThreadingHTTPServer(('127.0.0.1', 0), cls.handler)
         cls.worker = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.worker.start()
@@ -59,25 +98,62 @@ class AutomationWebTests(unittest.TestCase):
             time.sleep(0.01)
         self.fail('the bounded run did not finish')
 
-    def test_page_defaults_to_simulation_and_explains_live_mode(self):
+    def test_page_offers_live_mode_with_saved_identity(self):
+        from src.observation import Identity, save_identity
+        save_identity(Identity('epicmouse', 'epicmouse9925'), self.handler.identity_path)
         html = self.get()
         self.assertIn('<h1>Automation</h1>', html)
-        self.assertIn('Simulation', html)
-        self.assertIn('This page sends nothing to Discord', html)
-        self.assertIn('separate command-line runner', html)
-        self.assertNotIn('name="mode" value="live"', html, 'there is no live option to select')
+        self.assertIn('name="mode" value="live" checked', html)
+        self.assertIn('value="epicmouse"', html)
+        self.assertIn('value="epicmouse9925"', html)
+        self.assertIn('value="Virtual Fisher"', html)
         self.assertIn('href="/automation"', self.get('/'), 'the main page links here')
+
+    def test_live_mode_unavailable_explains_why(self):
+        self.handler.automation_live_problem = staticmethod(lambda: 'Live mode needs the Windows OCR packages.')
+        try:
+            html = self.get()
+            self.assertIn('Live mode needs the Windows OCR packages.', html)
+            self.assertIn('name="mode" value="live" disabled', html)
+            html = self.post(action='start', mode='live', account='epicmouse', username='epicmouse9925',
+                             channel='Virtual Fisher', max_trips='', max_minutes='')
+            self.assertIn('Live mode needs the Windows OCR packages.', html)
+            self.assertFalse(self.handler.automation and self.handler.automation.status()['running'])
+        finally:
+            self.handler.automation_live_problem = staticmethod(lambda: '')
+
+    def test_live_run_starts_without_limits_and_stop_stops_input(self):
+        html = self.post(action='start', mode='live', account='epicmouse', username='epicmouse9925',
+                         channel='Virtual Fisher', max_trips='', max_minutes='')
+        call = self.calls[-1]
+        self.assertEqual((call['account'], call['username'], call['channel']),
+                         ('epicmouse', 'epicmouse9925', 'Virtual Fisher'))
+        self.assertEqual((call['max_trips'], call['max_seconds']), (None, None))
+        self.assertTrue(call['transport'].enabled)
+        self.assertIn('Switch to Discord', html)
+        self.assertIn('Live', html)
+        self.assertTrue(self.handler.automation.status()['running'])
+        html = self.post(action='stop')
+        self.assertIn('STOPPED', html)
+        self.assertTrue(call['transport'].stopped)
+        self.assertIn('value="epicmouse"', self.get(), 'the last settings are remembered')
+
+    def test_live_run_needs_names(self):
+        html = self.post(action='start', mode='live', account='', username='epicmouse9925',
+                         channel='Virtual Fisher', max_trips='', max_minutes='')
+        self.assertIn('Enter your Virtual Fisher name', html)
+        self.assertFalse(self.handler.automation and self.handler.automation.status()['running'])
 
     def test_limits_are_validated(self):
         for fields in ({'max_trips': '0'}, {'max_trips': '5000'}, {'max_trips': 'lots'}, {'max_minutes': '0'},
-                       {'max_minutes': '600'}):
+                       {'max_minutes': '601'}):
             with self.subTest(fields=fields):
-                html = self.post(action='start', **{'max_trips': '25', 'max_minutes': '15', **fields})
+                html = self.post(action='start', mode='simulation', **{'max_trips': '25', 'max_minutes': '15', **fields})
                 self.assertIn('between', html)
                 self.assertFalse(self.handler.automation and self.handler.automation.status()['running'])
 
     def test_bounded_simulated_run_saves_to_the_simulation_logbook_only(self):
-        self.post(action='start', max_trips='3', max_minutes='5')
+        self.post(action='start', mode='simulation', max_trips='3', max_minutes='5')
         self.wait_until_stopped()
         html = self.get()
         self.assertIn('trip limit reached', html)
@@ -86,8 +162,8 @@ class AutomationWebTests(unittest.TestCase):
         self.assertEqual(load_sessions('sim', self.temporary / 'fishing')[0], [], 'your real logbook is untouched')
 
     def test_repeated_start_and_stop(self):
-        self.post(action='start', max_trips='1000', max_minutes='5')
-        html = self.post(action='start', max_trips='1000', max_minutes='5')
+        self.post(action='start', mode='simulation', max_trips='1000', max_minutes='5')
+        html = self.post(action='start', mode='simulation', max_trips='1000', max_minutes='5')
         self.assertIn('already running', html)
         html = self.post(action='stop')
         self.assertIn('STOPPED', html)

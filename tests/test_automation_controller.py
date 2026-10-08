@@ -369,24 +369,25 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(len(self.fish_sends()), 1)
         self.assertIn(self.controller.status()['phase'], ('FAILED', 'NEEDS_REVIEW'))
 
-    def test_refusal_before_input_is_abandoned_not_a_blocker(self):
+    def test_refusal_before_input_pauses_then_resumes_in_the_same_run(self):
+        # Observed 2026-10-08: Discord left the foreground just before a /fish, which ended a 36-trip run.
         from src.automation_models import NotDispatched
-        original = self.sim.send
-        def refuse(intent):
-            raise NotDispatched('No complete VF reply visible to establish a baseline.')
-        self.sim.send = refuse
-        self.make().start()
-        self.run_for(2)
-        status = self.controller.status()
-        self.assertEqual(status['phase'], 'FAILED')
-        self.assertIn('baseline', status['reason'])
-        self.assertFalse(status['unresolved'])
-        self.sim.send = original
-        self.controller.stop()
-        self.make().start()
+        original, refused = self.sim.send, []
+        def refuse_while_away(intent):
+            if self.clock.now < 10:
+                refused.append(intent.kind)
+                raise NotDispatched('Discord must remain in the foreground.')
+            return original(intent)
+        self.sim.send = refuse_while_away
+        self.make(config=replace(CONFIG, max_trips=1)).start()
         self.run_for(5)
-        self.assertNotEqual(self.controller.status()['phase'], 'NEEDS_REVIEW')
-        self.assertTrue(self.sim.sent, 'a later run is not blocked by a command that was never typed')
+        status = self.controller.status()
+        self.assertEqual(status['phase'], 'PAUSED')
+        self.assertIn('foreground', status['reason'])
+        self.assertLessEqual(len(refused), 5, 'retried calmly, not every tick')
+        self.run_for(20)
+        self.assertEqual(self.saved_trips(), 1, 'the same run carries on once Discord is back')
+        self.assertFalse(list_items(self.review)[0], 'nothing was sent, so there is nothing to review')
 
     def test_stop_during_a_blocked_send_prevents_later_dispatch(self):
         entered, release = threading.Event(), threading.Event()

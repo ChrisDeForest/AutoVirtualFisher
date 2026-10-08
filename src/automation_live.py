@@ -8,10 +8,56 @@ from .automation_discord import DiscordTransport
 from .automation_journal import AutomationJournal
 from .automation_models import AutomationConfig
 from .discord_input import WindowsDiscordDriver
-from .player_snapshots import account_key
-from .player_snapshots import write_json_atomically
+from .player_snapshots import account_key, write_json_atomically
 from .window_capture import find_discord_window
 from .run_output import RunOutput
+
+DEFAULT_LIVE_ROOT = Path(__file__).parent / 'data' / 'automation_live'
+
+
+def live_problem() -> str:
+    """Why live mode cannot run on this machine, or '' when it can."""
+    import sys
+    from .screenshot_ocr import ocr_available
+    from .window_capture import capture_supported
+    if sys.platform != 'win32' or not capture_supported():
+        return 'Live mode needs Windows.'
+    if not ocr_available():
+        return ('Live mode needs the Windows OCR packages. Start the server with the project\'s .venv Python '
+                '(see README).')
+    return ''
+
+
+def build_live(channel, account, username, root=DEFAULT_LIVE_ROOT, max_trips=None, max_seconds=None,
+               interval=0.5, window=None):
+    """(controller, transport) for a live run against the Discord window. Raises RuntimeError when no Discord
+    window is found. Nothing is sent until the transport is enabled and the controller started."""
+    if window is None:
+        detected = find_discord_window()
+        if detected is None:
+            raise RuntimeError('Discord window not found. Open Discord and try again.')
+        window = detected[0]
+    driver = WindowsDiscordDriver(window, channel)
+    transport = DiscordTransport(driver, window, channel, account, username)
+    folder = Path(root) / account_key(account)
+    config = AutomationConfig(account, username, transport.context_id,
+                              max_trips=max_trips, max_seconds=max_seconds, mode='live')
+    controller = AutomationController(transport, config, AutomationJournal(folder / 'journal'),
+                                      folder / 'fishing', folder / 'review', interval=interval)
+    return controller, transport
+
+
+def save_diagnostics(controller, transport, root=DEFAULT_LIVE_ROOT) -> str:
+    """Write what the transport last saw; returns a problem, or '' when saved."""
+    try:
+        write_json_atomically(Path(root) / account_key(controller.config.account) / 'transport_diagnostics',
+                              controller.state.run_id or 'unstarted',
+                              {'baseline': transport.baseline, 'last_frame': transport.last_frame,
+                               'last_lines': getattr(transport, 'last_lines', None),
+                               'blocked': transport.blocked, 'last_issue': transport.last_issue})
+        return ''
+    except OSError as error:
+        return f'Could not save transport diagnostics: {error}'
 
 
 def parse_args(argv=None):
@@ -24,7 +70,7 @@ def parse_args(argv=None):
     parser.add_argument('--trips', type=int, help='Optional limit of 1–25 confirmed trips')
     parser.add_argument('--seconds', type=int, help='Optional time limit of 1–900 seconds')
     parser.add_argument('--startup-delay', type=float, default=5, help='Time to foreground Discord after starting')
-    parser.add_argument('--data-dir', type=Path, default=Path(__file__).parent / 'data' / 'automation_live')
+    parser.add_argument('--data-dir', type=Path, default=DEFAULT_LIVE_ROOT)
     parser.add_argument('--resolve', help='Resolve a previously uncertain action without starting a run')
     parser.add_argument('--outcome', choices=('happened', 'not_sent'))
     args = parser.parse_args(argv)
@@ -49,38 +95,26 @@ def main():
 
 
 def run(args, output):
-    detected = find_discord_window() if args.window is None else None
-    window = args.window or (detected[0] if detected else None)
-    if window is None:
-        output.say('Discord window not found. Open Discord and try again.')
+    try:
+        controller, transport = build_live(args.channel, args.account, args.username, args.data_dir,
+                                           args.trips, args.seconds, window=args.window)
+    except RuntimeError as error:
+        output.say(str(error))
         return
-    driver = WindowsDiscordDriver(window, args.channel)
-    transport = DiscordTransport(driver, window, args.channel, args.account, args.username)
     output.say(f'{args.account} — {args.channel}. Switch to Discord within {args.startup_delay:g} seconds.')
     time.sleep(args.startup_delay)
     if not args.live and not args.resolve:
         status = transport.inspect_context()
         output.say('Discord is ready. Inspection only; nothing sent.' if status.ok else 'Discord is not ready: ' + status.reason)
         return
-    root = args.data_dir / account_key(args.account)
-    config = AutomationConfig(args.account, args.username, transport.context_id,
-                              max_trips=args.trips, max_seconds=args.seconds, mode='live')
-    controller = AutomationController(transport, config, AutomationJournal(root / 'journal'),
-                                      root / 'fishing', root / 'review', interval=0.5)
     try:
-        if args.live and not args.resolve:
-            target = transport.inspect_context()
-            if not target.ok:
-                output.say('Live run not started: ' + target.reason)
-                return
-            driver.title = transport.title
         controller.start()
         if args.resolve:
             resolved = controller.resolve(args.resolve, args.outcome)
             output.say('Action resolved.' if resolved else 'That action was not awaiting resolution.')
             return
         transport.enable()
-        output.say('Starting. Keep Discord foreground. Ctrl+C stops the run.')
+        output.say('Starting. Keep Discord in front: switching away pauses the run. Ctrl+C stops it.')
         while controller.running:
             controller.tick()
             status = controller.status()
@@ -94,13 +128,9 @@ def run(args, output):
         transport.stop()
         controller.stop()
         output.update(controller.status())
-        try:
-            write_json_atomically(root / 'transport_diagnostics', controller.state.run_id,
-                                  {'baseline': transport.baseline, 'last_frame': transport.last_frame,
-                                   'last_lines': getattr(transport, 'last_lines', None),
-                                   'blocked': transport.blocked, 'last_issue': transport.last_issue})
-        except OSError as error:
-            output.say(f'Could not save transport diagnostics: {error}')
+        problem = save_diagnostics(controller, transport, args.data_dir)
+        if problem:
+            output.say(problem)
 
 
 if __name__ == '__main__':
