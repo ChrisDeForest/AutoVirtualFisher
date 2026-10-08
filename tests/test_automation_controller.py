@@ -257,6 +257,34 @@ class ControllerTests(unittest.TestCase):
 
     # --- failures: never a blind resend ---
 
+    # --- live stats and periodic resync ---
+
+    def test_profile_and_buffs_are_resynced_every_n_trips(self):
+        self.make(config=replace(CONFIG, max_trips=5, resync_trips=3)).start()
+        self.run_for(60)
+        self.assertEqual([intent.kind for _, intent in self.sim.sent],
+                         ['refresh_profile', 'refresh_buffs', 'fish', 'fish', 'fish',
+                          'refresh_profile', 'refresh_buffs', 'fish', 'fish'])
+        self.assertEqual(self.controller.status()['dashboard']['trips_since_sync'], 2)
+
+    def test_unreadable_resync_never_stops_fishing(self):
+        self.sim.script = {5: 'unreadable_fixed', 6: 'unreadable_fixed'}
+        self.make(config=replace(CONFIG, max_trips=5, resync_trips=3)).start()
+        self.run_for(60)
+        self.assertEqual(self.saved_trips(), 5)
+        self.assertTrue(all(not item['blocks_actions'] for item in list_items(self.review)[0]))
+
+    def test_dashboard_carries_synced_stats_forward(self):
+        self.make(config=replace(CONFIG, max_trips=2)).start()
+        self.run_for(30)
+        dashboard = self.controller.status()['dashboard']
+        self.assertEqual(dashboard['gained']['xp'], self.sim.totals['xp'])
+        self.assertEqual(dashboard['gained']['trips'], 2)
+        self.assertEqual(dashboard['profile']['account_name'], 'sim')
+        self.assertEqual(dashboard['buffs']['fishing_cooldown']['value'], 3.5)
+        self.assertEqual(sum(dashboard['changes']['fish'].values()), sum(self.sim.totals['catches'].values()))
+        self.assertIn('xp', dashboard['per_hour'])
+
     # --- unknown outcomes: noted, never stop the run ---
 
     def assert_moves_on(self, outcome):

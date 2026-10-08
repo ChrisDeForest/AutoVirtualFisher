@@ -19,6 +19,9 @@ from .automation_journal import AutomationJournal
 from .automation_models import AutomationConfig, CapabilityError, NotDispatched, TransportError
 from .automation_policy import next_action
 from .automation_state import AutomationState, apply_observation
+from .catch_check import load_fish_reference
+from .live_stats import project, synced_stats
+from .player_planner import load_level_increments
 from .startup_fields import apply_startup, startup_problems
 from .fishing_log import parse_fishing
 from .fishing_sessions import save_session
@@ -35,6 +38,16 @@ STARTUP_RETRY_DELAY = 2.0
 UNKNOWN_LIMIT = 3
 # After a refusal before any input (Discord not in front, message box not empty), the wait before trying again.
 REFUSAL_RETRY_DELAY = 2.0
+
+
+_REFERENCES = []
+
+
+def _references():
+    """(wiki level increments, wiki fish table), loaded once."""
+    if not _REFERENCES:
+        _REFERENCES.extend((load_level_increments(), load_fish_reference() or {}))
+    return tuple(_REFERENCES)
 
 
 def _iso(moment: datetime) -> str:
@@ -75,6 +88,14 @@ class AutomationController:
         self.startup_retry_at = float('-inf')
         self.unknown_streak = 0
         self.refused_until, self.refused_reason = float('-inf'), ''
+        self._reset_stats()
+
+    def _reset_stats(self):
+        # Live stats: the last readable /profile and /buffs replies, the trips since the profile was read, and
+        # every trip this run (for rates).
+        self.synced = {'profile': '', 'buffs': ''}
+        self.synced_at = {}
+        self.sync_tallies, self.run_tallies = [], []
 
     # --- run control ---
 
@@ -95,6 +116,7 @@ class AutomationController:
             self.startup_failures, self.startup_problems, self.startup_texts = {}, {}, {}
             self.unknown_streak = 0
             self.refused_until, self.refused_reason = float('-inf'), ''
+            self._reset_stats()
             self.startup_retry_at = float('-inf')
             self.acknowledged = {action for action, info in recovered['actions'].items()
                                  if info['status'] in ('acknowledged', 'projected')}
@@ -169,6 +191,7 @@ class AutomationController:
                     'context_ok': self.state.context_ok, 'config': {
                         'account': self.config.account, 'context_id': self.config.context_id,
                         'max_trips': self.config.max_trips, 'max_seconds': self.config.max_seconds},
+                    'dashboard': self._dashboard(),
                     'startup': {'failures': dict(self.startup_failures),
                                 'problems': dict(self.startup_problems),
                                 'confirmed_fields': dict(self.state.startup_observed_at)}}
@@ -368,6 +391,13 @@ class AutomationController:
         now = self.monotonic()
         if result == 'cooldown':
             self.ready_at = now + float(wait[1]) + self.config.cooldown_margin
+        elif result == 'unreadable' and kind in self.state.refresh_due:
+            # A periodic resync that could not be read keeps the projection; fishing never waits on it.
+            self.state = replace(self.state, refresh_due=tuple(k for k in self.state.refresh_due if k != kind))
+            add_item(self.roots['review'], self.config.account, observation.kind or 'unknown', observation.text,
+                     [f'A scheduled {observation.kind} resync could not be read; the stats carry on from the last '
+                      'one.'] + problems, identity_status=observation.identity_status,
+                     observation_id=observation.observation_id, blocks_actions=False)
         elif result == 'unreadable' and kind != 'fish':
             # Delivery is confirmed: repeating this read-only command cannot duplicate a fishing trip.
             attempts = self.startup_failures.get(kind, 0) + 1
@@ -393,6 +423,11 @@ class AutomationController:
                 self._safe_event('startup_retry_scheduled', action_id, command=kind,
                                  attempt=attempts, problems=problems, delay=STARTUP_RETRY_DELAY)
         elif result == 'refreshed':
+            self.synced[observation.kind] = observation.text
+            self.synced_at[observation.kind] = observation.observed_at
+            if observation.kind == 'profile':
+                self.sync_tallies = []
+            self.state = replace(self.state, refresh_due=tuple(k for k in self.state.refresh_due if k != kind))
             self.startup_problems.pop(kind, None)
             self.startup_texts.pop(kind, None)
             self.startup_retry_at = float('-inf')
@@ -412,6 +447,11 @@ class AutomationController:
             self.last_trip_at = self.sent_at[0] if this_run else now
             if this_run:
                 self.state = replace(self.state, trips=self.state.trips + 1)
+            self.sync_tallies.append(tally)
+            self.run_tallies.append(tally)
+            if (self.config.resync_trips and len(self.sync_tallies) >= self.config.resync_trips
+                    and not self.state.refresh_due):
+                self.state = replace(self.state, refresh_due=('refresh_profile', 'refresh_buffs'))
             self._project(action_id, tally)
 
     def _project(self, action_id, tally):
@@ -439,7 +479,8 @@ class AutomationController:
     def _move_on(self, intent, reason):
         """An unknown outcome is noted in Needs review (non-blocking) and settled in the journal. The run waits a
         full cooldown, so a command that did reach the game is not followed too soon, then carries on."""
-        self.state = replace(self.state, pending=None)
+        self.state = replace(self.state, pending=None,
+                             refresh_due=tuple(k for k in self.state.refresh_due if k != intent.kind))
         forget = getattr(self.transport, 'forget', None)
         if forget is not None:
             forget()
@@ -460,6 +501,26 @@ class AutomationController:
             return
         self.ready_at = max(self.ready_at, self.monotonic() + (self.state.cooldown_seconds or 0)
                             + self.config.cooldown_margin)
+
+    def _dashboard(self):
+        """The synced stats carried forward over the trips since, plus this run's totals and hourly rates."""
+        increments, fish = _references()
+        synced = synced_stats(self.synced['profile'], self.synced['buffs'])
+        stats = project(synced, self.sync_tallies, increments, fish)
+        run = project(synced, self.run_tallies, increments, fish)['gained']
+        elapsed = max(1.0, self.monotonic() - self.started_at) if self.started_at is not None else None
+        per_hour = {key: run[key] * 3600 / elapsed for key in ('trips', 'xp', 'money', 'fish_value', 'catches')}             if elapsed else {}
+        to_next = stats['profile'].get('xp_to_next_level')
+        recent = [{'catches': dict(tally['catches']), 'xp': tally['fishing_xp'],
+                   'events': list(tally['trip_details'][0]['events']) if tally.get('trip_details') else []}
+                  for tally in reversed(self.run_tallies[-8:])]
+        stats.update(run=run, per_hour=per_hour, synced_at=dict(self.synced_at), recent=recent,
+                     trips_since_sync=len(self.sync_tallies),
+                     next_sync_in=(max(0, self.config.resync_trips - len(self.sync_tallies))
+                                   if self.config.resync_trips else None),
+                     next_level_in_seconds=(to_next * 3600 / per_hour['xp']
+                                            if to_next is not None and per_hour.get('xp') else None))
+        return stats
 
     def _uncertain(self, action_id, reason):
         self.state = replace(self.state, pending=None)

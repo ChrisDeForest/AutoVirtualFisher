@@ -26,6 +26,8 @@ def next_action(state: AutomationState, config: AutomationConfig, now_utc: datet
         choice = _intent(state, 'refresh_profile', now_utc, 'no verified profile yet')
     elif state.cooldown_seconds is None:
         choice = _intent(state, 'refresh_buffs', now_utc, 'fishing cooldown not observed yet')
+    elif state.refresh_due:
+        choice = _intent(state, state.refresh_due[0], now_utc, 'scheduled resync')
     else:
         choice = _intent(state, 'fish', now_utc, f'verified profile from {state.profile_observed_at}',
                          f'cooldown {state.cooldown_seconds:g} s from {state.buffs_observed_at}')

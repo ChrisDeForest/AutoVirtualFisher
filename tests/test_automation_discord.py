@@ -220,6 +220,17 @@ class DiscordTests(unittest.TestCase):
         self.transport.poll()
         self.assertEqual(self.transport.poll(), [])
 
+    def test_reply_by_another_name_says_which_name_it_saw(self):
+        # Observed 2026-10-08: the page's two name fields were swapped, so every reply looked like someone else's.
+        transport = DiscordTransport(self.driver, 42, 'Virtual Fisher', 'epicmouse9925', 'epicmouse',
+                                     utc=lambda: self.now)
+        transport.enable()
+        transport.send(ActionIntent('p1', 'fish', transport.context_id, self.now.isoformat(), 'fishing'))
+        self.driver.lines += fish(2, 2, 20)
+        self.assertEqual(transport.poll(), [])
+        self.assertIn('used by epicmouse', transport.last_issue)
+        self.assertIn('epicmouse9925', transport.last_issue)
+
     def test_unchanged_identical_replies_neither_acknowledge_nor_pause(self):
         self.driver.lines = fish(1, 1, 10) * 2
         self.send()

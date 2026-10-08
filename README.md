@@ -245,6 +245,14 @@ optionally a trip or minute limit; blank means run until **Stop now**. A live ru
 waits until Discord is in front, so click **Start**, then switch to Discord. If
 Discord leaves the foreground, the run pauses and resumes when you come back.
 Keep the message box empty. Live data stays in `src/data/automation_live/`.
+
+While a run goes, the page shows your level with progress toward the next one,
+and boxes for your profile, buffs, this run (trips, XP, money and rates),
+inventory, and recent trips, refreshed every two seconds. Your full `/profile`
+and `/buffs` are read at the start and again every 1,000 trips; in between, each
+trip's XP (with level-ups from the wiki level table), catches, chest finds and
+money are added to the last reading. A resync that cannot be read is noted and
+the numbers carry on from the previous one.
 Simulation runs the loop against a simulated Virtual Fisher.
 Each step is: choose the next action (refresh `/profile`, then `/buffs` for the
 cooldown, then fish), record it in the journal, send it, confirm the reply that

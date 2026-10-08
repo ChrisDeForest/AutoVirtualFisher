@@ -1,9 +1,70 @@
-"""The /automation page: start a live or simulated fishing run, watch it, stop it, and resolve anything it could
-not settle on its own. Live runs type into the Discord window; simulated runs never touch Discord."""
+"""The /automation page: start a live or simulated fishing run and watch your stats move.
+
+The page holds the start form; /automation/panel renders the live part (status, level line, and the profile, buffs,
+run, inventory and recent-trip boxes), which the page swaps in every two seconds."""
 from html import escape
 
 MAX_TRIPS, MAX_MINUTES = 1000, 600
 DEFAULT_CHANNEL = 'Virtual Fisher'
+PHASES = {'BOOTSTRAPPING': 'Starting', 'WAITING_REPLY': 'Waiting for Virtual Fisher',
+          'WAITING_DELIVERY': 'Waiting for Discord to send', 'WAITING_COOLDOWN': 'Cooling down',
+          'RETRYING_STARTUP': 'Reading your profile again', 'PAUSED': 'Paused', 'READY': 'Ready',
+          'SENDING': 'Sending', 'NEEDS_REVIEW': 'Needs you', 'FAILED': 'Stopped by a problem', 'STOPPED': 'Stopped'}
+BUFFS = (('sell_price', 'Sell price'), ('fish_catch', 'Fish catch'), ('fish_quality', 'Fish quality'),
+         ('treasure_chance', 'Treasure chance'), ('treasure_quality', 'Treasure quality'),
+         ('xp_multiplier', 'XP multiplier'))
+CATEGORIES = (('fish', 'Fish'), ('exotic_fish', 'Exotic fish'), ('special', 'Special'))
+STYLE = """<style>
+.strip { display:flex; flex-wrap:wrap; align-items:center; gap:10px 18px; padding:12px 16px; border:1px solid var(--line);
+  border-radius:6px; margin:0 0 28px; }
+.strip form { margin-left:auto; } .strip .actions { margin:0; }
+.phase { font-weight:650; } .phase::before { content:''; display:inline-block; width:9px; height:9px; border-radius:50%;
+  margin-right:9px; background:var(--muted); vertical-align:1px; }
+.on .phase::before { background:var(--sea); } .halted .phase::before { background:#ffda8b; }
+.why { color:var(--muted); font-size:14px; flex:1 1 280px; }
+.level { margin:0 0 34px; }
+.level-head { display:flex; flex-wrap:wrap; align-items:baseline; gap:6px 18px; }
+.level-number { font:normal clamp(40px,6vw,64px)/1 Georgia,serif; margin:0; }
+.level-meta { color:var(--muted); }
+.line { position:relative; height:26px; margin-top:14px; }
+.line::before { content:''; position:absolute; left:0; right:0; top:12px; border-top:2px dashed #3d5a69; }
+.line .cast { position:absolute; left:0; top:12px; border-top:2px solid var(--sea); }
+.line .bobber { position:absolute; top:5px; width:16px; height:16px; margin-left:-8px; border-radius:50%;
+  background:var(--sea); box-shadow:0 0 0 4px #101e29; }
+.boxes { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:22px 34px; }
+.box { border-top:1px solid var(--line); padding-top:14px; min-width:0; }
+.box.wide { grid-column:span 2; }
+.box h2 { font-size:17px; color:var(--sea); margin:0 0 6px; }
+.box .stat { padding:6px 0; font-size:15px; }
+.box .note { margin:10px 0 0; }
+.gain { color:var(--sea); font-size:13px; margin-left:8px; }
+.columns { columns:2 220px; column-gap:34px; } .columns .stat { break-inside:avoid; }
+.trips-list { list-style:none; padding:0; margin:0; font-size:14px; }
+.trips-list li { padding:7px 0; border-bottom:1px solid #263d4a; display:flex; justify-content:space-between; gap:12px; }
+.start fieldset { border:0; padding:0; margin:0; } .start legend { font-weight:600; margin-bottom:6px; }
+.start label input[type=radio] { margin-right:8px; } .start fieldset label { margin:6px 0; font-weight:400; }
+.start input[type=text] { font:inherit; width:100%; max-width:360px; border:1px solid #496575; border-radius:6px;
+  padding:9px 12px; background:#0b1720; color:var(--ink); }
+.start .pair { display:grid; grid-template-columns:repeat(2,minmax(0,360px)); gap:0 24px; }
+.empty { color:var(--muted); }
+@media(max-width:900px) { .boxes { grid-template-columns:minmax(0,1fr); } .box.wide { grid-column:auto; }
+  .start .pair { grid-template-columns:minmax(0,1fr); } }
+@media(prefers-reduced-motion:no-preference) { .line .cast, .line .bobber { transition:all .6s ease-out; } }
+</style>"""
+SCRIPT = """<script nonce="{nonce}">
+(function () {
+  var panel = document.getElementById('panel');
+  if (!panel) return;
+  setInterval(function () {
+    fetch('/automation/panel', {cache: 'no-store'}).then(function (r) { return r.text(); }).then(function (html) {
+      var was = panel.getAttribute('data-running');
+      panel.innerHTML = html;
+      var now = panel.querySelector('[data-running]');
+      if (now && now.getAttribute('data-running') !== was) { location.reload(); }
+    }).catch(function () {});
+  }, 2000);
+})();
+</script>"""
 
 
 def parse_limits(fields: dict) -> tuple[int | None, int | None, str]:
@@ -26,81 +87,176 @@ def parse_limits(fields: dict) -> tuple[int | None, int | None, str]:
     return trips, minutes, ''
 
 
-def _row(label, value):
-    return f'<div class="stat"><dt>{escape(label)}</dt><dd class="known">{escape(str(value))}</dd></div>'
+def _num(value, prefix=''):
+    return f'{prefix}{value:,.0f}' if isinstance(value, (int, float)) else None
+
+
+def _duration(seconds):
+    if seconds is None:
+        return None
+    minutes = round(seconds / 60)
+    if minutes < 1:
+        return 'under a minute'
+    if minutes < 90:
+        return f'about {minutes} min'
+    return f'about {minutes / 60:.1f} h'
+
+
+def _row(label, value, gain=None):
+    shown = (f'<dd class="known">{escape(str(value))}' if value is not None else '<dd class="unknown">not read')
+    if gain and value is not None:
+        shown += f'<span class="gain">+{gain:,}</span>'
+    return f'<div class="stat"><dt>{escape(label)}</dt>{shown}</dd></div>'
+
+
+def _box(title, body, wide=False, note=''):
+    return (f'<section class="box{" wide" if wide else ""}"><h2>{escape(title)}</h2>{body}'
+            + (f'<p class="note">{escape(note)}</p>' if note else '') + '</section>')
+
+
+def _level_line(profile, dashboard):
+    level, xp, required = profile.get('level'), profile.get('xp_current'), profile.get('xp_required')
+    if level is None:
+        return ''
+    title = f'Level {level}' + (f' (prestige {profile["prestige"]})' if profile.get('prestige') else '')
+    meta = []
+    if xp is not None and required:
+        meta.append(f'{xp:,} of {required:,} XP')
+    eta = _duration(dashboard.get('next_level_in_seconds'))
+    if eta:
+        meta.append(f'{eta} to level {level + 1}')
+    line = ''
+    if xp is not None and required:
+        share = max(0.0, min(1.0, xp / required)) * 100
+        line = (f'<div class="line" role="img" aria-label="{escape(meta[0])}"><span class="cast" '
+                f'style="width:{share:.1f}%"></span><span class="bobber" style="left:{share:.1f}%"></span></div>')
+    return (f'<div class="level"><div class="level-head"><p class="level-number">{escape(title)}</p>'
+            + ''.join(f'<span class="level-meta">{escape(item)}</span>' for item in meta) + f'</div>{line}</div>')
+
+
+def _catch_text(catches):
+    return ', '.join(f'{count:,} {name}' for name, count in catches.items()) or 'nothing'
+
+
+def render_panel(status, mode=None) -> str:
+    """The live part of the page: run status, level line, and the stat boxes."""
+    if not status:
+        return ('<div data-running="0"><p class="empty">No run yet. Start one above; your profile, buffs and '
+                'inventory appear here once Virtual Fisher replies.</p></div>')
+    running = status['running']
+    phase = status['phase']
+    halted = phase in ('PAUSED', 'NEEDS_REVIEW', 'FAILED')
+    stop = ('<form method="post" action="/automation"><input type="hidden" name="action" value="stop">'
+            '<div class="actions"><button type="submit">Stop now</button></div></form>') if running else ''
+    strip = (f'<div class="strip {"halted" if halted else "on" if running else ""}">'
+             f'<span class="phase">{escape(PHASES.get(phase, phase.title()))}</span>'
+             f'<span class="why">{escape(status["reason"])}</span>{stop}</div>')
+    dashboard = status.get('dashboard') or {}
+    profile = dashboard.get('profile') or {}
+    gained = dashboard.get('gained') or {}
+    run = dashboard.get('run') or {}
+    per_hour = dashboard.get('per_hour') or {}
+    buffs = dashboard.get('buffs') or {}
+
+    profile_box = _box('Profile', '<dl>' + ''.join((
+        _row('Balance', _num(profile.get('balance'), '$'), gained.get('money')),
+        _row('Fish value', _num(profile.get('fish_value'), '$'), gained.get('fish_value')),
+        _row('Rod', profile.get('rod')), _row('Biome', profile.get('biome')),
+        _row('Pet', profile.get('pet')),
+        _row('Bait', profile.get('bait') or ('none' if 'bait' in profile and profile.get('rod') else None)),
+    )) + '</dl>')
+
+    def multiplier(name):
+        value = buffs.get(name)
+        return f'{value["value"]:.2f}×' if isinstance(value, dict) else None
+    cooldown = buffs.get('fishing_cooldown')
+    buffs_box = _box('Buffs', '<dl>' + ''.join(_row(label, multiplier(name)) for name, label in BUFFS)
+                     + _row('Fishing cooldown', f'{cooldown["value"]:g} s' if isinstance(cooldown, dict) else None)
+                     + '</dl>')
+
+    limit = status['config']['max_trips']
+    next_fish = status.get('next_eligible_in')
+    sync_note = ''
+    if dashboard.get('next_sync_in') is not None and dashboard.get('synced_at'):
+        sync_note = (f'Profile and buffs read {dashboard["trips_since_sync"]:,} trips ago; read again in '
+                     f'{dashboard["next_sync_in"]:,} trips. Between reads, numbers are worked out from each trip.')
+    run_box = _box('This run', '<dl>' + ''.join((
+        _row('Mode', 'Live' if mode == 'live' else 'Simulation'),
+        _row('Trips', f'{status["trips"]:,}' + (f' of {limit:,}' if limit else '')),
+        _row('Fish caught', _num(run.get('catches'))),
+        _row('XP gained', _num(run.get('xp'))),
+        _row('Money from chests and rewards', _num(run.get('money'), '$')),
+        _row('Trips per hour', _num(per_hour.get('trips'))),
+        _row('XP per hour', _num(per_hour.get('xp'))),
+        _row('Fish value per hour', _num(per_hour.get('fish_value'), '$')),
+        _row('Next fish', (f'in {next_fish:.1f} s' if next_fish else 'now') if running else 'not running'),
+    )) + '</dl>', note=sync_note)
+
+    inventory = dashboard.get('inventory') or {}
+    changes = {**(dashboard.get('changes') or {}).get('fish', {}), **(dashboard.get('changes') or {}).get('other', {})}
+    rows = ''.join(_row(name, f'{count:,}', changes.get(name))
+                   for key, _ in CATEGORIES for name, count in sorted((inventory.get(key) or {}).items(),
+                                                                       key=lambda item: -item[1]))
+    inventory_box = _box('Inventory', f'<dl class="columns">{rows}</dl>' if rows else
+                         '<p class="empty">Not read yet.</p>', wide=True,
+                         note='Green numbers are added since your profile was last read.' if changes else '')
+
+    recent = dashboard.get('recent') or []
+    trips_box = _box('Recent trips', '<ul class="trips-list">' + ''.join(
+        f'<li><span>{escape(_catch_text(trip["catches"]))}'
+        + ''.join(f'<br><span class="note">{escape(event)}</span>' for event in trip['events'])
+        + f'</span><span>+{trip["xp"]:,} XP</span></li>' for trip in recent) + '</ul>'
+        if recent else '<p class="empty">No trips yet.</p>')
+
+    return (f'<div data-running="{1 if running else 0}">{strip}{_level_line(profile, dashboard)}'
+            f'<div class="boxes">{profile_box}{buffs_box}{run_box}{inventory_box}{trips_box}</div></div>')
 
 
 def _field(name, label, value, hint=''):
-    return (f'<label for="{name}">{escape(label)}</label>'
+    return (f'<div><label for="{name}">{escape(label)}</label>'
             f'<input id="{name}" name="{name}" type="text" value="{escape(value or "")}" autocomplete="off">'
-            + (f'<p class="note">{escape(hint)}</p>' if hint else ''))
+            + (f'<p class="note">{escape(hint)}</p>' if hint else '') + '</div>')
 
 
-def render_automation(head, status, notice='', live_problem='', settings=None, mode=None):
+def render_automation(head, status, notice='', live_problem='', settings=None, mode=None, nonce=''):
     """Render the page. `status` is AutomationController.status(), or None before the first run; `mode` is the
     current run's mode; `settings` holds the last live account, username and channel."""
     settings = settings or {}
     running = bool(status and status['running'])
-    refresh = '<meta http-equiv="refresh" content="2;url=/automation">' if running else ''
     head = head.replace('<title>Player logbook · AutoVirtualFisher</title>',
-                        f'<title>Automation · AutoVirtualFisher</title>{refresh}')
+                        '<title>Automation · AutoVirtualFisher</title>').replace('</head>', STYLE + '</head>')
     notice_html = f'<p class="save-status">{escape(notice)}</p>' if notice else ''
-    live = mode == 'live'
-    if running:
-        control = ('<form method="post" action="/automation"><input type="hidden" name="action" value="stop">'
-                   '<div class="actions"><button type="submit">Stop now</button></div></form>'
-                   '<p class="note">Stop sends nothing further. A command already handed over is not undone.</p>')
-        if live:
-            control = ('<p class="status"><strong>Switch to Discord</strong> to fish. The run types into the '
-                       'Discord window only while it is in front; switching away pauses it until you come back.'
-                       '</p>') + control
+    if running and mode == 'live':
+        control = ('<p class="status"><strong>Switch to Discord</strong> to fish. The run types into Discord only '
+                   'while it is in front; switching away pauses it until you come back.</p>')
+    elif running:
+        control = ''
     else:
         live_attrs = ' disabled' if live_problem else ' checked'
         sim_attrs = ' checked' if live_problem else ''
-        control = ('<form method="post" action="/automation"><input type="hidden" name="action" value="start">'
-                   '<fieldset><legend>Mode</legend>'
-                   f'<label><input type="radio" name="mode" value="live"{live_attrs}> Live: fish in Discord</label>'
-                   f'<label><input type="radio" name="mode" value="simulation"{sim_attrs}> Simulation: '
-                   'nothing is sent</label>'
+        control = ('<form class="start" method="post" action="/automation"><input type="hidden" name="action" '
+                   'value="start"><fieldset><legend>Mode</legend>'
+                   f'<label><input type="radio" name="mode" value="live"{live_attrs}>Live: fish in Discord</label>'
+                   f'<label><input type="radio" name="mode" value="simulation"{sim_attrs}>Simulation: nothing is '
+                   'sent to Discord</label>'
                    + (f'<p class="note">{escape(live_problem)}</p>' if live_problem else '') + '</fieldset>'
-                   + _field('account', 'Virtual Fisher name (as in "Inventory of …")', settings.get('account'))
-                   + _field('username', 'Discord username (as in "…\'s current multipliers")', settings.get('username'))
+                   '<div class="pair">'
+                   + _field('account', 'Name in "… used /fish"', settings.get('account'),
+                            'Also the name in "Inventory of …".')
+                   + _field('username', 'Name in "…\'s current multipliers"', settings.get('username'),
+                            'Your Discord username, from /buffs.')
+                   + '</div>'
                    + _field('channel', 'Channel', settings.get('channel') or DEFAULT_CHANNEL,
-                            'The DM with Virtual Fisher, as Discord\'s search box names it.')
-                   + f'<label for="max_trips">Stop after this many trips (blank: no limit, up to {MAX_TRIPS:,})</label>'
-                   f'<input id="max_trips" name="max_trips" type="number" min="1" max="{MAX_TRIPS}" value="">'
-                   f'<label for="max_minutes">…or this many minutes (blank: no limit, up to {MAX_MINUTES})</label>'
+                            'Your DM with Virtual Fisher, as Discord\'s search box names it.')
+                   + '<div class="pair"><div>'
+                   f'<label for="max_trips">Stop after this many trips (blank: no limit, up to {MAX_TRIPS:,})</label>'
+                   f'<input id="max_trips" name="max_trips" type="number" min="1" max="{MAX_TRIPS}" value=""></div><div>'
+                   f'<label for="max_minutes">Or this many minutes (blank: no limit, up to {MAX_MINUTES})</label>'
                    f'<input id="max_minutes" name="max_minutes" type="number" min="1" max="{MAX_MINUTES}" value="">'
-                   '<div class="actions"><button type="submit">Start</button></div></form>'
-                   '<p class="note">Names are used only for live runs. Simulation uses a simulated player.</p>')
-    details = ''
-    if status:
-        last = status['last_result']
-        limit = status['config']['max_trips']
-        details = '<dl>' + ''.join(_row(label, value) for label, value in (
-            ('Mode', 'Live' if live else 'Simulation'),
-            ('State', status['phase']), ('Why', status['reason']),
-            ('Trips this run', f'{status["trips"]:,}' + (f' of {limit:,}' if limit else '')),
-            ('Confirmed trips (all runs)', f'{status["total_trips"]:,}'),
-            ('Waiting for reply to', status['pending'] or 'nothing'),
-            ('Last result', f'{last["result"]} ({last["action_id"]})' if last else 'none yet'),
-            ('Next fish in', f'{status["next_eligible_in"]:.1f} s' if status['next_eligible_in'] else 'now'),
-        )) + '</dl>'
-        for action in status['unresolved']:
-            details += ('<form method="post" action="/automation" class="actions">'
-                        '<input type="hidden" name="action" value="resolve">'
-                        f'<input type="hidden" name="id" value="{escape(action)}">'
-                        f'<p class="status">Outcome unknown: {escape(action)}. Check Discord, then say what '
-                        'happened.</p>'
-                        '<button class="secondary" type="submit" name="outcome" value="happened">It happened</button>'
-                        '<button class="secondary" type="submit" name="outcome" value="not_sent">It was not sent'
-                        '</button></form>')
+                   '</div></div><div class="actions"><button type="submit">Start</button></div></form>')
     return (f'<!doctype html><html lang="en">{head}<body>'
             '<header><a class="brand" href="/">AutoVirtualFisher</a><span class="local">Automation</span></header>'
             '<main><h1>Automation</h1>'
-            '<p class="intro">The fishing loop refreshes your profile and cooldown, fishes, reads each reply, and '
-            'waits out the cooldown. Anything it cannot read is noted in Needs review and the run carries on; '
-            'three unknown outcomes in a row stop it. Live trips go to your automation logbook; simulated trips are '
-            'kept apart.</p>'
-            f'{notice_html}{control}<section class="dashboard"><h2>Run</h2>'
-            f'{details or "<p class=status>No run yet.</p>"}</section></main></body></html>')
+            f'{notice_html}{control}'
+            f'<div id="panel" data-running="{1 if running else 0}">{render_panel(status, mode)}</div>'
+            f'</main>{SCRIPT.replace("{nonce}", escape(nonce))}</body></html>')

@@ -134,7 +134,7 @@ class AutomationWebTests(unittest.TestCase):
         self.assertIn('Live', html)
         self.assertTrue(self.handler.automation.status()['running'])
         html = self.post(action='stop')
-        self.assertIn('STOPPED', html)
+        self.assertIn('Stopped', html)
         self.assertTrue(call['transport'].stopped)
         self.assertIn('value="epicmouse"', self.get(), 'the last settings are remembered')
 
@@ -161,12 +161,24 @@ class AutomationWebTests(unittest.TestCase):
                                                                        'fishing')[0]), 3)
         self.assertEqual(load_sessions('sim', self.temporary / 'fishing')[0], [], 'your real logbook is untouched')
 
+    def test_dashboard_boxes_show_synced_and_projected_stats(self):
+        self.post(action='start', mode='simulation', max_trips='3', max_minutes='5')
+        self.wait_until_stopped()
+        panel = self.get('/automation/panel')
+        self.assertNotIn('<html', panel, 'a fragment the page swaps in place')
+        for heading in ('Profile', 'Buffs', 'This run', 'Inventory', 'Recent trips'):
+            self.assertIn(f'<h2>{heading}</h2>', panel)
+        self.assertIn('$1,000', panel)
+        self.assertIn('Level 10', panel)
+        self.assertIn('0.05 s', panel)
+        self.assertIn('/automation/panel', self.get(), 'the page refreshes its boxes')
+
     def test_repeated_start_and_stop(self):
         self.post(action='start', mode='simulation', max_trips='1000', max_minutes='5')
         html = self.post(action='start', mode='simulation', max_trips='1000', max_minutes='5')
         self.assertIn('already running', html)
         html = self.post(action='stop')
-        self.assertIn('STOPPED', html)
+        self.assertIn('Stopped', html)
         self.assertFalse(self.handler.automation.status()['running'])
 
 

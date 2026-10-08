@@ -118,6 +118,8 @@ class AutomationState:
     sequence: int = 0
     applied: frozenset = frozenset()
     startup_observed_at: dict = field(default_factory=dict)
+    # Refreshes queued by a periodic resync, in order ('refresh_profile', 'refresh_buffs').
+    refresh_due: tuple = ()
 
 
 def refresh_problems(kind: str | None, text: str) -> list[str]:

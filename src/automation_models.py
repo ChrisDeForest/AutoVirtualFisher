@@ -42,6 +42,7 @@ class AutomationConfig:
     cooldown_margin: float = 0.5   # seconds added to the verified cooldown
     mode: str = 'simulation'       # the separate native CLI explicitly selects 'live'
     capabilities: tuple = field(default=('refresh_profile', 'refresh_buffs', 'fish'))
+    resync_trips: int | None = 1000  # /profile and /buffs are read again after this many trips
 
 
 class TransportError(Exception):

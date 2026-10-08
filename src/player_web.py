@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import secrets
 import threading
 import time
 from pathlib import Path
@@ -20,7 +21,7 @@ from .automation_journal import AutomationJournal
 from .automation_models import AutomationConfig
 from .automation_transport import SimulationTransport
 from .automation_live import DEFAULT_LIVE_ROOT, build_live, live_problem, save_diagnostics
-from .automation_web import DEFAULT_CHANNEL, parse_limits, render_automation
+from .automation_web import DEFAULT_CHANNEL, parse_limits, render_automation, render_panel
 from .live_web import render_live
 from .observation import DEFAULT_IDENTITY_PATH, Identity, load_identity, save_identity
 from .planner_web import planner_card
@@ -366,14 +367,17 @@ class Handler(BaseHTTPRequestHandler):
         # Pasted account data should not appear in request logs.
         pass
 
-    def send_content(self, content, content_type='text/html; charset=utf-8', download=False):
+    def send_content(self, content, content_type='text/html; charset=utf-8', download=False, script_nonce=None):
         body = content.encode('utf-8')
         self.send_response(200)
         self.send_header('Content-Type', content_type)
         self.send_header('Content-Length', str(len(body)))
         self.send_header('Cache-Control', 'no-store')
         self.send_header('X-Content-Type-Options', 'nosniff')
-        self.send_header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'")
+        # Scripts only with this response's nonce, and they may fetch only from this server.
+        scripts = f" script-src 'nonce-{script_nonce}'; connect-src 'self';" if script_nonce else ''
+        self.send_header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline';" + scripts
+                         + " form-action 'self'; frame-ancestors 'none'")
         if download:
             self.send_header('Content-Disposition', 'attachment; filename="player-state.json"')
         self.end_headers()
@@ -384,8 +388,9 @@ class Handler(BaseHTTPRequestHandler):
         head = template[template.index('<head>'):template.index('</head>') + len('</head>')]
         cls = type(self)
         status = cls.automation.status() if cls.automation else None
+        nonce = secrets.token_urlsafe(16)
         self.send_content(render_automation(head, status, notice, cls.automation_live_problem(),
-                                            self.live_settings(), cls.automation_mode))
+                                            self.live_settings(), cls.automation_mode, nonce), script_nonce=nonce)
 
     def live_settings(self):
         """The last live account, username and channel, with the username from the saved identity."""
@@ -497,6 +502,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         if url.path == '/automation':
             self.automation_page()
+            return
+        if url.path == '/automation/panel':
+            cls = type(self)
+            status = cls.automation.status() if cls.automation else None
+            self.send_content(render_panel(status, cls.automation_mode))
             return
         if url.path != '/':
             self.send_error(404)

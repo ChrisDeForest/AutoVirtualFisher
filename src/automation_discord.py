@@ -264,7 +264,12 @@ class DiscordTransport:
                 if not (status == VERIFIED and message.get('invoked_by') == self.identity.display_name
                         and (expected or cooldown)):
                     self.candidate = None
-                    self.last_issue = 'The newest message is not the reply to this command yet.'
+                    invoker = message.get('invoked_by')
+                    if invoker and invoker.casefold() != self.identity.display_name.casefold():
+                        self.last_issue = (f'The newest reply was used by {invoker}, not {self.identity.display_name}. '
+                                           'If that is you, check the names on the Automation page.')
+                    else:
+                        self.last_issue = 'The newest message is not the reply to this command yet.'
                     return []
                 self.last_issue = None
                 problems = []
