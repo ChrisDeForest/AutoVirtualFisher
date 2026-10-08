@@ -32,10 +32,12 @@ be undone. Do not manually invoke VF commands while it is running.
 
 Missing command-picker evidence, changed context, verification prompts, or
 uncertain replies stop dispatch. A failed entry may leave an unsent draft;
-inspect and clear it manually before restarting. Resolve an uncertain journal
-action using `--resolve ACTION_ID --outcome happened` or `--outcome not_sent`
-after checking the game. Resolution does not start a run and cannot reconstruct
-lost fishing results. Live journal, trips, and review items are stored separately
+inspect and clear it manually before restarting. An uncertain action pauses only
+its own run: the next start notes it once in Needs review (non-blocking) and
+fishes. To settle one without starting a run, use `--resolve ACTION_ID --outcome
+happened` or `--outcome not_sent`. Resolution cannot reconstruct lost fishing
+results; enter those by hand. Refusals before any input (wrong window, no reply
+on screen to compare against) stop the run but are never uncertain. Live journal, trips, and review items are stored separately
 under ignored `src/data/automation_live/`.
 
 Reply matching uses required startup values, own invocation and send times, with
@@ -251,7 +253,8 @@ answers it, update state, and wait out the verified cooldown plus 0.5 s.
 - After a crash, the next start rebuilds the state from the journal. Commands
   that were never sent are dropped, unfinished logbook saves are redone (each
   trip is saved once, keyed by its command), and commands that may have been
-  sent stay unresolved until their reply is seen or you resolve them.
+  sent are noted in Needs review without blocking; a reply to one that is still
+  visible is still counted once.
 - Simulated trips are saved in `src/data/automation_sim/`, never in your
   logbook. Tests cover 100 simulated trips, with and without a crash in the
   middle, with exact totals.

@@ -50,3 +50,7 @@ class TransportError(Exception):
 
 class CapabilityError(Exception):
     """The transport does not support this action; raised before anything is dispatched."""
+
+
+class NotDispatched(CapabilityError):
+    """Refused before any input reached the game (wrong context, no baseline, stopped): certainly not sent."""

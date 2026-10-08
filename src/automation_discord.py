@@ -5,13 +5,52 @@ and two stable captures. It cannot reconcile an action from a previous process a
 Do not manually invoke VF commands while this adapter owns the command stream.
 """
 from datetime import datetime, timezone
+import json
 import re
 import threading
 from secrets import token_hex
 
-from .automation_models import CapabilityError, ContextStatus, DispatchReceipt, TransportError
+from .automation_models import CapabilityError, ContextStatus, DispatchReceipt, NotDispatched, TransportError
 from .live_capture import align, capture_frame
 from .observation import Identity, Observation, VERIFIED, check_identity, recipients
+
+
+def stable_frame(lines):
+    """Match usable replies on their parsed values, retaining raw text for validation/evidence."""
+    from .fishing_log import parse_fishing
+    from .startup_fields import reply_fields
+    frame = capture_frame(lines)
+    for message in frame['messages']:
+        kind, text = message['kind'], '\n'.join(message['lines'])
+        values = None
+        if kind in ('profile', 'buffs'):
+            # Startup overlap and stabilization depend on required fields, not optional
+            # inventory, XP, multipliers or emoji. Raw observations remain available.
+            values = {'values': reply_fields(kind, text)}
+            if kind == 'profile' and values['values'].get('account_name') and 'level' in values['values']:
+                message['position_key'] = (kind, json.dumps(
+                    {key: values['values'][key] for key in ('account_name', 'level')}, sort_keys=True))
+        elif kind == 'fishing':
+            # Overlap evidence is separate from reply acceptance. Boost-caption OCR must
+            # not change the key of an old catch; the controller still validates raw text.
+            overlap_text = '\n'.join(line for line in message['lines']
+                                     if not line.casefold().startswith('global boost by'))
+            values = {k: v for k, v in parse_fishing(overlap_text).items()
+                      if k not in ('warnings', 'unparsed_line_count', 'schema_version')}
+            # Fish labels can change capitalization between OCR captures. Keep
+            # numerical evidence exact; normalize only names in overlap keys.
+            values['catches'] = {name.casefold(): count for name, count in values['catches'].items()}
+            for trip in values['trip_details']:
+                trip['catches'] = {name.casefold(): count for name, count in trip['catches'].items()}
+            # Positioning uses the catch and trip XP, not optional quest/chest
+            # text. Full keys/raw lines still stabilize and validate new replies.
+            if values['trips'] == 1 and values['catches'] and values['trip_details'][0]['xp'] is not None:
+                message['position_key'] = (kind, json.dumps(
+                    {'catches': values['catches'], 'xp': values['trip_details'][0]['xp']}, sort_keys=True))
+        if values is not None:
+            values['identity'] = recipients(kind, message['lines'], message.get('invoked_by'))
+            message['key'] = (kind, json.dumps(values, sort_keys=True, ensure_ascii=False))
+    return frame
 
 COMMANDS = {'refresh_profile': '/profile', 'refresh_buffs': '/buffs', 'fish': '/fish'}
 CHALLENGE = re.compile(r'captcha|\bverify\b|verification|anti.bot', re.I)
@@ -35,7 +74,7 @@ def command_target(boxes, command, composer=None):
         return None
     target = found[0]
     height = max(1, target['bottom'] - target['top'])
-    if composer is not None and not (composer[1] - 15 * height <= target['top'] < composer[1] - height
+    if composer is not None and not (composer[1] - 40 * height <= target['top'] < composer[1] - height
                                      and abs(_center(target)[0] - composer[0]) <= 15 * height):
         return None
     labels = [b for b in boxes if b is not target
@@ -56,7 +95,7 @@ def command_target(boxes, command, composer=None):
 def command_text(text):
     """Normalize only the observed OCR slash glyph; preserve the exact command name."""
     text = text.strip().casefold()
-    return '/' + text[1:] if text.startswith('[') else text
+    return '/' + text[1:] if text.startswith(('[', "'")) else text
 
 
 class DiscordTransport:
@@ -73,6 +112,10 @@ class DiscordTransport:
         self.cancelled = threading.Event()
         self.pending = self.baseline = self.candidate = None
         self.blocked = None
+        self.last_issue = None
+        self.sending_seen = False
+        self.last_frame = None
+        self.last_lines = None         # the raw chat lines of the latest capture, for diagnosis
         self.title = None
         self.lock = threading.Lock()
 
@@ -112,7 +155,7 @@ class DiscordTransport:
             problem = self._check(self.driver.capture())
         except Exception as error:
             problem = f'Capture failed: {error}'
-        return ContextStatus(not problem, self.context_id, problem or '')
+        return ContextStatus(not problem, self.context_id, problem or self.last_issue or '')
 
     def send(self, intent):
         if not self.enabled or self.cancelled.is_set():
@@ -124,18 +167,26 @@ class DiscordTransport:
                 raise TransportError('An earlier outcome is unresolved; do not resend.')
             if intent.context_id != self.context_id:
                 raise TransportError('Intent targets a different context.')
+            # Checks before input only read the screen: a refusal here certainly sent nothing.
             try:
                 before = self.driver.capture()
-                problem = self._check(before)
-                if problem:
-                    raise TransportError(problem)
-                baseline = capture_frame(before['lines'])
-                if not baseline['messages']:
-                    raise TransportError('No complete VF reply visible to establish a baseline.')
+            except Exception as error:
+                raise NotDispatched(f'Capture failed before input: {error}') from error
+            self.last_lines = list(before.get('lines', []))
+            problem = self._check(before)
+            if problem:
+                raise NotDispatched(problem)
+            baseline = stable_frame(before['lines'])
+            self.last_frame = baseline
+            if not baseline['messages']:
+                raise NotDispatched('No complete VF reply visible to establish a baseline.')
+            if self.cancelled.is_set():
+                raise NotDispatched('Stopped before input.')
+            try:
                 self.baseline, self.pending = baseline, intent
+                self.sending_seen = False
                 self.candidate = None
-                if self.cancelled.is_set():
-                    raise TransportError('Stopped before input.')
+                self.last_issue = None
                 self.driver.dispatch(COMMANDS[intent.kind], self.cancelled.is_set)
                 return DispatchReceipt(intent.action_id, self.utc().isoformat(), 'Native UI command submitted')
             except Exception as error:
@@ -153,11 +204,31 @@ class DiscordTransport:
                 if problem:
                     self.blocked = problem
                     return []
-                frame = capture_frame(capture['lines'])
+                lines = capture['lines']
+                invocations = [index for index, line in enumerate(lines) if re.match(r'^\S+ used\b', line)]
+                if invocations:
+                    tail = lines[invocations[-1]:]
+                    from .ocr_cleanup import MESSAGE_HEADER
+                    command = COMMANDS[self.pending.kind].lstrip('/')
+                    if (re.match(r'^' + re.escape(self.identity.display_name) + r' used\b', tail[0])
+                            and re.search(r'\b' + re.escape(command) + r'\b', '\n'.join(tail[:2]))
+                            and any(MESSAGE_HEADER.fullmatch(line) for line in tail[1:])
+                            and re.fullmatch(r'\W*Sending command(?:\.{3}|…)?\W*', tail[-1], re.I)):
+                        self.sending_seen = True
+                        self.candidate = None
+                        self.last_issue = 'Discord shows Sending command; retrying reply capture without resending.'
+                        return []
+                self.last_lines = list(capture['lines'])
+                frame = stable_frame(capture['lines'])
+                self.last_frame = frame
                 placement = align(self.baseline, frame)
                 if placement['status'] != 'certain':
-                    self.blocked = 'Reply placement uncertain: ' + placement['reason']
+                    self.candidate = None
+                    self.last_issue = 'Reply placement uncertain: ' + placement['reason']
+                    if placement['status'] == 'ambiguous':
+                        self.blocked = self.last_issue
                     return []
+                self.last_issue = None
                 fresh = frame['messages'][placement['start']:]
                 matches = []
                 for message in fresh:
@@ -174,10 +245,19 @@ class DiscordTransport:
                     self.blocked = 'Multiple own replies after dispatch; correlation ambiguous.'
                     return []
                 if not matches:
+                    self.last_issue = 'No new reply with the expected kind, recipient and own invocation was confirmed.'
                     self.candidate = None
                     return []
                 message, recipient = matches[0]
-                evidence = (message['key'], tuple(message['lines']), message.get('sent'))
+                if message['kind'] == 'fishing' and not cooldown:
+                    from .live_capture import fishing_problems
+                    problems = fishing_problems('\n'.join(message['lines']))
+                    if problems:
+                        self.candidate = None
+                        self.last_issue = 'Rereading incomplete fishing reply: ' + '; '.join(problems)
+                        return []
+                evidence = (message['key'], message.get('invoked_by'), message.get('sent')) if message['kind'] in ('profile', 'buffs') else (
+                    message['key'], tuple(message['lines']), message.get('sent'))
                 if self.candidate != evidence:
                     self.candidate = evidence
                     return []

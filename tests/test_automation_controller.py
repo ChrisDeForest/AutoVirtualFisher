@@ -289,6 +289,21 @@ class ControllerTests(unittest.TestCase):
         self.run_for(10)
         self.assertGreater(len(self.fish_sends()), 1, 'fishing resumes once a person has resolved it')
 
+    def test_uncertain_command_blocks_only_its_own_run(self):
+        self.sim.script = {2: 'missing'}
+        self.make().start()
+        self.run_for(40)
+        self.assertEqual(self.controller.status()['phase'], 'NEEDS_REVIEW')
+        self.controller.stop()
+        for _ in range(2):
+            self.make(config=replace(CONFIG, max_trips=1)).start()
+            self.run_for(20)
+            self.assertNotEqual(self.controller.status()['phase'], 'NEEDS_REVIEW')
+            self.controller.stop()
+        self.assertEqual(self.saved_trips(), 2)
+        notes = [item for item in list_items(self.review)[0] if 'earlier run' in ' '.join(item['reasons'])]
+        self.assertEqual(len(notes), 1, 'noted once, not on every later start')
+
     def test_crash_before_send_is_forgotten_safely(self):
         self.make(journal=FaultyJournal(self.journal_root, on='dispatching', nth=3)).start()
         with self.assertRaises(Crash):
@@ -307,21 +322,23 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(len(self.fish_sends()), 1)
         restarted = self.make(config=replace(CONFIG, max_trips=3))
         restarted.start()
-        self.assertEqual(restarted.status()['phase'], 'NEEDS_REVIEW', 'uncertain until evidence is seen')
+        self.assertNotEqual(restarted.status()['phase'], 'NEEDS_REVIEW', 'an earlier run never blocks this one')
         self.run_for(30)
         self.assertEqual(self.sim.totals['trips'], 4, 'the reconciled trip plus three new ones')
         self.assertEqual(self.saved_trips(), 4, 'the crashed trip is counted once, from its reply')
 
-    def test_crash_after_send_with_no_reply_stays_uncertain(self):
+    def test_crash_after_send_with_no_reply_is_noted_and_does_not_block(self):
         self.sim.script = {2: 'missing'}
         self.make(journal=FaultyJournal(self.journal_root, on='dispatched', nth=3)).start()
         with self.assertRaises(Crash):
             self.run_for(10)
-        restarted = self.make()
+        restarted = self.make(config=replace(CONFIG, max_trips=1))
         restarted.start()
-        self.run_for(60)
-        self.assertEqual(len(self.fish_sends()), 1, 'zero blind resends')
-        self.assertEqual(restarted.status()['phase'], 'NEEDS_REVIEW')
+        self.run_for(30)
+        self.assertEqual(self.saved_trips(), 1)
+        notes = [item for item in list_items(self.review)[0] if 'earlier run' in ' '.join(item['reasons'])]
+        self.assertEqual(len(notes), 1)
+        self.assertFalse(notes[0]['blocks_actions'])
 
     def test_crash_after_receipt_before_acknowledgment(self):
         self.make(journal=FaultyJournal(self.journal_root, on='acknowledged', nth=3)).start()
@@ -353,6 +370,25 @@ class ControllerTests(unittest.TestCase):
         self.run_for(30)
         self.assertEqual(len(self.fish_sends()), 1)
         self.assertIn(self.controller.status()['phase'], ('FAILED', 'NEEDS_REVIEW'))
+
+    def test_refusal_before_input_is_abandoned_not_a_blocker(self):
+        from src.automation_models import NotDispatched
+        original = self.sim.send
+        def refuse(intent):
+            raise NotDispatched('No complete VF reply visible to establish a baseline.')
+        self.sim.send = refuse
+        self.make().start()
+        self.run_for(2)
+        status = self.controller.status()
+        self.assertEqual(status['phase'], 'FAILED')
+        self.assertIn('baseline', status['reason'])
+        self.assertFalse(status['unresolved'])
+        self.sim.send = original
+        self.controller.stop()
+        self.make().start()
+        self.run_for(5)
+        self.assertNotEqual(self.controller.status()['phase'], 'NEEDS_REVIEW')
+        self.assertTrue(self.sim.sent, 'a later run is not blocked by a command that was never typed')
 
     def test_send_failure_is_uncertain_not_retried(self):
         self.sim.script = {2: 'send_error'}
@@ -409,7 +445,7 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual([intent.kind for _, intent in self.sim.sent], ['refresh_profile'])
         self.assertEqual(controller.status()['pending'], self.sim.sent[0][1].action_id)
 
-    def test_damaged_journal_blocks_sending_until_resolved(self):
+    def test_damaged_journal_is_noted_and_does_not_block(self):
         self.make(journal=FaultyJournal(self.journal_root, on='dispatched', nth=3)).start()
         with self.assertRaises(Crash):
             self.run_for(10)
@@ -421,12 +457,9 @@ class ControllerTests(unittest.TestCase):
         restarted.start()
         self.run_for(30)
         status = restarted.status()
-        self.assertEqual(len(self.sim.sent), sends, 'a possibly sent command is not treated as unsent')
-        self.assertEqual(status['phase'], 'NEEDS_REVIEW')
-        self.assertIn('damaged-journal', status['unresolved'])
-        restarted.resolve('damaged-journal', 'happened')
-        self.run_for(10)
-        self.assertGreater(len(self.sim.sent), sends, 'sending resumes once a person has checked')
+        self.assertGreater(len(self.sim.sent), sends)
+        self.assertEqual(status['unresolved'], [])
+        self.assertTrue(any('could not be read' in ' '.join(item['reasons']) for item in list_items(self.review)[0]))
 
     # --- acceptance ---
 

@@ -3,8 +3,8 @@
 At most one command is unresolved at a time. Every command is journaled before it is handed over, and its
 hand-over and reply after. A command whose outcome is not known (no reply in time, a failed or unrecorded
 hand-over, a reply without evidence of which command it answers, an unreadable fishing result) is never resent: it
-becomes uncertain, the loop stops sending, and a person resolves it. After a crash, start() rebuilds this from
-the journal and reconciles uncertain commands with replies still visible. Confirmed read-only startup replies
+becomes uncertain and this run stops sending until a person resolves it. A later run is never blocked by it:
+start() notes an earlier run's uncertain commands in Needs review and still counts any reply to them it sees. Confirmed read-only startup replies
 that fail OCR are retried up to three attempts, with a delay, unless a retry reads exactly as the last one did
 (the same pixels give the same misread); they never establish state until valid.
 """
@@ -29,8 +29,6 @@ from .review_queue import add_item
 
 COOLDOWN_REPLY = re.compile(r'You must wait ([\d.]+) seconds? before fishing again', re.I)
 RESOLUTIONS = ('happened', 'not_sent')
-# The unresolved entry for journal records that could not be read.
-DAMAGED_JOURNAL = 'damaged-journal'
 STARTUP_ATTEMPTS = 3
 STARTUP_RETRY_DELAY = 2.0
 
@@ -55,7 +53,8 @@ class AutomationController:
         self.state = AutomationState(run_id='', account=config.account, username=config.username,
                                      context_id=config.context_id)
         self.phase, self.reason = 'STOPPED', 'Not started.'
-        self.unresolved = {}           # action id -> why its outcome is unknown
+        self.unresolved = {}           # action id -> why its outcome is unknown (this run; blocks sending)
+        self.carried = {}              # the same, from an earlier run: noted in Needs review, never blocks
         self.acknowledged = set()      # action ids whose reply has been accepted
         self.failed = None             # a journal failure: nothing more is sent until restart
         self.in_flight = None          # the command being handed over right now, if any
@@ -96,23 +95,27 @@ class AutomationController:
                         max_seconds=self.config.max_seconds)
             damaged = recovered['damaged']
             for action in recovered['never_sent']:
-                if damaged:
-                    # A later record of this command may be among the unreadable ones: it may have been sent.
-                    recovered['actions'][action]['reason'] = ('Its later journal records may be among the '
-                                                              'unreadable ones; it may have been sent.')
-                    recovered['unresolved'].append(action)
-                else:
-                    self._event('abandoned', action, reason='Journaled but never handed over (restart).')
+                self._event('abandoned', action, reason='Journaled but never handed over (restart).')
             for action in recovered['unprojected']:
                 self._project(action, recovered['actions'][action]['tally'])
-            self.unresolved = {action: recovered['actions'][action].get('reason')
-                               or 'It may have been sent before the app stopped; its outcome is unknown.'
-                               for action in recovered['unresolved']}
+            # An earlier run's unknown outcome never blocks this run: it is noted once in Needs review and settled
+            # in the journal. A reply to it that is still visible is still counted (see _observe).
+            self.unresolved, self.carried = {}, {}
+            for action in recovered['unresolved']:
+                info = recovered['actions'][action]
+                reason = info.get('reason') or 'It may have been sent before the app stopped; its outcome is unknown.'
+                kind = (info.get('intent') or {}).get('kind', 'command')
+                self._event('resolved', action, outcome='unknown', reason='Carried over from an earlier run: ' + reason)
+                add_item(self.roots['review'], self.config.account, 'automation', f'{kind}: {reason}',
+                         [f'From an earlier run: this {kind} may or may not have reached the game. Check Discord '
+                          'and enter any trip by hand.', reason], blocks_actions=False)
+                self.carried[action] = reason
             if damaged:
-                self.damaged_files = damaged
-                self.unresolved[DAMAGED_JOURNAL] = (
-                    f'{len(damaged)} journal record(s) could not be read ({", ".join(damaged[:3])}), so an '
-                    'earlier command may have been sent without its record. Check Discord, then resolve.')
+                self._event('journal_damage_resolved', None, outcome='unknown', files=damaged)
+                add_item(self.roots['review'], self.config.account, 'automation', '\n'.join(damaged),
+                         [f'{len(damaged)} journal record(s) from an earlier run could not be read, so a command may '
+                          'have been sent without its record. Check Discord and enter any trip by hand.'],
+                         blocks_actions=False)
             self.phase, self.reason = ('NEEDS_REVIEW', self._unresolved_text()) if self.unresolved else (
                 'BOOTSTRAPPING', 'Starting.')
             generation, stop_event = self.generation, self.stop_event
@@ -141,11 +144,7 @@ class AutomationController:
         with self.lock:
             if action_id not in self.unresolved:
                 return False
-            if action_id == DAMAGED_JOURNAL:
-                # Remembered in the journal, so the same damaged records do not block every later start.
-                self._event('journal_damage_resolved', None, outcome=outcome, files=self.damaged_files)
-            else:
-                self._event('resolved', action_id, outcome=outcome)
+            self._event('resolved', action_id, outcome=outcome)
             del self.unresolved[action_id]
             self.acknowledged.add(action_id)
             self._sync_uncertain()
@@ -315,10 +314,11 @@ class AutomationController:
             self.state = apply_startup(self.state, observation) if observation.kind in ('profile', 'buffs') else apply_observation(self.state, observation)
             self.state = replace(self.state, pending=None)
             self._acknowledge(pending.action_id, pending.kind, observation, this_run=True)
-        elif correlation in self.unresolved:
+        elif correlation in self.unresolved or correlation in self.carried:
             # A reply to a command whose outcome was unknown (from before a restart, or after a timeout).
             kind = 'fish' if observation.kind in ('fishing', None) else f'refresh_{observation.kind}'
-            del self.unresolved[correlation]
+            self.unresolved.pop(correlation, None)
+            self.carried.pop(correlation, None)
             self._acknowledge(correlation, kind, observation, this_run=False)
             self._sync_uncertain()
 
