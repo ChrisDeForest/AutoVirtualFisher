@@ -125,37 +125,30 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(self.saved_trips(), 4)
         self.assertEqual(self.sim.totals['trips'], 4)
 
-    def test_unreadable_refresh_is_not_a_successful_bootstrap(self):
-        for index, kind in ((0, 'profile'), (1, 'buffs')):
-            with self.subTest(kind=kind):
-                self.setUp()
-                self.sim.script = {attempt: 'unreadable' for attempt in range(index, index + 3)}
-                self.make().start()
-                self.run_for(20)
-                self.assertEqual(len(self.sim.sent), index + 3, 'stop after three unreadable replies')
-                status = self.controller.status()
-                self.assertEqual(status['phase'], 'NEEDS_REVIEW')
-                self.assertIsNone((self.controller.state.profile or {}).get('balance') if kind == 'profile'
-                                  else self.controller.state.cooldown_seconds)
-                items = list_items(self.review)[0]
-                self.assertEqual(len(items), 3)
-                [item] = [item for item in items if item['blocks_actions']]
-                self.assertEqual(item['kind'], kind)
-                result = AutomationJournal(self.journal_root).recover()['actions'][status['unresolved'][0]]
-                self.assertEqual(result['result'], 'unreadable')
-                self.tearDown()
-        self.setUp()
+    def kinds(self):
+        return [intent.kind for _, intent in self.sim.sent]
 
-    def test_identical_unreadable_retry_escalates_without_another_send(self):
-        # The same pixels give the same misread: a third /profile cannot read differently.
-        self.sim.script = {0: 'unreadable_fixed', 1: 'unreadable_fixed', 2: 'unreadable_fixed'}
-        self.make().start()
-        self.run_for(20)
-        self.assertEqual([intent.kind for _, intent in self.sim.sent], ['refresh_profile', 'refresh_profile'])
-        status = self.controller.status()
-        self.assertEqual(status['phase'], 'NEEDS_REVIEW')
-        self.assertIn('same unreadable text', status['reason'])
-        self.assertEqual(sum(item['blocks_actions'] for item in list_items(self.review)[0]), 1)
+    def test_unreadable_profile_is_set_aside_and_retried_every_10_trips(self):
+        # The same misread twice gives up at once; fishing goes on and /profile is tried again 10 trips later.
+        self.sim.script = {0: 'unreadable_fixed', 1: 'unreadable_fixed'}
+        self.make(config=replace(CONFIG, max_trips=12)).start()
+        self.run_for(120)
+        self.assertEqual(self.kinds(), ['refresh_profile', 'refresh_profile', 'refresh_buffs'] + ['fish'] * 10
+                         + ['refresh_profile', 'fish', 'fish'])
+        self.assertEqual(self.controller.state.profile['balance'], 1000, 'the retry read it')
+        self.assertTrue(all(not item['blocks_actions'] for item in list_items(self.review)[0]))
+
+    def test_unreadable_buffs_fishes_on_an_assumed_cooldown_until_read(self):
+        self.sim.script = {1: 'unreadable_fixed', 2: 'unreadable_fixed', 13: 'unreadable_fixed'}
+        self.make(config=replace(CONFIG, max_trips=21)).start()
+        self.run_for(240)
+        kinds = self.kinds()
+        self.assertEqual(kinds[:3], ['refresh_profile', 'refresh_buffs', 'refresh_buffs'])
+        self.assertEqual(kinds[3:13], ['fish'] * 10)
+        self.assertEqual(kinds[13], 'refresh_buffs', 'tried again after 10 trips; this read fails too')
+        self.assertEqual(kinds[24], 'refresh_buffs', 'and again 10 trips later, which reads')
+        self.assertEqual(self.controller.state.cooldown_seconds, 3.5)
+        self.assertNotIn(self.controller.status()['phase'], ('NEEDS_REVIEW', 'FAILED'))
 
     def test_startup_retries_only_failed_command_then_fishes(self):
         self.sim.script = {1: 'unreadable', 2: 'unreadable'}
@@ -257,6 +250,22 @@ class ControllerTests(unittest.TestCase):
 
     # --- failures: never a blind resend ---
 
+    def test_pause_holds_sending_and_resume_carries_on(self):
+        self.make(config=replace(CONFIG, max_trips=4)).start()
+        self.run_for(10)
+        self.controller.pause()
+        sent = len(self.sim.sent)
+        self.run_for(30)
+        status = self.controller.status()
+        self.assertTrue(status['paused'])
+        self.assertEqual(status['phase'], 'PAUSED_BY_YOU')
+        self.assertLessEqual(len(self.sim.sent), sent, 'nothing more is sent while paused')
+        self.assertEqual(self.controller.status()['pending'], None, 'a reply already on its way is still read')
+        self.controller.resume()
+        self.run_for(30)
+        self.assertEqual(self.saved_trips(), 4)
+        self.assertFalse(self.controller.status()['paused'])
+
     # --- live stats and periodic resync ---
 
     def test_profile_and_buffs_are_resynced_every_n_trips(self):
@@ -284,6 +293,8 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(dashboard['buffs']['fishing_cooldown']['value'], 3.5)
         self.assertEqual(sum(dashboard['changes']['fish'].values()), sum(self.sim.totals['catches'].values()))
         self.assertIn('xp', dashboard['per_hour'])
+        self.assertEqual(set(dashboard['finds']), {'run', 'all'})
+        self.assertEqual(dashboard['finds']['run']['chests'], {})
 
     # --- unknown outcomes: noted, never stop the run ---
 

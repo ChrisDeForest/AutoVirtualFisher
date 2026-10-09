@@ -120,6 +120,8 @@ class AutomationState:
     startup_observed_at: dict = field(default_factory=dict)
     # Refreshes queued by a periodic resync, in order ('refresh_profile', 'refresh_buffs').
     refresh_due: tuple = ()
+    # Refreshes that could not be read; fishing goes on without them and they are tried again every few trips.
+    deferred: tuple = ()
 
 
 def refresh_problems(kind: str | None, text: str) -> list[str]:

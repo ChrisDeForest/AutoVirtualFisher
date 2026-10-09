@@ -5,6 +5,7 @@ adds its XP (with level-ups from the wiki level table), catches, chest finds and
 catches add at wiki sell price times the sell multiplier. The next sync replaces the projection with fresh values.
 """
 from copy import deepcopy
+import re
 
 from .player_planner import xp_required
 from .player_state import parse_responses
@@ -43,7 +44,19 @@ def project(synced: dict, tallies: list[dict], increments: list[int] | None, fis
     changes = {'fish': {}, 'other': {}}
     sell = _multiplier(synced['buffs'], 'sell_price')
     xp_gained = money = value_added = 0
+    sources = {'chests': {'money': 0, 'xp': 0, 'other': {}}, 'quests': {'money': 0, 'xp': 0, 'other': {}},
+               'level_ups': {'money': 0}}
     for tally in tallies:
+        sources['chests']['money'] += tally['chest_money']
+        sources['chests']['xp'] += tally['chest_xp']
+        for name, count in tally['chest_contents'].items():
+            sources['chests']['other'][name] = sources['chests']['other'].get(name, 0) + count
+        for quest in tally['quests_completed']:
+            sources['quests']['money'] += quest['money']
+            sources['quests']['xp'] += quest['xp']
+            for name, count in quest['items'].items():
+                sources['quests']['other'][name] = sources['quests']['other'].get(name, 0) + count
+        sources['level_ups']['money'] += tally['level_up_money']
         trip_xp = tally['fishing_xp'] + sum(quest['xp'] for quest in tally['quests_completed'])
         xp_gained += trip_xp
         money += (tally['chest_money'] + tally['level_up_money']
@@ -75,4 +88,23 @@ def project(synced: dict, tallies: list[dict], increments: list[int] | None, fis
         profile['fish_value'] += round(value_added)
     return {'profile': profile, 'inventory': inventory, 'buffs': synced['buffs'], 'changes': changes,
             'gained': {'xp': xp_gained, 'money': money, 'fish_value': round(value_added),
-                       'trips': len(tallies), 'catches': sum(changes['fish'].values())}}
+                       'trips': len(tallies), 'catches': sum(changes['fish'].values()), 'sources': sources}}
+
+
+CONTAINER = re.compile(r'\b(chest|crate|box)\b', re.I)
+
+
+def summarize_finds(tallies, earlier: dict | None = None) -> dict:
+    """Chests by type, special fish from chests, charms found and the latest charm levels, added onto `earlier`."""
+    finds = deepcopy(earlier) if earlier else {'chests': {}, 'special_fish': {}, 'charms': {}, 'other': {},
+                                                'charm_levels': {}}
+    for tally in tallies:
+        for name, count in tally.get('finds', {}).items():
+            group = ('charms' if name.casefold().endswith('charm') else
+                     'chests' if CONTAINER.search(name) else 'other')
+            finds[group][name] = finds[group].get(name, 0) + count
+        for name, count in tally.get('chest_contents', {}).items():
+            group = 'special_fish' if name.casefold().endswith('fish') else 'other'
+            finds[group][name] = finds[group].get(name, 0) + count
+        finds['charm_levels'].update(tally.get('charm_levels', {}))
+    return finds

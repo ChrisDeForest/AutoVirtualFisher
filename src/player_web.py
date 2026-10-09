@@ -459,6 +459,10 @@ class Handler(BaseHTTPRequestHandler):
                     cls.automation.start(thread=True)
             elif action == 'stop' and current:
                 self.stop_automation()
+            elif action == 'pause' and current:
+                current.pause()
+            elif action == 'resume' and current:
+                current.resume()
             elif action == 'resolve' and current:
                 outcome = fields.get('outcome', [''])[0]
                 if outcome not in ('happened', 'not_sent') or not current.resolve(fields.get('id', [''])[0], outcome):

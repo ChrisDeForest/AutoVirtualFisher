@@ -20,9 +20,10 @@ from .automation_models import AutomationConfig, CapabilityError, NotDispatched,
 from .automation_policy import next_action
 from .automation_state import AutomationState, apply_observation
 from .catch_check import load_fish_reference
-from .live_stats import project, synced_stats
+from .fishing_sessions import load_sessions
+from .live_stats import project, summarize_finds, synced_stats
 from .player_planner import load_level_increments
-from .startup_fields import apply_startup, startup_problems
+from .startup_fields import apply_startup, reply_problems, startup_problems
 from .fishing_log import parse_fishing
 from .fishing_sessions import save_session
 from .live_capture import fishing_problems
@@ -88,6 +89,7 @@ class AutomationController:
         self.startup_retry_at = float('-inf')
         self.unknown_streak = 0
         self.refused_until, self.refused_reason = float('-inf'), ''
+        self.paused = False            # paused by the person: nothing new is sent until resumed
         self._reset_stats()
 
     def _reset_stats(self):
@@ -96,6 +98,8 @@ class AutomationController:
         self.synced = {'profile': '', 'buffs': ''}
         self.synced_at = {}
         self.sync_tallies, self.run_tallies = [], []
+        self.retry_counts = {}         # deferred refresh -> trips since it was last tried
+        self.finds_before = None       # finds from earlier automation trips, loaded once per run
 
     # --- run control ---
 
@@ -116,6 +120,7 @@ class AutomationController:
             self.startup_failures, self.startup_problems, self.startup_texts = {}, {}, {}
             self.unknown_streak = 0
             self.refused_until, self.refused_reason = float('-inf'), ''
+            self.paused = False
             self._reset_stats()
             self.startup_retry_at = float('-inf')
             self.acknowledged = {action for action, info in recovered['actions'].items()
@@ -166,6 +171,21 @@ class AutomationController:
         if worker is not None and worker is not threading.current_thread():
             worker.join(timeout)
 
+    def pause(self):
+        """Send nothing new until resumed. A command already sent still has its reply read."""
+        with self.lock:
+            if self.running and not self.paused:
+                self.paused = True
+                self._safe_event('paused', None)
+                self.phase, self.reason = 'PAUSED_BY_YOU', 'Paused. Resume to carry on fishing.'
+
+    def resume(self):
+        with self.lock:
+            if self.paused:
+                self.paused = False
+                self._safe_event('resumed', None)
+                self.phase, self.reason = 'READY', 'Resuming.'
+
     def resolve(self, action_id: str, outcome: str) -> bool:
         """A person settles an uncertain command: 'happened' (the game acted; any trip is entered by hand from
         Needs review) or 'not_sent'. Fishing resumes when nothing is left unresolved."""
@@ -183,7 +203,9 @@ class AutomationController:
     def status(self) -> dict:
         with self.lock:
             pending = self.state.pending
-            return {'running': self.running, 'mode': self.config.mode, 'phase': self.phase, 'reason': self.reason,
+            return {'running': self.running, 'paused': self.paused,
+                    'pending_kind': pending.kind if pending else None,
+                    'mode': self.config.mode, 'phase': self.phase, 'reason': self.reason,
                     'run_id': self.state.run_id, 'trips': self.state.trips, 'total_trips': self.total_trips,
                     'pending': pending.action_id if pending else None,
                     'unresolved': sorted(self.unresolved), 'last_result': self.last_result,
@@ -249,6 +271,9 @@ class AutomationController:
                     return
             if self.unresolved:
                 self.phase, self.reason = 'NEEDS_REVIEW', self._unresolved_text()
+                return
+            if self.paused:
+                self.phase, self.reason = 'PAUSED_BY_YOU', 'Paused. Resume to carry on fishing.'
                 return
             if not context_ok:
                 self.phase = 'PAUSED'
@@ -369,7 +394,9 @@ class AutomationController:
         tally = None
         problems = []
         if kind != 'fish':
-            problems = startup_problems(self.state, observation.kind)
+            # A resync or retry must read on its own; at startup, fields read across replies add up.
+            problems = (reply_problems(observation.kind, observation.text) if kind in self.state.refresh_due
+                        else startup_problems(self.state, observation.kind))
             result = 'unreadable' if problems else 'refreshed'
         elif wait:
             result = 'cooldown'
@@ -392,12 +419,8 @@ class AutomationController:
         if result == 'cooldown':
             self.ready_at = now + float(wait[1]) + self.config.cooldown_margin
         elif result == 'unreadable' and kind in self.state.refresh_due:
-            # A periodic resync that could not be read keeps the projection; fishing never waits on it.
-            self.state = replace(self.state, refresh_due=tuple(k for k in self.state.refresh_due if k != kind))
-            add_item(self.roots['review'], self.config.account, observation.kind or 'unknown', observation.text,
-                     [f'A scheduled {observation.kind} resync could not be read; the stats carry on from the last '
-                      'one.'] + problems, identity_status=observation.identity_status,
-                     observation_id=observation.observation_id, blocks_actions=False)
+            # A resync or retry that could not be read: fishing never waits on it; it is tried again later.
+            self._defer(kind, observation, problems)
         elif result == 'unreadable' and kind != 'fish':
             # Delivery is confirmed: repeating this read-only command cannot duplicate a fishing trip.
             attempts = self.startup_failures.get(kind, 0) + 1
@@ -407,17 +430,11 @@ class AutomationController:
             repeated = self.startup_texts.get(kind) == observation.text
             self.startup_texts[kind] = observation.text
             exhausted = attempts >= STARTUP_ATTEMPTS or not this_run or repeated
-            add_item(self.roots['review'], self.config.account, observation.kind or 'unknown', observation.text,
-                     [f'Automation could not read this {observation.kind or "reply"} reliably.'] + problems,
-                     identity_status=observation.identity_status, observation_id=observation.observation_id,
-                     blocks_actions=exhausted)
             if exhausted:
-                self.unresolved[action_id] = (f'Its {observation.kind or "reply"} could not be read after '
-                                              f'{attempts} attempt(s)'
-                                              + (' (the same unreadable text each time)' if repeated else '')
-                                              + f': {"; ".join(problems)}; see Needs review.')
-                self._safe_event('uncertain', action_id, reason=self.unresolved[action_id])
-                self._sync_uncertain()
+                self.startup_retry_at = float('-inf')
+                self._defer(kind, observation, problems)
+                self._safe_event('deferred', action_id, command=kind, attempts=attempts, repeated=repeated,
+                                 problems=problems)
             else:
                 self.startup_retry_at = now + STARTUP_RETRY_DELAY
                 self._safe_event('startup_retry_scheduled', action_id, command=kind,
@@ -427,7 +444,9 @@ class AutomationController:
             self.synced_at[observation.kind] = observation.observed_at
             if observation.kind == 'profile':
                 self.sync_tallies = []
-            self.state = replace(self.state, refresh_due=tuple(k for k in self.state.refresh_due if k != kind))
+            self.state = replace(self.state, refresh_due=tuple(k for k in self.state.refresh_due if k != kind),
+                                 deferred=tuple(k for k in self.state.deferred if k != kind))
+            self.retry_counts.pop(kind, None)
             self.startup_problems.pop(kind, None)
             self.startup_texts.pop(kind, None)
             self.startup_retry_at = float('-inf')
@@ -441,6 +460,7 @@ class AutomationController:
             self.last_trip_at = self.sent_at[0] if this_run else now
             if this_run:
                 self.state = replace(self.state, trips=self.state.trips + 1)
+            self._count_retries()
         elif result == 'trip':
             self.total_trips += 1
             # A reconciled trip's hand-over time is not known to this run; when it was seen is a safe bound.
@@ -452,6 +472,7 @@ class AutomationController:
             if (self.config.resync_trips and len(self.sync_tallies) >= self.config.resync_trips
                     and not self.state.refresh_due):
                 self.state = replace(self.state, refresh_due=('refresh_profile', 'refresh_buffs'))
+            self._count_retries()
             self._project(action_id, tally)
 
     def _project(self, action_id, tally):
@@ -502,6 +523,28 @@ class AutomationController:
         self.ready_at = max(self.ready_at, self.monotonic() + (self.state.cooldown_seconds or 0)
                             + self.config.cooldown_margin)
 
+    def _defer(self, kind, observation, problems):
+        """Set an unreadable /profile or /buffs aside: noted in Needs review, tried again every few trips. Without
+        a cooldown, fishing goes on at an assumed one that "You must wait" replies correct."""
+        self.state = replace(self.state, refresh_due=tuple(k for k in self.state.refresh_due if k != kind),
+                             deferred=tuple(dict.fromkeys(self.state.deferred + (kind,))))
+        self.retry_counts[kind] = 0
+        if kind == 'refresh_buffs' and self.state.cooldown_seconds is None:
+            self.state = replace(self.state, cooldown_seconds=self.config.assumed_cooldown)
+        add_item(self.roots['review'], self.config.account, observation.kind or 'unknown', observation.text,
+                 [f'This {observation.kind or "reply"} could not be read; fishing goes on and it will be tried again '
+                  f'in {self.config.retry_unread_trips} trips.'] + problems,
+                 identity_status=observation.identity_status, observation_id=observation.observation_id,
+                 blocks_actions=False)
+
+    def _count_retries(self):
+        """After each trip, queue any set-aside refresh whose turn has come."""
+        for kind in self.state.deferred:
+            self.retry_counts[kind] = self.retry_counts.get(kind, 0) + 1
+            if self.retry_counts[kind] >= self.config.retry_unread_trips and kind not in self.state.refresh_due:
+                self.retry_counts[kind] = 0
+                self.state = replace(self.state, refresh_due=self.state.refresh_due + (kind,))
+
     def _dashboard(self):
         """The synced stats carried forward over the trips since, plus this run's totals and hourly rates."""
         increments, fish = _references()
@@ -511,6 +554,14 @@ class AutomationController:
         elapsed = max(1.0, self.monotonic() - self.started_at) if self.started_at is not None else None
         per_hour = {key: run[key] * 3600 / elapsed for key in ('trips', 'xp', 'money', 'fish_value', 'catches')}             if elapsed else {}
         to_next = stats['profile'].get('xp_to_next_level')
+        if self.finds_before is None:
+            try:
+                sessions = load_sessions(self.config.account, self.roots['fishing'])[0]
+            except OSError:
+                sessions = []
+            self.finds_before = summarize_finds([session['tally'] for session in reversed(sessions)])
+        stats['finds'] = {'run': summarize_finds(self.run_tallies),
+                          'all': summarize_finds(self.run_tallies, self.finds_before)}
         recent = [{'catches': dict(tally['catches']), 'xp': tally['fishing_xp'],
                    'events': list(tally['trip_details'][0]['events']) if tally.get('trip_details') else []}
                   for tally in reversed(self.run_tallies[-8:])]

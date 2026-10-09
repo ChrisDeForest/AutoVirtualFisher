@@ -22,7 +22,7 @@ def next_action(state: AutomationState, config: AutomationConfig, now_utc: datet
         return None
     if config.max_trips is not None and state.trips >= config.max_trips:
         return None
-    if startup_problems(state, 'profile'):
+    if startup_problems(state, 'profile') and 'refresh_profile' not in state.deferred:
         choice = _intent(state, 'refresh_profile', now_utc, 'no verified profile yet')
     elif state.cooldown_seconds is None:
         choice = _intent(state, 'refresh_buffs', now_utc, 'fishing cooldown not observed yet')

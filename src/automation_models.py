@@ -42,7 +42,9 @@ class AutomationConfig:
     cooldown_margin: float = 0.5   # seconds added to the verified cooldown
     mode: str = 'simulation'       # the separate native CLI explicitly selects 'live'
     capabilities: tuple = field(default=('refresh_profile', 'refresh_buffs', 'fish'))
-    resync_trips: int | None = 1000  # /profile and /buffs are read again after this many trips
+    resync_trips: int | None = 100   # /profile and /buffs are read again after this many trips
+    retry_unread_trips: int = 10     # an unreadable /profile or /buffs is tried again after this many trips
+    assumed_cooldown: float = 5.0    # seconds, while /buffs is unread ("You must wait" replies correct it)
 
 
 class TransportError(Exception):

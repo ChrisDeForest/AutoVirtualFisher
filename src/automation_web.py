@@ -17,7 +17,7 @@ CATEGORIES = (('fish', 'Fish'), ('exotic_fish', 'Exotic fish'), ('special', 'Spe
 STYLE = """<style>
 .strip { display:flex; flex-wrap:wrap; align-items:center; gap:10px 18px; padding:12px 16px; border:1px solid var(--line);
   border-radius:6px; margin:0 0 28px; }
-.strip form { margin-left:auto; } .strip .actions { margin:0; }
+.strip .actions { margin:0 0 0 auto; } .strip form { margin:0; }
 .phase { font-weight:650; } .phase::before { content:''; display:inline-block; width:9px; height:9px; border-radius:50%;
   margin-right:9px; background:var(--muted); vertical-align:1px; }
 .on .phase::before { background:var(--sea); } .halted .phase::before { background:#ffda8b; }
@@ -47,6 +47,18 @@ STYLE = """<style>
   padding:9px 12px; background:#0b1720; color:var(--ink); }
 .start .pair { display:grid; grid-template-columns:repeat(2,minmax(0,360px)); gap:0 24px; }
 .empty { color:var(--muted); }
+.box .stat.sub dt { padding-left:16px; } .box .stat.group { border-bottom:0; padding-bottom:0; }
+.box .stat.group dt { color:var(--ink); font-weight:600; }
+.scroll { max-height:340px; overflow-y:auto; padding-right:10px; scrollbar-color:#3d5a69 transparent; }
+.scroll:focus-visible { outline-offset:2px; }
+.finds { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:0 28px; }
+.finds h3 { font-size:15px; color:var(--ink); margin:10px 0 2px; }
+.mini { width:100%; border-collapse:collapse; font-size:14px; font-variant-numeric:tabular-nums; }
+.mini th, .mini td { padding:6px 0; border-bottom:1px solid #263d4a; text-align:right; font-weight:400; }
+.mini th[scope=row], .mini thead th:first-child { text-align:left; padding-right:12px; }
+.mini thead th { color:var(--muted); font-size:13px; } .mini td + td, .mini th + th { padding-left:14px; }
+.visually-hidden { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
+@media(max-width:900px) { .finds { grid-template-columns:minmax(0,1fr); } }
 @media(max-width:900px) { .boxes { grid-template-columns:minmax(0,1fr); } .box.wide { grid-column:auto; }
   .start .pair { grid-template-columns:minmax(0,1fr); } }
 @media(prefers-reduced-motion:no-preference) { .line .cast, .line .bobber { transition:all .6s ease-out; } }
@@ -138,19 +150,86 @@ def _catch_text(catches):
     return ', '.join(f'{count:,} {name}' for name, count in catches.items()) or 'nothing'
 
 
+def state_label(status) -> str:
+    """What the run is doing, in one or two words."""
+    phase = status['phase']
+    if not status['running']:
+        return 'Stopped by a problem' if phase == 'FAILED' else 'Stopped'
+    if status.get('paused') or phase in ('PAUSED', 'PAUSED_BY_YOU'):
+        return 'Paused'
+    if phase == 'NEEDS_REVIEW':
+        return 'Needs you'
+    if status.get('pending_kind') in ('refresh_profile', 'refresh_buffs') or phase in ('RETRYING_STARTUP',
+                                                                                        'BOOTSTRAPPING'):
+        if status['trips']:
+            return 'Refreshing stats'
+        return 'Reading your buffs' if status.get('pending_kind') == 'refresh_buffs' else 'Reading your profile'
+    return 'Fishing'
+
+
+def _button(action, label, secondary=False):
+    style = ' class="secondary"' if secondary else ''
+    return (f'<form method="post" action="/automation"><input type="hidden" name="action" value="{action}">'
+            f'<button type="submit"{style}>{escape(label)}</button></form>')
+
+
+def _scroll(label, inner):
+    return f'<div class="scroll" tabindex="0" role="region" aria-label="{escape(label)}">{inner}</div>'
+
+
+def _finds_box(finds):
+    run, every = finds.get('run') or {}, finds.get('all') or {}
+
+    def group(title, key, levels=False):
+        names = sorted(set(every.get(key, {})) | set(run.get(key, {})),
+                       key=lambda name: -every.get(key, {}).get(name, 0))
+        if not names:
+            return f'<h3>{escape(title)}</h3><p class="empty">None yet.</p>'
+        head = '<th scope="col">This run</th><th scope="col">All runs</th>' + (
+            '<th scope="col">Level</th>' if levels else '')
+        rows = ''
+        for name in names:
+            level = every.get('charm_levels', {}).get(name)
+            rows += (f'<tr><th scope="row">{escape(name)}</th><td>{run.get(key, {}).get(name, 0):,}</td>'
+                     f'<td>{every.get(key, {}).get(name, 0):,}</td>'
+                     + (f'<td>{level if level is not None else "?"}</td>' if levels else '') + '</tr>')
+        table = (f'<table class="mini"><thead><tr><th scope="col"><span class="visually-hidden">Name</span></th>'
+                 f'{head}</tr></thead><tbody>{rows}</tbody></table>')
+        return f'<h3>{escape(title)}</h3>' + _scroll(title, table)
+
+    body = (f'<div class="finds"><div>{group("Chests", "chests")}</div>'
+            f'<div>{group("Special fish", "special_fish")}</div>'
+            f'<div>{group("Charms", "charms", levels=True)}</div></div>')
+    return _box('Finds', body, wide=True, note='Charms are a prestige requirement.')
+
+
+def _source_rows(title, values):
+    rows = f'<div class="stat group"><dt>{escape(title)}</dt><dd></dd></div>'
+    rows += f'<div class="stat sub"><dt>Money</dt><dd class="known">${values.get("money", 0):,}</dd></div>'
+    if 'xp' in values:
+        rows += f'<div class="stat sub"><dt>XP</dt><dd class="known">{values["xp"]:,}</dd></div>'
+    if 'other' in values:
+        other = values['other']
+        rows += (f'<div class="stat sub"><dt>Other</dt><dd class="known">'
+                 f'{escape(_catch_text(other)) if other else "nothing"}</dd></div>')
+    return rows
+
+
 def render_panel(status, mode=None) -> str:
     """The live part of the page: run status, level line, and the stat boxes."""
     if not status:
         return ('<div data-running="0"><p class="empty">No run yet. Start one above; your profile, buffs and '
                 'inventory appear here once Virtual Fisher replies.</p></div>')
     running = status['running']
-    phase = status['phase']
-    halted = phase in ('PAUSED', 'NEEDS_REVIEW', 'FAILED')
-    stop = ('<form method="post" action="/automation"><input type="hidden" name="action" value="stop">'
-            '<div class="actions"><button type="submit">Stop now</button></div></form>') if running else ''
-    strip = (f'<div class="strip {"halted" if halted else "on" if running else ""}">'
-             f'<span class="phase">{escape(PHASES.get(phase, phase.title()))}</span>'
-             f'<span class="why">{escape(status["reason"])}</span>{stop}</div>')
+    label = state_label(status)
+    buttons = ''
+    if running:
+        toggle = _button('resume', 'Resume') if status.get('paused') else _button('pause', 'Pause', secondary=True)
+        buttons = f'<div class="actions">{toggle}{_button("stop", "Stop now")}</div>'
+    active = label in ('Fishing', 'Refreshing stats', 'Reading your profile', 'Reading your buffs')
+    tone = 'on' if active else ('halted' if running else '')
+    strip = (f'<div class="strip {tone}"><span class="phase">{escape(label)}</span>'
+             f'<span class="why">{escape(status["reason"])}</span>{buttons}</div>')
     dashboard = status.get('dashboard') or {}
     profile = dashboard.get('profile') or {}
     gained = dashboard.get('gained') or {}
@@ -174,6 +253,7 @@ def render_panel(status, mode=None) -> str:
                      + _row('Fishing cooldown', f'{cooldown["value"]:g} s' if isinstance(cooldown, dict) else None)
                      + '</dl>')
 
+    sources = run.get('sources') or {}
     limit = status['config']['max_trips']
     next_fish = status.get('next_eligible_in')
     sync_note = ''
@@ -185,31 +265,37 @@ def render_panel(status, mode=None) -> str:
         _row('Trips', f'{status["trips"]:,}' + (f' of {limit:,}' if limit else '')),
         _row('Fish caught', _num(run.get('catches'))),
         _row('XP gained', _num(run.get('xp'))),
-        _row('Money from chests and rewards', _num(run.get('money'), '$')),
         _row('Trips per hour', _num(per_hour.get('trips'))),
         _row('XP per hour', _num(per_hour.get('xp'))),
         _row('Fish value per hour', _num(per_hour.get('fish_value'), '$')),
         _row('Next fish', (f'in {next_fish:.1f} s' if next_fish else 'now') if running else 'not running'),
     )) + '</dl>', note=sync_note)
+    rewards_box = _box('Rewards', '<dl>'
+                       + _source_rows('Quests', sources.get('quests') or {'money': 0, 'xp': 0, 'other': {}})
+                       + _source_rows('Chests', sources.get('chests') or {'money': 0, 'xp': 0, 'other': {}})
+                       + _source_rows('Level-ups', sources.get('level_ups') or {'money': 0}) + '</dl>',
+                       note='This run. All of it is already in your balance and XP above.')
 
     inventory = dashboard.get('inventory') or {}
     changes = {**(dashboard.get('changes') or {}).get('fish', {}), **(dashboard.get('changes') or {}).get('other', {})}
     rows = ''.join(_row(name, f'{count:,}', changes.get(name))
                    for key, _ in CATEGORIES for name, count in sorted((inventory.get(key) or {}).items(),
                                                                        key=lambda item: -item[1]))
-    inventory_box = _box('Inventory', f'<dl class="columns">{rows}</dl>' if rows else
+    inventory_box = _box('Inventory', _scroll('Inventory', f'<dl class="columns">{rows}</dl>') if rows else
                          '<p class="empty">Not read yet.</p>', wide=True,
                          note='Green numbers are added since your profile was last read.' if changes else '')
 
     recent = dashboard.get('recent') or []
-    trips_box = _box('Recent trips', '<ul class="trips-list">' + ''.join(
+    items = ''.join(
         f'<li><span>{escape(_catch_text(trip["catches"]))}'
         + ''.join(f'<br><span class="note">{escape(event)}</span>' for event in trip['events'])
-        + f'</span><span>+{trip["xp"]:,} XP</span></li>' for trip in recent) + '</ul>'
-        if recent else '<p class="empty">No trips yet.</p>')
+        + f'</span><span>+{trip["xp"]:,} XP</span></li>' for trip in recent)
+    trips_box = _box('Recent trips', _scroll('Recent trips', f'<ul class="trips-list">{items}</ul>')
+                     if recent else '<p class="empty">No trips yet.</p>')
 
     return (f'<div data-running="{1 if running else 0}">{strip}{_level_line(profile, dashboard)}'
-            f'<div class="boxes">{profile_box}{buffs_box}{run_box}{inventory_box}{trips_box}</div></div>')
+            f'<div class="boxes">{profile_box}{buffs_box}{run_box}{rewards_box}'
+            f'{_finds_box(dashboard.get("finds") or {})}{inventory_box}{trips_box}</div></div>')
 
 
 def _field(name, label, value, hint=''):

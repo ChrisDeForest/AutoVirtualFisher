@@ -44,6 +44,16 @@ def reply_fields(kind, text):
     return {}
 
 
+def reply_problems(kind, text):
+    """Required fields this one reply does not show."""
+    fields = reply_fields(kind, text)
+    labels = {'profile': (('account_name', 'Account name'), ('balance', 'Balance'), ('level', 'Level')),
+              'buffs': (('cooldown_seconds', 'Fishing cooldown'),)}.get(kind)
+    if labels is None:
+        return ['Expected a profile or buffs reply.']
+    return [label + ' has not been read.' for key, label in labels if key not in fields]
+
+
 def startup_problems(state, kind):
     if kind == 'profile':
         profile = state.profile or {}

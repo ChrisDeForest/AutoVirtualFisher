@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 import json
 import re
 import threading
+import time
 from secrets import token_hex
 
 from .automation_models import CapabilityError, ContextStatus, DispatchReceipt, NotDispatched, TransportError
@@ -56,10 +57,13 @@ def stable_frame(lines):
 COMMANDS = {'refresh_profile': '/profile', 'refresh_buffs': '/buffs', 'fish': '/fish'}
 # Identical reads of a fishing reply with problems before it is delivered as it is.
 FISHING_REREADS = 2
+# Seconds after sending /profile or /buffs before an identical reply sent that minute is taken as the answer.
+REFRESH_GRACE = 3.0
+SENT = re.compile(r'(\d{1,2}):(\d{2})\s*([AP])M', re.I)
 
 
 def _bottom(messages):
-    """(key, how many times it repeats in a row) of the newest message at the bottom, or None."""
+    """(key, send time, how many times it repeats in a row) of the newest message at the bottom, or None."""
     if not messages:
         return None
     key, run = messages[-1]['key'], 0
@@ -67,7 +71,26 @@ def _bottom(messages):
         if message['key'] != key:
             break
         run += 1
-    return key, run
+    return key, messages[-1].get('sent'), run
+
+
+def _is_new(bottom, baseline):
+    """Whether the bottom message differs from the one before sending: other content, another send minute, or
+    the same reply once more in a row. An unread send time never counts as a difference."""
+    if bottom is None:
+        return False
+    if baseline is None:
+        return True
+    (key, sent, run), (old_key, old_sent, old_run) = bottom, baseline
+    return key != old_key or bool(sent and old_sent and sent != old_sent) or run > old_run
+
+
+def _minute_of_day(sent):
+    match = SENT.search(sent or '')
+    if not match:
+        return None
+    hour = int(match[1]) % 12 + (12 if match[3].upper() == 'P' else 0)
+    return hour * 60 + int(match[2])
 CHALLENGE = re.compile(r'captcha|\bverify\b|verification|anti.bot', re.I)
 
 
@@ -116,13 +139,16 @@ def command_text(text):
 class DiscordTransport:
     capabilities = tuple(COMMANDS)
 
-    def __init__(self, driver, window, channel, account, username, utc=None):
+    def __init__(self, driver, window, channel, account, username, utc=None, monotonic=None, local=None):
         if not channel or not account or not username:
             raise ValueError('Window, channel, display name and username must be configured.')
         self.driver, self.window, self.channel = driver, window, channel
         self.identity = Identity(account, username)
         self.context_id = f'discord:{window}:{channel.casefold()}'
         self.utc = utc or (lambda: datetime.now(timezone.utc))
+        self.monotonic = monotonic or time.monotonic
+        self.local = local or (lambda: datetime.now().astimezone())  # Discord shows local send times
+        self.sent_clock, self.sent_minute = None, None
         self.enabled = False
         self.cancelled = threading.Event()
         self.pending = self.baseline = self.candidate = None
@@ -202,12 +228,26 @@ class DiscordTransport:
                 self.candidate = None
                 self.rereads = 0
                 self.last_issue = None
+                now = self.local()
+                self.sent_clock, self.sent_minute = self.monotonic(), now.hour * 60 + now.minute
                 self.driver.dispatch(COMMANDS[intent.kind], self.cancelled.is_set)
                 return DispatchReceipt(intent.action_id, self.utc().isoformat(), 'Native UI command submitted')
             except Exception as error:
                 # Enter may or may not have been pressed. Not repeated; the controller decides when to move on.
                 self.blocked = f'Dispatch could not be confirmed: {error}'
                 raise TransportError(self.blocked) from error
+
+    def _identical_refresh(self, messages):
+        """A /profile or /buffs reply identical to one already at the bottom cannot be told apart on screen. Its
+        data is the same either way, so after a short wait an own reply of that kind sent this minute is taken."""
+        if not messages or self.pending.kind not in ('refresh_profile', 'refresh_buffs') or self.sent_clock is None:
+            return False
+        message = messages[-1]
+        sent = _minute_of_day(message.get('sent'))
+        return (message['kind'] == self.pending.expected_reply_kind
+                and message.get('invoked_by') == self.identity.display_name
+                and sent is not None and (sent - self.sent_minute) % 1440 <= 1
+                and self.monotonic() - self.sent_clock >= REFRESH_GRACE)
 
     def forget(self):
         """Stop waiting for the pending command's reply (the controller has moved on without it)."""
@@ -249,8 +289,7 @@ class DiscordTransport:
                 # The reply is the newest message at the bottom of the chat: new when it differs from what was
                 # newest before sending, or when the same reply now appears one more time in a row.
                 bottom = _bottom(frame['messages'])
-                if bottom is None or bottom == self.baseline or (
-                        self.baseline is not None and bottom[0] == self.baseline[0] and bottom[1] < self.baseline[1]):
+                if not _is_new(bottom, self.baseline) and not self._identical_refresh(frame['messages']):
                     self.candidate = None
                     self.last_issue = f'Waiting for the reply to {COMMANDS[self.pending.kind]}.'
                     return []

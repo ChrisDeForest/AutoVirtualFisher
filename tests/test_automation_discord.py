@@ -411,3 +411,53 @@ class ControllerIntegrationTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class IdenticalReplyTests(unittest.TestCase):
+    """Observed 2026-10-08 14:56: two identical /profile replies filled the screen, so a third identical one
+    scrolled the oldest away and the screen looked unchanged; /profile was sent again and again."""
+
+    def setUp(self):
+        from tests.test_live_capture import PROFILE
+        self.profile = PROFILE  # sent 11:41 AM
+        self.driver = Driver()
+        self.clock = [0.0]
+        self.local = [datetime(2026, 10, 6, 11, 41, 20)]
+        self.transport = DiscordTransport(self.driver, 42, 'Virtual Fisher', 'epicmouse', 'epicmouse9925',
+                                          monotonic=lambda: self.clock[0], local=lambda: self.local[0])
+        self.transport.enable()
+
+    def send(self, kind='refresh_profile', reply='profile'):
+        self.transport.send(ActionIntent('p1', kind, self.transport.context_id,
+                                         datetime.now(timezone.utc).isoformat(), reply))
+
+    def poll(self, seconds):
+        self.clock[0] += seconds
+        return self.transport.poll()
+
+    def test_identical_refresh_in_the_same_minute_is_accepted_after_a_short_wait(self):
+        self.driver.lines = self.profile + self.profile
+        self.send()
+        self.assertEqual(self.poll(1), [])
+        self.assertEqual(self.poll(1), [])
+        self.assertEqual(self.poll(1.5), [])  # first stable read after the wait
+        [reply] = self.poll(0.5)
+        self.assertEqual(reply.correlation, 'p1')
+
+    def test_identical_refresh_from_an_earlier_minute_is_not_the_reply(self):
+        self.driver.lines = self.profile + self.profile
+        self.local[0] = datetime(2026, 10, 6, 14, 56, 5)
+        self.send()
+        for _ in range(6):
+            self.assertEqual(self.poll(1), [])
+        # The real reply shows the new minute, so it is new even with identical content.
+        self.driver.lines = self.profile + [line.replace('11:41 AM', '2:56 PM') for line in self.profile]
+        self.assertEqual(self.poll(1), [])
+        self.assertEqual(len(self.poll(1)), 1)
+
+    def test_identical_fishing_reply_is_never_assumed(self):
+        self.driver.lines = fish(1, 1, 10) * 2
+        self.local[0] = datetime(2026, 10, 6, 11, 40, 20)  # fish() replies are sent 11:40 AM
+        self.send('fish', 'fishing')
+        for _ in range(8):
+            self.assertEqual(self.poll(1), [])

@@ -69,3 +69,48 @@ class ProjectionTests(unittest.TestCase):
         self.assertIsNone(stats['profile']['balance'])
         self.assertEqual(stats['profile']['xp_current'], 1682)
         self.assertEqual(stats['buffs'], {})
+
+
+class FindsTests(unittest.TestCase):
+    def test_chests_special_fish_and_charms_are_counted(self):
+        from src.live_stats import summarize_finds
+        tallies = [trip('1 Fish\nYou found a common chest\nYou got 2 Gold Fish from the chest!\n+87 XP'),
+                   trip('2 Cod\nYou found an uncornmon chest\nYou got 1 Emerald Fish from the chest!\n+20 XP'),
+                   trip('3 Cod\nYou found an epic crate\nYou found an Endurance Charm :charm_pink:!\n'
+                        'Your Endurance Charm is now level 2!\n+30 XP')]
+        finds = summarize_finds(tallies)
+        self.assertEqual(finds['chests'], {'common chest': 1, 'uncommon chest': 1, 'epic crate': 1})
+        self.assertEqual(finds['special_fish'], {'Gold Fish': 2, 'Emerald Fish': 1})
+        self.assertEqual(finds['charms'], {'Endurance Charm': 1})
+        self.assertEqual(finds['charm_levels'], {'Endurance Charm': 2})
+        self.assertEqual(summarize_finds(tallies[:1], finds)['chests']['common chest'], 2, 'adds onto earlier finds')
+
+
+class SourceTests(unittest.TestCase):
+    def test_quest_and_chest_rewards_are_split_out(self):
+        from src.player_planner import load_level_increments
+        from src.catch_check import load_fish_reference
+        tallies = [trip('1 Cod\nYou found a rare chest\nYou got $296 from the chest\nYou got 150 XP from the chest\n'
+                        'You got 2 Gold Fish from the chest!\n+160 XP'),
+                   trip('1 Cod\n+10 XP\nQUEST COMPLETE!\nDaily Fishing Tier 1\nReward:\n+$350\n+370 XP\n1x uncommon chest'),
+                   trip('1 Cod\n+5 XP\nLEVEL UP! You are now level 32.\n$6,200 received for leveling up.')]
+        sources = project(synced_stats(PROFILE, BUFFS), tallies, load_level_increments(),
+                          load_fish_reference())['gained']['sources']
+        self.assertEqual(sources['chests'], {'money': 296, 'xp': 150, 'other': {'Gold Fish': 2}})
+        self.assertEqual(sources['quests'], {'money': 350, 'xp': 370, 'other': {'uncommon chest': 1}})
+        self.assertEqual(sources['level_ups'], {'money': 6200})
+
+
+class SourceTests(unittest.TestCase):
+    def test_quest_and_chest_rewards_are_split_out(self):
+        from src.player_planner import load_level_increments
+        from src.catch_check import load_fish_reference
+        tallies = [trip('1 Cod\nYou found a rare chest\nYou got $296 from the chest\nYou got 150 XP from the chest\n'
+                        'You got 2 Gold Fish from the chest!\n+160 XP'),
+                   trip('1 Cod\n+10 XP\nQUEST COMPLETE!\nDaily Fishing Tier 1\nReward:\n+$350\n+370 XP\n1x uncommon chest'),
+                   trip('1 Cod\n+5 XP\nLEVEL UP! You are now level 32.\n$6,200 received for leveling up.')]
+        sources = project(synced_stats(PROFILE, BUFFS), tallies, load_level_increments(),
+                          load_fish_reference())['gained']['sources']
+        self.assertEqual(sources['chests'], {'money': 296, 'xp': 150, 'other': {'Gold Fish': 2}})
+        self.assertEqual(sources['quests'], {'money': 350, 'xp': 370, 'other': {'uncommon chest': 1}})
+        self.assertEqual(sources['level_ups'], {'money': 6200})

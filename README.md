@@ -249,10 +249,14 @@ Keep the message box empty. Live data stays in `src/data/automation_live/`.
 While a run goes, the page shows your level with progress toward the next one,
 and boxes for your profile, buffs, this run (trips, XP, money and rates),
 inventory, and recent trips, refreshed every two seconds. Your full `/profile`
-and `/buffs` are read at the start and again every 1,000 trips; in between, each
-trip's XP (with level-ups from the wiki level table), catches, chest finds and
-money are added to the last reading. A resync that cannot be read is noted and
-the numbers carry on from the previous one.
+and `/buffs` are read at the start and again every 100 trips; in between, each
+trip's XP (with level-ups from the wiki level table), catches, chest finds, quest
+rewards and money are added to the last reading. A reply that cannot be read never
+stops fishing: it is noted and tried again every 10 trips until it reads (without
+a readable cooldown, fishing uses 5 s and "You must wait" replies correct it).
+**Pause** holds the run without ending it; **Resume** carries on. The page also
+counts chests by type, special fish and charms (with their levels) for this run
+and across all automation runs, and splits quest, chest and level-up rewards.
 Simulation runs the loop against a simulated Virtual Fisher.
 Each step is: choose the next action (refresh `/profile`, then `/buffs` for the
 cooldown, then fish), record it in the journal, send it, confirm the reply that

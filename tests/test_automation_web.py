@@ -173,6 +173,28 @@ class AutomationWebTests(unittest.TestCase):
         self.assertIn('0.05 s', panel)
         self.assertIn('/automation/panel', self.get(), 'the page refreshes its boxes')
 
+    def test_pause_and_resume_buttons(self):
+        self.post(action='start', mode='simulation', max_trips='1000', max_minutes='5')
+        html = self.get('/automation/panel')
+        self.assertIn('value="pause"', html)
+        self.assertIn('value="stop"', html)
+        self.post(action='pause')
+        self.assertTrue(self.handler.automation.status()['paused'])
+        html = self.get('/automation/panel')
+        self.assertIn('<span class="phase">Paused</span>', html)
+        self.assertIn('value="resume"', html)
+        self.post(action='resume')
+        self.assertFalse(self.handler.automation.status()['paused'])
+
+    def test_finds_rewards_and_scrolling_lists(self):
+        self.post(action='start', mode='simulation', max_trips='2', max_minutes='5')
+        self.wait_until_stopped()
+        panel = self.get('/automation/panel')
+        self.assertIn('<h2>Finds</h2>', panel)
+        for label in ('Chests', 'Special fish', 'Charms', 'Quests', 'Level-ups'):
+            self.assertIn(label, panel)
+        self.assertIn('class="scroll"', panel, 'long lists scroll inside their box')
+
     def test_repeated_start_and_stop(self):
         self.post(action='start', mode='simulation', max_trips='1000', max_minutes='5')
         html = self.post(action='start', mode='simulation', max_trips='1000', max_minutes='5')
