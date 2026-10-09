@@ -7,6 +7,7 @@ catches add at wiki sell price times the sell multiplier. The next sync replaces
 from copy import deepcopy
 import re
 
+from .fishing_log import EXOTIC_FISH, known_name
 from .player_planner import xp_required
 from .player_state import _clean, parse_responses
 
@@ -114,7 +115,8 @@ def project(synced: dict, tallies: list[dict], increments: list[int] | None, fis
                 value_added += count * row['base_sell'] * sell
         for name, count in tally['chest_contents'].items():
             category = next((key for key, items in inventory.items()
-                             if any(known.casefold() == name.casefold() for known in items)), 'special')
+                             if any(known.casefold() == name.casefold() for known in items)),
+                            'exotic_fish' if name in EXOTIC_FISH else 'special')
             items = inventory.setdefault(category, {})
             known = next((key for key in items if key.casefold() == name.casefold()), name)
             items[known] = items.get(known, 0) + count
@@ -137,11 +139,26 @@ def summarize_finds(tallies, earlier: dict | None = None) -> dict:
                                                 'charm_levels': {}}
     for tally in tallies:
         for name, count in tally.get('finds', {}).items():
+            name = known_name(name)
             group = ('charms' if name.casefold().endswith('charm') else
                      'chests' if CONTAINER.search(name) else 'other')
             finds[group][name] = finds[group].get(name, 0) + count
         for name, count in tally.get('chest_contents', {}).items():
+            name = known_name(name)
             group = 'special_fish' if name.casefold().endswith('fish') else 'other'
             finds[group][name] = finds[group].get(name, 0) + count
         finds['charm_levels'].update(tally.get('charm_levels', {}))
     return finds
+
+
+def add_unlisted_finds(inventory: dict, found: dict, listed: dict | None = None) -> dict:
+    """The inventory with fish found in chests that the profile does not list (`listed`, by default the
+    inventory itself) counted from the finds instead. Below level 50 the profile leaves out Lava and Diamond Fish,
+    which super crates give to prestiged players."""
+    listed = inventory if listed is None else listed
+    names = {name.casefold() for items in listed.values() for name in (items or {})}
+    result = {key: dict(items or {}) for key, items in inventory.items()}
+    for name, count in found.items():
+        if name.casefold() not in names:
+            result.setdefault('exotic_fish', {})[name] = count
+    return result

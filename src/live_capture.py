@@ -183,6 +183,10 @@ def bait_evidence(kind: str | None, lines: list[str]) -> tuple[bool, str | None]
     return False, None
 
 
+# Virtual Fisher's captcha (anti-bot) message; the code itself is in an image.
+CAPTCHA = re.compile(r'captcha|\bverify\b|verification|anti.bot', re.I)
+
+
 def capture_frame(lines: list[str]) -> dict:
     """Read one capture: {'messages': Virtual Fisher messages oldest first, each {'kind', 'lines', 'key',
     'invoked_by', 'sent'}, 'fragment': the cut-off text above the first message header}. Messages from any other
@@ -205,7 +209,11 @@ def capture_frame(lines: list[str]) -> dict:
             continue
         kinds = [found for found in (_kind(_clean(line)) for line in body) if found]
         kind = kinds[0] if kinds else None
-        messages.append({'kind': kind, 'lines': body, 'key': (kind, _understood(kind, body)),
+        key = (kind, _understood(kind, body))
+        if any(CAPTCHA.search(line) for line in body):
+            kind = 'captcha'
+            key = (kind, tuple(body))
+        messages.append({'kind': kind, 'lines': body, 'key': key,
                          'invoked_by': meta.get('used'), 'sent': meta.get('sent')})
     return {'messages': messages, 'fragment': fragment}
 

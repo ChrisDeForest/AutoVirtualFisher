@@ -144,6 +144,16 @@ class DiscordTests(unittest.TestCase):
         self.assertEqual(len(replies), 1)
         self.assertEqual(replies[0].correlation, 'p1')
 
+    def test_captcha_message_is_delivered_as_a_captcha(self):
+        self.send()
+        self.driver.lines = self.driver.lines + ['epicmouse used', '% fish', 'Virtual Fisher 11:42 AM',
+                                                 'Please complete this captcha to continue fishing.',
+                                                 'Use /captcha with the code shown in the image.']
+        self.assertEqual(self.transport.poll(), [])
+        replies = self.transport.poll()
+        self.assertEqual([(reply.kind, reply.correlation) for reply in replies], [('captcha', 'a1')])
+        self.assertIn('captcha', replies[0].text)
+
     def test_temporary_overlap_loss_can_recover_without_resending(self):
         baseline = list(self.driver.lines)
         self.send()
@@ -327,11 +337,16 @@ class DiscordTests(unittest.TestCase):
         self.transport.poll()
         self.assertEqual(self.transport.poll(), [])
 
-    def test_verification_prompt_pauses(self):
+    def test_verification_prompt_is_delivered_as_a_captcha(self):
         self.send()
-        self.driver.lines += ['Virtual Fisher 11:42 AM', 'Please verify with /verify']
+        self.driver.lines = self.driver.lines + ['Virtual Fisher 11:42 AM', 'Please verify with /verify']
         self.transport.poll()
-        self.assertFalse(self.transport.inspect_context().ok)
+        self.assertEqual([reply.kind for reply in self.transport.poll()], ['captcha'])
+
+    def test_an_answered_captcha_still_on_screen_does_not_block(self):
+        self.driver.lines = self.driver.lines + ['Virtual Fisher 11:42 AM', 'Please complete this captcha.']
+        self.driver.lines = self.driver.lines + fish(2, 2, 20)
+        self.assertTrue(self.transport.inspect_context().ok)
 
 
 class TargetTests(unittest.TestCase):

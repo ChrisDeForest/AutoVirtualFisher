@@ -1,5 +1,6 @@
 """Live runner with optional limits. Without --live this only inspects the configured target."""
 import argparse
+import threading
 from pathlib import Path
 import time
 
@@ -43,8 +44,17 @@ def build_live(channel, account, username, root=DEFAULT_LIVE_ROOT, max_trips=Non
     config = AutomationConfig(account, username, transport.context_id,
                               max_trips=max_trips, max_seconds=max_seconds, mode='live')
     controller = AutomationController(transport, config, AutomationJournal(folder / 'journal'),
-                                      folder / 'fishing', folder / 'review', interval=interval)
+                                      folder / 'fishing', folder / 'review', interval=interval, alert=show_alert)
     return controller, transport
+
+
+def show_alert(message, title='AutoVirtualFisher: captcha'):
+    """A topmost Windows message box, shown from its own thread so the run is never held up by it."""
+    def show():
+        import ctypes
+        # MB_OK | MB_ICONWARNING | MB_SYSTEMMODAL | MB_SETFOREGROUND | MB_TOPMOST
+        ctypes.windll.user32.MessageBoxW(None, message, title, 0x0 | 0x30 | 0x1000 | 0x10000 | 0x40000)
+    threading.Thread(target=show, daemon=True).start()
 
 
 def save_diagnostics(controller, transport, root=DEFAULT_LIVE_ROOT) -> str:

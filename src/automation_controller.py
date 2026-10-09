@@ -11,6 +11,7 @@ that fail OCR are retried up to three attempts, with a delay, unless a retry rea
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
+import random
 import re
 import threading
 import time
@@ -21,7 +22,7 @@ from .automation_policy import next_action
 from .automation_state import AutomationState, apply_observation
 from .catch_check import load_fish_reference
 from .fishing_sessions import load_sessions
-from .live_stats import carry_forward, project, summarize_finds, synced_stats
+from .live_stats import add_unlisted_finds, carry_forward, project, summarize_finds, synced_stats
 from .player_planner import load_level_increments
 from .startup_fields import apply_startup, reply_problems, startup_problems
 from .fishing_log import parse_fishing
@@ -37,6 +38,8 @@ STARTUP_ATTEMPTS = 3
 STARTUP_RETRY_DELAY = 2.0
 # Unknown outcomes in a row (no reply, unreadable, failed hand-over) before a run gives up.
 UNKNOWN_LIMIT = 3
+CAPTCHA_REASON = ('Virtual Fisher asked for a captcha. Type /captcha with the code from the image in Discord '
+                  '(exact case), then press Resume.')
 # After a refusal before any input (Discord not in front, message box not empty), the wait before trying again.
 REFUSAL_RETRY_DELAY = 2.0
 
@@ -57,12 +60,15 @@ def _iso(moment: datetime) -> str:
 
 class AutomationController:
     def __init__(self, transport, config: AutomationConfig, journal: AutomationJournal, fishing_root: Path,
-                 review_root: Path, monotonic=time.monotonic, utc=None, policy=next_action, interval=0.2):
+                 review_root: Path, monotonic=time.monotonic, utc=None, policy=next_action, interval=0.2,
+                 rng=None, alert=None):
         self.transport, self.config, self.journal, self.policy = transport, config, journal, policy
         self.roots = {'fishing': Path(fishing_root), 'review': Path(review_root)}
         self.monotonic = monotonic
         self.utc = utc or (lambda: datetime.now(timezone.utc))
         self.interval = interval
+        self.rng = rng or random.Random()
+        self.alert = alert             # called with a message when the game asks for a captcha
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
         self.thread = None
@@ -90,6 +96,10 @@ class AutomationController:
         self.unknown_streak = 0
         self.refused_until, self.refused_reason = float('-inf'), ''
         self.paused = False            # paused by the person: nothing new is sent until resumed
+        self.captcha = None            # the captcha message that paused the run, until resumed
+        self.captchas_seen = set()     # observation ids of captcha messages already acted on
+        self.jitter = 0.0              # the random extra wait before the next fish
+        self.jitters = []              # every extra wait picked this run
         self._reset_stats()
 
     def _reset_stats(self):
@@ -122,7 +132,8 @@ class AutomationController:
             self.startup_failures, self.startup_problems, self.startup_texts = {}, {}, {}
             self.unknown_streak = 0
             self.refused_until, self.refused_reason = float('-inf'), ''
-            self.paused = False
+            self.paused, self.captcha = False, None
+            self.jitter, self.jitters = 0.0, []
             self._reset_stats()
             self.startup_retry_at = float('-inf')
             self.acknowledged = {action for action, info in recovered['actions'].items()
@@ -184,7 +195,7 @@ class AutomationController:
     def resume(self):
         with self.lock:
             if self.paused:
-                self.paused = False
+                self.paused, self.captcha = False, None
                 self._safe_event('resumed', None)
                 self.phase, self.reason = 'READY', 'Resuming.'
 
@@ -275,7 +286,10 @@ class AutomationController:
                 self.phase, self.reason = 'NEEDS_REVIEW', self._unresolved_text()
                 return
             if self.paused:
-                self.phase, self.reason = 'PAUSED_BY_YOU', 'Paused. Resume to carry on fishing.'
+                if self.captcha:
+                    self.phase, self.reason = 'CAPTCHA', CAPTCHA_REASON
+                else:
+                    self.phase, self.reason = 'PAUSED_BY_YOU', 'Paused. Resume to carry on fishing.'
                 return
             if not context_ok:
                 self.phase = 'PAUSED'
@@ -294,7 +308,7 @@ class AutomationController:
             if self.last_trip_at is not None and self.state.cooldown_seconds is not None:
                 # Also covers a trip reconciled after a restart, before this run had seen /buffs.
                 self.ready_at = max(self.ready_at, self.last_trip_at + self.state.cooldown_seconds
-                                    + self.config.cooldown_margin)
+                                    + self.config.cooldown_margin + self.jitter)
             if now < self.ready_at:
                 self.phase, self.reason = 'WAITING_COOLDOWN', f'Next fish in {self.ready_at - now:.1f} s.'
                 return
@@ -357,11 +371,21 @@ class AutomationController:
                 return
             self.sent_at = (self.monotonic(), receipt.sent_at)
             self.phase, self.reason = 'WAITING_REPLY', f'Waiting for the reply to {intent.kind}.'
+            if intent.kind == 'fish':
+                self._pick_jitter()
+
+    def _pick_jitter(self):
+        """A new random extra wait for the next fish: 0 to jitter_max seconds in jitter_step steps."""
+        steps = round(self.config.jitter_max / self.config.jitter_step) if self.config.jitter_step > 0 else 0
+        self.jitter = round(self.rng.randint(0, max(0, steps)) * self.config.jitter_step, 6)
+        self.jitters.append(self.jitter)
 
     # --- replies ---
 
     def _observe(self, observation):
         correlation = observation.correlation
+        if observation.kind == 'captcha':
+            return self._captcha(observation)
         if observation.identity_status != VERIFIED or (
                 self.config.context_id and observation.context_id != self.config.context_id):
             return
@@ -390,6 +414,30 @@ class AutomationController:
             self.carried.pop(correlation, None)
             self._acknowledge(correlation, kind, observation, this_run=False)
             self._sync_uncertain()
+
+    def _captcha(self, observation):
+        """The game asked for a captcha: the command it answers did not run. Pause, note it, and alert the person.
+        Any player's captcha pauses the run; resuming is always the person's choice."""
+        if self.captcha is not None or observation.observation_id in self.captchas_seen:
+            return
+        self.captchas_seen.add(observation.observation_id)
+        pending = self.state.pending
+        if pending is not None and observation.correlation == pending.action_id:
+            self.state = replace(self.state, pending=None)
+            self.acknowledged.add(pending.action_id)
+        self._safe_event('captcha', pending.action_id if pending else None, observation_id=observation.observation_id,
+                         text=observation.text)
+        add_item(self.roots['review'], self.config.account, 'captcha', observation.text,
+                 ['Virtual Fisher asked for a captcha. The run paused; nothing more was sent.'],
+                 identity_status=observation.identity_status, observation_id=observation.observation_id,
+                 blocks_actions=False)
+        self.paused, self.captcha = True, observation.text
+        self.phase, self.reason = 'CAPTCHA', CAPTCHA_REASON
+        if self.alert:
+            try:
+                self.alert(CAPTCHA_REASON + '\n\n' + observation.text)
+            except Exception:
+                pass  # the dashboard still shows it
 
     def _acknowledge(self, action_id, kind, observation, this_run):
         wait = COOLDOWN_REPLY.search(observation.text)
@@ -426,7 +474,7 @@ class AutomationController:
         self.last_result = {'action_id': action_id, 'result': result, 'at': observation.observed_at}
         now = self.monotonic()
         if result == 'cooldown':
-            self.ready_at = now + float(wait[1]) + self.config.cooldown_margin
+            self.ready_at = now + float(wait[1]) + self.config.cooldown_margin + self.jitter
         elif result == 'unreadable' and kind in self.state.refresh_due:
             # A resync or retry that could not be read: fishing never waits on it; it is tried again later.
             self._defer(kind, observation, problems)
@@ -534,7 +582,7 @@ class AutomationController:
             self.phase, self.reason = 'FAILED', stopped
             return
         self.ready_at = max(self.ready_at, self.monotonic() + (self.state.cooldown_seconds or 0)
-                            + self.config.cooldown_margin)
+                            + self.config.cooldown_margin + self.jitter)
 
     def _defer(self, kind, observation, problems):
         """Set an unreadable /profile or /buffs aside: noted in Needs review, tried again every few trips. Without
@@ -594,6 +642,12 @@ class AutomationController:
             self.finds_before = summarize_finds([session['tally'] for session in reversed(sessions)])
         stats['finds'] = {'run': summarize_finds(self.run_tallies),
                           'all': summarize_finds(self.run_tallies, self.finds_before)}
+        if self.synced['profile']:
+            # Below level 50 the profile leaves out Lava and Diamond Fish; they are counted from finds instead.
+            stats['inventory'] = add_unlisted_finds(stats['inventory'], stats['finds']['all']['special_fish'],
+                                                    listed=synced['inventory'])
+            stats['unlisted'] = sorted(set(stats['inventory'].get('exotic_fish', {}))
+                                       - {name for items in synced['inventory'].values() for name in items})
         recent = [{'catches': dict(tally['catches']), 'xp': tally['fishing_xp'],
                    'events': list(tally['trip_details'][0]['events']) if tally.get('trip_details') else []}
                   for tally in reversed(self.run_tallies[-8:])]

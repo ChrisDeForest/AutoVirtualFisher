@@ -96,8 +96,11 @@ class WindowsDiscordDriver:
         if frame['status'] != 'ok' or context.get('window') != self.window \
                 or (context.get('channel') or '').casefold() != self.channel.casefold():
             raise TransportError('Target changed or capture unavailable during command entry.')
-        if CHALLENGE.search('\n'.join(frame.get('lines', []))):
+        challenges = len(CHALLENGE.findall('\n'.join(frame.get('lines', []))))
+        if self.challenges is not None and challenges > self.challenges:
             raise TransportError('Verification prompt appeared during entry; command not submitted.')
+        if self.challenges is None:
+            self.challenges = challenges
         title = context.get('title')
         if not title or (self.title is not None and self.title != title):
             raise TransportError('Window title changed during command entry.')
@@ -116,6 +119,7 @@ class WindowsDiscordDriver:
 
     def dispatch(self, command, cancelled):
         # Until the first click nothing has reached Discord: a refusal here certainly sent nothing.
+        self.challenges = None  # captcha text already on screen; only one appearing during entry stops it
         try:
             frame = self._frame(cancelled)
         except TransportError as error:

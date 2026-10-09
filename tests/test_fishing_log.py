@@ -7,6 +7,36 @@ LIVE = (Path(__file__).parent / 'fixtures' / 'live_fishing.txt').read_text(encod
 
 
 class LiveFishingTests(unittest.TestCase):
+    def test_crate_contents_after_you_gained(self):
+        # Observed live: a super crate lists its contents under "You gained:".
+        tally = parse_fishing('You caught:\n3 :salmon: Salmon\n14 :cod: Cod\nYou found a super crate :crate_super:\n'
+                              'You gained:\n+13 Gold Fish :gold_fish:\n+13 Emerald Fish :emerald_fish:\n'
+                              '+13 Lava Fish :lava_fish:\n+13 Diamond Fish :diamond_fish:\n+162 XP\n'
+                              'Global boost by Colby  •√π× 😊!')
+        self.assertEqual(tally['warnings'], [])
+        self.assertEqual(tally['finds'], {'super crate': 1})
+        self.assertEqual(tally['chest_contents'], {'Gold Fish': 13, 'Emerald Fish': 13, 'Lava Fish': 13,
+                                                   'Diamond Fish': 13})
+        self.assertEqual((tally['fishing_xp'], tally['catches']), (162, {'Salmon': 3, 'Cod': 14}))
+        self.assertIn('Crate: 13 Lava Fish', tally['trip_details'][0]['events'])
+
+    def test_crate_contents_as_ocr_read_them(self):
+        # Saved live: the colon read as "-", and "+17G01d Fish" with the space lost and o/l read as 0/1.
+        tally = parse_fishing('You caught:\n2 Salmon\n14 Cod\nYou found a super crate\nYou gained-\n+17G01d Fish\n'
+                              '+17 Emerald Fish\n+17 Lava Fish\n+17 Diamond Fish\n+201 xp\nGlobal boost by Colby')
+        self.assertEqual(tally['warnings'], [])
+        self.assertEqual(tally['chest_contents'], {'Gold Fish': 17, 'Emerald Fish': 17, 'Lava Fish': 17,
+                                                   'Diamond Fish': 17})
+
+    def test_charm_emoji_read_as_a_letter_is_not_part_of_its_name(self):
+        tally = parse_fishing('You caught:\n2 Cod\nYou found an epic crate\nYou found a Quantity Charm Q !\n+233 xp')
+        self.assertEqual(tally['finds'], {'epic crate': 1, 'Quantity Charm': 1})
+
+
+        tally = parse_fishing('You caught:\n1 Cod\nYou found a rare chest\nYou got 1 Ernerald Fish from the chest!\n'
+                              '+5 XP')
+        self.assertEqual(tally['chest_contents'], {'Emerald Fish': 1})
+
     def test_saved_money_chest_reply(self):
         tally = parse_fishing('You caught:\n1 Fish\n5 Salmon\n9 Cod\nYou found an uncornmon chest\nYou got $296 from the chest\n+119 xp\nGlobal boost by')
         self.assertEqual(tally['warnings'], [])

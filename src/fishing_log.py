@@ -1,4 +1,5 @@
 """Tally pasted Virtual Fisher fishing results. Pure parsing; no file or network access."""
+from functools import cache
 from hashlib import sha256
 import re
 
@@ -13,6 +14,28 @@ def fingerprint(text: str) -> str:
     """Identify a pasted batch regardless of blank lines and surrounding spaces."""
     lines = [line.strip() for line in text.replace('\r', '').split('\n') if line.strip()]
     return sha256('\n'.join(lines).encode('utf-8')).hexdigest()
+
+
+# Exotic fish found in chests and crates (observed in a super crate). Catchable fish come from the reference.
+EXOTIC_FISH = ('Gold Fish', 'Emerald Fish', 'Lava Fish', 'Diamond Fish')
+
+
+def _fold(name):
+    # Observed OCR: "m" read as "rn" ("Ernerald Fish"), "o" and "l" as 0 and 1 ("G01d Fish"), and spaces lost.
+    return re.sub(r'\s+', '', name.casefold().replace('rn', 'm').replace('0', 'o').replace('1', 'l'))
+
+
+@cache
+def _known_names():
+    from .catch_check import load_fish_reference
+    return tuple(EXOTIC_FISH) + tuple(row['name'] for row in (load_fish_reference() or {}).values())
+
+
+def known_name(name: str) -> str:
+    """A found item's name as the game writes it when it is a known fish, else as read. A charm's emoji read
+    as one trailing letter ("Quantity Charm Q") is dropped."""
+    name = re.sub(r'(\bCharm)\s+\S$', r'\1', name, flags=re.I)
+    return next((known for known in _known_names() if _fold(known) == _fold(name)), name)
 
 
 def _add(counts, name, amount):
@@ -81,6 +104,20 @@ def parse_fishing(text: str) -> dict:
                     _add(reward['items'], _name(item[2]), 1 if item[1] in 'lI' else int(item[1]))
                 continue
             mode = None
+        if mode == 'gained':
+            # A crate's contents: "+13 Gold Fish", "+$500", until the trip's "+N XP".
+            money = re.fullmatch(rf'\+\$({NUMBER})', line)
+            item = None if re.fullmatch(rf'\+({NUMBER}) XP', line, re.I) else re.fullmatch(rf'\+({NUMBER})\s*(\D.*)', line)
+            if money:
+                tally['chest_money'] += _number(money[1])
+                event(f'Crate: ${money[1]}')
+                continue
+            if item and _name(item[2]):
+                name = known_name(_name(item[2]))
+                _add(tally['chest_contents'], name, _number(item[1]))
+                event(f'Crate: {item[1]} {name}')
+                continue
+            mode = None
         in_catch_list = mode == 'catch'
         if mode == 'catch':
             catch = re.fullmatch(r'(\d{1,3}(?:,\d{3})+|\d+)\s+(.+)', line)
@@ -109,6 +146,9 @@ def parse_fishing(text: str) -> dict:
             mode = 'quest_name'
         elif line == 'Reward:' and mode == 'await_reward':
             mode = 'reward'
+        elif re.fullmatch(r'You gained\s*[:\-.]?', line, re.I):
+            # Observed OCR reads the colon as "-".
+            mode = 'gained'
         elif match := re.fullmatch(rf'You got \$({NUMBER}) from the chest[.!]?', line, re.I):
             tally['chest_money'] += _number(match[1])
             event(f'Chest: ${match[1]}')
@@ -119,10 +159,11 @@ def parse_fishing(text: str) -> dict:
                 trip['chest_xp'] += _number(match[1])
             event(f'Chest: {match[1]} XP')
         elif match := re.fullmatch(rf'You got ({NUMBER}) (.+?) from the chest!?', line, re.I):
-            _add(tally['chest_contents'], _name(match[2]), _number(match[1]))
-            event(f'Chest: {match[1]} {_name(match[2])}')
+            name = known_name(_name(match[2]))
+            _add(tally['chest_contents'], name, _number(match[1]))
+            event(f'Chest: {match[1]} {name}')
         elif match := re.fullmatch(r'You found (?:an? )?(.+?)\s*!?', line, re.I):
-            name = _name(match[1])
+            name = known_name(_name(match[1]))
             # Exact observed OCR substitution: rn for m in this chest label only.
             if name.lower() == 'uncornmon chest':
                 name = 'uncommon chest'

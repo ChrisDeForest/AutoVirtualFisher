@@ -91,7 +91,7 @@ def _minute_of_day(sent):
         return None
     hour = int(match[1]) % 12 + (12 if match[3].upper() == 'P' else 0)
     return hour * 60 + int(match[2])
-CHALLENGE = re.compile(r'captcha|\bverify\b|verification|anti.bot', re.I)
+from .live_capture import CAPTCHA as CHALLENGE
 
 
 def _center(box):
@@ -184,8 +184,8 @@ class DiscordTransport:
             return 'Discord window title changed; context must be checked again.'
         if not self.driver.is_foreground():
             return 'Discord must remain in the foreground.'
-        if CHALLENGE.search('\n'.join(capture.get('lines', []))):
-            return 'Verification prompt visible; manual review required.'
+        # A captcha is not checked here: a new one at the bottom of the chat is delivered as a reply, and the
+        # controller pauses until the person resumes. One already answered may stay on screen for a while.
         self.title = title
         return None
 
@@ -296,6 +296,19 @@ class DiscordTransport:
                 message = frame['messages'][-1]
                 status, recipient, reason = check_identity(self.identity, recipients(
                     message['kind'], message['lines'], message.get('invoked_by')))
+                if message['kind'] == 'captcha':
+                    # Delivered whoever it names: a captcha pauses the run, and the person decides.
+                    evidence = ('captcha', tuple(message['lines']), message.get('sent'))
+                    if self.candidate != evidence:
+                        self.candidate, self.rereads = evidence, 0
+                        return []
+                    action = self.pending
+                    observation = Observation(token_hex(12), token_hex(12), self.utc().isoformat(), self.context_id,
+                                              'captcha', recipient, '\n'.join(message['lines']), status,
+                                              correlation=action.action_id)
+                    self.pending = self.baseline = self.candidate = None
+                    self.last_issue = 'Virtual Fisher asked for a captcha.'
+                    return [observation]
                 expected = message['kind'] == self.pending.expected_reply_kind
                 cooldown = self.pending.kind == 'fish' and any(
                     line.startswith('You must wait') for line in message['lines'])

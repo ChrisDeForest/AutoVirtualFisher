@@ -381,7 +381,10 @@ class Handler(BaseHTTPRequestHandler):
         if download:
             self.send_header('Content-Disposition', 'attachment; filename="player-state.json"')
         self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.wfile.write(body)
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            pass  # the browser left (a refresh or another page) before the reply was sent; the action itself ran
 
     def automation_page(self, notice=''):
         template = TEMPLATE.read_text(encoding='utf-8')

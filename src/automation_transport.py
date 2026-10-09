@@ -73,6 +73,8 @@ class SimulationTransport:
             glyph = '?' if outcome == 'unreadable_fixed' else '?' * (index + 1)
             text = text.replace('$1,000', '$1,0O0').replace('Level 10,', 'Level 1O,').replace(
                 f'{self.cooldown:g}s', f'{self.cooldown:g}{glyph}s').replace('Balance: $1,0O0.', f'Balance: ${glyph}1,0O0.')
+        if outcome == 'captcha':
+            text, kind = 'Please complete this captcha to continue fishing.\nUse /captcha with the code shown.', 'captcha'
         if outcome == 'xp_unread' and kind == 'profile':
             text = text.replace('0/1,000 XP', 'xp')  # observed: "P4 Level 31, xp to next level."
         deliver = now + self.latency

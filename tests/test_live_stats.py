@@ -93,6 +93,28 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual((moved['level'], moved['xp_current']), (32, None))
 
 
+class FindNameTests(unittest.TestCase):
+    def test_finds_merge_ocr_spellings_of_one_fish(self):
+        # Saved live: one trip read "Ernerald Fish" (rn for m); it is the same Emerald Fish.
+        from src.live_stats import summarize_finds
+        tallies = [{'chest_contents': {'Emerald Fish': 1}}, {'chest_contents': {'Ernerald Fish': 1}},
+                   {'chest_contents': {'emerald fish': 2}}]
+        self.assertEqual(summarize_finds(tallies)['special_fish'], {'Emerald Fish': 4})
+        saved = summarize_finds([{'finds': {'Quantity Charm Q': 1}}, {'finds': {'Quantity Charm': 1}}])
+        self.assertEqual(saved['charms'], {'Quantity Charm': 2})
+
+
+class HiddenExoticTests(unittest.TestCase):
+    def test_exotics_the_profile_does_not_list_come_from_finds(self):
+        # Below level 50 the profile does not list Lava or Diamond Fish, though super crates give them.
+        from src.live_stats import add_unlisted_finds
+        inventory = {'fish': {'Cod': 5}, 'exotic_fish': {'Gold Fish': 12}}
+        shown = add_unlisted_finds(inventory, {'Gold Fish': 13, 'Lava Fish': 26, 'Diamond Fish': 13})
+        self.assertEqual(shown['exotic_fish'], {'Gold Fish': 12, 'Lava Fish': 26, 'Diamond Fish': 13})
+        self.assertEqual(add_unlisted_finds(inventory, {'Gold Fish': 13})['exotic_fish'], {'Gold Fish': 12},
+                         'what the profile lists is what you have')
+
+
 class FindsTests(unittest.TestCase):
     def test_chests_special_fish_and_charms_are_counted(self):
         from src.live_stats import summarize_finds

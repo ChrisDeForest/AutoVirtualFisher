@@ -164,6 +164,8 @@ def state_label(status) -> str:
     phase = status['phase']
     if not status['running']:
         return 'Stopped by a problem' if phase == 'FAILED' else 'Stopped'
+    if phase == 'CAPTCHA':
+        return 'Captcha: solve it, then Resume'
     if status.get('paused') or phase in ('PAUSED', 'PAUSED_BY_YOU'):
         return 'Paused'
     if phase == 'NEEDS_REVIEW':
@@ -292,7 +294,10 @@ def render_panel(status, mode=None) -> str:
                                                                        key=lambda item: -item[1]))
     inventory_box = _box('Inventory', _scroll('Inventory', f'<dl class="columns">{rows}</dl>') if rows else
                          '<p class="empty">Not read yet.</p>', wide=True,
-                         note='Green numbers are added since your profile was last read.' if changes else '')
+                         note=' '.join(filter(None, (
+                             'Green numbers are added since your profile was last read.' if changes else '',
+                             (', '.join(dashboard['unlisted']) + ' are counted from the finds logged here: your '
+                              'profile does not list them until level 50.') if dashboard.get('unlisted') else ''))))
 
     recent = dashboard.get('recent') or []
     items = ''.join(

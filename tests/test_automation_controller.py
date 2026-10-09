@@ -103,7 +103,7 @@ class ControllerTests(unittest.TestCase):
         self.assertIn('trip limit', status['reason'])
 
     def test_fishing_waits_for_the_verified_cooldown_plus_margin(self):
-        self.make(config=replace(CONFIG, max_trips=10)).start()
+        self.make(config=replace(CONFIG, max_trips=10, jitter_max=0)).start()
         self.run_for(60)
         sends = self.fish_sends()
         gaps = [later - earlier for earlier, later in zip(sends, sends[1:])]
@@ -293,6 +293,34 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(profile['level'], 10)
         self.assertIsNotNone(profile['xp_current'], 'the second read showed the XP progress')
         self.assertEqual(self.saved_trips(), 4)
+
+    def test_captcha_pauses_and_alerts_until_resumed(self):
+        self.sim.script = {3: 'captcha'}
+        alerts = []
+        self.make(config=replace(CONFIG, max_trips=5))
+        self.controller.alert = alerts.append
+        self.controller.start()
+        self.run_for(30)
+        status = self.controller.status()
+        self.assertTrue(status['paused'])
+        self.assertEqual(status['phase'], 'CAPTCHA')
+        self.assertIn('/captcha', status['reason'])
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(len(self.sim.sent), 4, 'nothing more is sent after the captcha')
+        self.assertEqual(self.saved_trips(), 1, 'the captcha reply is not a trip')
+        self.controller.resume()
+        self.run_for(30)
+        self.assertEqual(self.saved_trips(), 5)
+
+    def test_each_fish_waits_a_random_extra_in_steps(self):
+        self.make(config=replace(CONFIG, max_trips=12)).start()
+        self.run_for(80)
+        fish = self.fish_sends()
+        gaps = [later - earlier - 3.5 - CONFIG.cooldown_margin for earlier, later in zip(fish, fish[1:])]
+        self.assertTrue(all(-STEP <= gap <= 0.5 + 2 * STEP for gap in gaps), gaps)
+        self.assertGreater(len({round(gap, 1) for gap in gaps}), 1, 'the extra wait varies')
+        extras = self.controller.jitters
+        self.assertTrue(all(0 <= extra <= 0.5 and abs(extra * 20 - round(extra * 20)) < 1e-9 for extra in extras))
 
     def test_dashboard_carries_synced_stats_forward(self):
         self.make(config=replace(CONFIG, max_trips=2)).start()
