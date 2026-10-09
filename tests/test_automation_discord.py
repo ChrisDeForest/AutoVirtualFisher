@@ -144,6 +144,17 @@ class DiscordTests(unittest.TestCase):
         self.assertEqual(len(replies), 1)
         self.assertEqual(replies[0].correlation, 'p1')
 
+    def test_charms_reply_is_delivered(self):
+        from tests.test_live_stats import CHARMS
+        self.intent = ActionIntent('c1', 'refresh_charms', self.transport.context_id, self.now.isoformat(), 'charms')
+        self.send()
+        self.assertEqual(self.driver.sent, ['/charms'])
+        self.driver.lines = self.driver.lines + ['epicmouse used', '% charms', 'Virtual Fisher 11:42 AM',
+                                                 *CHARMS.split('\n')]
+        self.assertEqual(self.transport.poll(), [])
+        replies = self.transport.poll()
+        self.assertEqual([(reply.kind, reply.correlation) for reply in replies], [('charms', 'c1')])
+
     def test_captcha_message_is_delivered_as_a_captcha(self):
         self.send()
         self.driver.lines = self.driver.lines + ['epicmouse used', '% fish', 'Virtual Fisher 11:42 AM',
@@ -399,10 +410,13 @@ class ControllerIntegrationTests(unittest.TestCase):
         from src.fishing_sessions import load_sessions
         from tests.test_live_capture import PROFILE, BUFFS
         from tests.test_automation_controller import Clock
+        from tests.test_live_stats import CHARMS
         driver, clock = Driver(), Clock()
         def dispatch(command, cancelled):
             driver.sent.append(command)
-            driver.lines += {'/profile': PROFILE, '/buffs': BUFFS, '/fish': fish(2, 2, 20)}[command]
+            charms = ['epicmouse used', '% charms', 'Virtual Fisher 11:41 AM', *CHARMS.split('\n')]
+            driver.lines += {'/profile': PROFILE, '/buffs': BUFFS, '/charms': charms,
+                             '/fish': fish(2, 2, 20)}[command]
         driver.dispatch = dispatch
         transport = DiscordTransport(driver, 42, 'Virtual Fisher', 'epicmouse',
                                      'epicmouse9925', utc=clock.utc)
@@ -418,8 +432,9 @@ class ControllerIntegrationTests(unittest.TestCase):
             for _ in range(20):
                 controller.tick()
                 clock.now += .5
-            self.assertEqual(driver.sent, ['/profile', '/buffs', '/fish'])
+            self.assertEqual(driver.sent, ['/profile', '/buffs', '/charms', '/fish'])
             self.assertEqual(controller.status()['trips'], 1)
+            self.assertEqual(controller.status()['dashboard']['charms']['total'], 11)
             self.assertFalse(controller.running)
             self.assertEqual(load_sessions('epicmouse', root/'fish')[0][0]['tally']['trips'], 1)
 

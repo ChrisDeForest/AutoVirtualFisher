@@ -229,7 +229,7 @@ def _understood(kind, lines):
     if kind == 'fishing':
         unknown = {warning.removeprefix('Unrecognized line: ') for warning in parse_fishing(text)['warnings']}
         return tuple(line for line in lines if _clean(line) not in unknown)
-    if kind is not None:
+    if kind is not None and kind != 'charms':
         unparsed = set(parse_responses(**{kind: text})['unparsed'].get(kind, []))
         return tuple(line for line in lines if line not in unparsed)
     return tuple(lines)
@@ -745,6 +745,9 @@ class LiveCapture:
                     # A credible depletion ends the bait even when the rest of the trip could not be read.
                     flush()
                     self._set_bait(None, 'verified', 'Bait ran out')
+            elif kind in ('charms', 'captcha'):
+                # Read by automation runs; this capture logbook keeps no charm or captcha record.
+                self.counts['ignored'] += 1
             else:
                 reasons = self._player_problems(kind, text)
                 if reasons:

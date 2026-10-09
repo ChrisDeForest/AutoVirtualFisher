@@ -18,6 +18,17 @@ from .observation import Identity, Observation, check_identity, recipients
 #   no evidence of which action it answers), send_error (the hand-over fails).
 OUTCOMES = ('ok', 'unreadable', 'unreadable_fixed', 'noisy', 'missing', 'duplicate', 'other_player_first', 'uncorrelated', 'send_error')
 FISH = ('Salmon', 'Cod')
+# A real /charms reply (11 charms found).
+SIM_CHARMS = ('Charms are found in high tier crates. Try to get them all!\n'
+              '0/14 - :charm_yellow: Marketing Charm - Sell fish for more. (1 to next tier).\n'
+              '1/14 - :charm_pink: Endurance Charm - Catch more fish. (2 to next tier).\n'
+              '1/14 - :charm_red: Haste Charm - Fish more often. (2 to next tier).\n'
+              '1/14 - :charm_white: Quantity Charm - Increase amount of items found in chests. (1 to next tier).\n'
+              '1/14 - :charm_cyan: Worker Charm - Workers catch more fish. (2 to next tier).\n'
+              '0/14 - :charm_lblue: Treasure Charm - Catch slightly more treasure. (1 to next tier).\n'
+              '2/14 - :charm_green: Quality Charm - Increase quality of treasure. (2 to next tier).\n'
+              '1/14 - :charm_blue: Experience Charm - Increase experience from all fish. (1 to next tier).\n'
+              '11/840 - Charms found.')
 VISIBLE_REPLIES = 12
 
 
@@ -34,7 +45,7 @@ class Transport(Protocol):
 class SimulationTransport:
     """A simulated player in a Virtual Fisher DM. `poll()` returns the replies currently "on screen" (the most
     recent ones, oldest first), so a restarted controller sees what the previous one may have missed."""
-    capabilities = ('refresh_profile', 'refresh_buffs', 'fish')
+    capabilities = ('refresh_profile', 'refresh_buffs', 'refresh_charms', 'fish')
 
     def __init__(self, monotonic, utc, display_name='sim', username='sim0001', context_id='sim:dm', cooldown=3.5,
                  latency=0.4, seed=1, script=None):
@@ -73,6 +84,10 @@ class SimulationTransport:
             glyph = '?' if outcome == 'unreadable_fixed' else '?' * (index + 1)
             text = text.replace('$1,000', '$1,0O0').replace('Level 10,', 'Level 1O,').replace(
                 f'{self.cooldown:g}s', f'{self.cooldown:g}{glyph}s').replace('Balance: $1,0O0.', f'Balance: ${glyph}1,0O0.')
+        if outcome == 'partial':
+            # One field lost to OCR, the rest readable.
+            text = text.replace('Sell price: 1.00x\n', '').replace('Currently using Steel Rod.\n', '').replace(
+                'Catch more fish. (2 to next tier).', 'Catch more fish. (2 to n~xt t1er')
         if outcome == 'captcha':
             text, kind = 'Please complete this captcha to continue fishing.\nUse /captcha with the code shown.', 'captcha'
         if outcome == 'xp_unread' and kind == 'profile':
@@ -101,9 +116,13 @@ class SimulationTransport:
         name, username = self.identity.display_name, self.identity.username
         if intent.kind == 'refresh_profile':
             return (f'Inventory of {name}\nBalance: $1,000.\nLevel 10, 0/1,000 XP to next level.\n'
-                    'Current biome: River', 'profile')
+                    'Currently using Steel Rod.\nCurrent biome: River\nPet: Dolphin (Level 5)\n'
+                    'Fish Value: $500', 'profile')
+        if intent.kind == 'refresh_charms':
+            return SIM_CHARMS, 'charms'
         if intent.kind == 'refresh_buffs':
-            return (f"{username}'s current multipliers (including bait):\nSell price: 1.00x\n"
+            return (f"{username}'s current multipliers (including bait):\nSell price: 1.00x\nFish catch: 1.00x\n"
+                    'Fish quality: 1.00x\nTreasure chance: 1.00x\nTreasure quality: 1.00x\nXP Multiplier: 1.00x\n'
                     f'Fishing cooldown: {self.cooldown:g}s.', 'buffs')
         if now < self.next_allowed:
             return f'You must wait {self.next_allowed - now:.1f} seconds before fishing again.', None

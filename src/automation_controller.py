@@ -22,7 +22,8 @@ from .automation_policy import next_action
 from .automation_state import AutomationState, apply_observation
 from .catch_check import load_fish_reference
 from .fishing_sessions import load_sessions
-from .live_stats import add_unlisted_finds, carry_forward, project, summarize_finds, synced_stats
+from .live_stats import (add_unlisted_finds, carry_forward, charm_summary, parse_charms, project, summarize_finds,
+                         synced_stats, unread_fields)
 from .player_planner import load_level_increments
 from .startup_fields import apply_startup, reply_problems, startup_problems
 from .fishing_log import parse_fishing
@@ -105,12 +106,15 @@ class AutomationController:
     def _reset_stats(self):
         # Live stats: the last readable /profile and /buffs replies, the trips since the profile was read, and
         # every trip this run (for rates).
-        self.synced = {'profile': '', 'buffs': ''}
+        self.synced = {'profile': '', 'buffs': '', 'charms': ''}
         self.synced_at = {}
         self.sync_tallies, self.run_tallies = [], []
+        self.charm_tallies = []        # trips since /charms was read: their charms add to its counts
         self.retry_counts = {}         # deferred refresh -> trips since it was last tried
         self.earlier_profile = None    # the projected profile when /profile was last read, for what a read misses
-        self.xp_unread_trips = None    # trips since a /profile read that showed no XP progress
+        self.earlier_buffs = {}        # the /buffs values read before, for what a read misses
+        self.unread = {}               # refresh -> fields its last reply did not show; read again until complete
+        self.unread_trips = {}         # refresh -> trips since that reply
         self.finds_before = None       # finds from earlier automation trips, loaded once per run
 
     # --- run control ---
@@ -135,6 +139,9 @@ class AutomationController:
             self.paused, self.captcha = False, None
             self.jitter, self.jitters = 0.0, []
             self._reset_stats()
+            if 'refresh_charms' in self.config.capabilities:
+                # Read once the profile and cooldown are known, before the first fish.
+                self.state = replace(self.state, refresh_due=('refresh_charms',))
             self.startup_retry_at = float('-inf')
             self.acknowledged = {action for action, info in recovered['actions'].items()
                                  if info['status'] in ('acknowledged', 'projected')}
@@ -375,9 +382,13 @@ class AutomationController:
                 self._pick_jitter()
 
     def _pick_jitter(self):
-        """A new random extra wait for the next fish: 0 to jitter_max seconds in jitter_step steps."""
-        steps = round(self.config.jitter_max / self.config.jitter_step) if self.config.jitter_step > 0 else 0
-        self.jitter = round(self.rng.randint(0, max(0, steps)) * self.config.jitter_step, 6)
+        """A new random extra wait for the next fish: a band chosen by its share, then a step within it."""
+        bands = self.config.jitter_bands
+        if not bands:
+            self.jitter = 0.0
+        else:
+            _, low, high, step = self.rng.choices(bands, weights=[band[0] for band in bands])[0]
+            self.jitter = round(low + self.rng.randint(0, round((high - low) / step)) * step, 6)
         self.jitters.append(self.jitter)
 
     # --- replies ---
@@ -443,7 +454,11 @@ class AutomationController:
         wait = COOLDOWN_REPLY.search(observation.text)
         tally = None
         problems = []
-        if kind != 'fish':
+        if kind == 'refresh_charms':
+            # Any charm line read is worth keeping; a reply missing one is read again soon (see unread_fields).
+            problems = [] if parse_charms(observation.text)['charms'] else ['No charm line could be read.']
+            result = 'unreadable' if problems else 'refreshed'
+        elif kind != 'fish':
             # A resync or retry must read on its own; at startup, fields read across replies add up.
             problems = (reply_problems(observation.kind, observation.text) if kind in self.state.refresh_due
                         else startup_problems(self.state, observation.kind))
@@ -499,12 +514,21 @@ class AutomationController:
         elif result == 'refreshed':
             if observation.kind == 'profile' and self.synced['profile']:
                 self.earlier_profile = self._synced_profile(project_trips=True)
+            if observation.kind == 'buffs' and self.synced['buffs']:
+                self.earlier_buffs = self._synced()['buffs']
             self.synced[observation.kind] = observation.text
             self.synced_at[observation.kind] = observation.observed_at
             if observation.kind == 'profile':
                 self.sync_tallies = []
-                # The XP numbers can be lost to OCR while the level reads; the bar needs them, so read again soon.
-                self.xp_unread_trips = 0 if self._synced_profile().get('xp_current') is None else None
+            if observation.kind == 'charms':
+                self.charm_tallies = []
+            # OCR can lose one field while the rest reads; that reply is read again soon, until nothing is missing.
+            unread = unread_fields(observation.kind, observation.text)
+            if unread:
+                self.unread[kind], self.unread_trips[kind] = unread, 0
+            else:
+                self.unread.pop(kind, None)
+                self.unread_trips.pop(kind, None)
             self.state = replace(self.state, refresh_due=tuple(k for k in self.state.refresh_due if k != kind),
                                  deferred=tuple(k for k in self.state.deferred if k != kind))
             self.retry_counts.pop(kind, None)
@@ -529,10 +553,13 @@ class AutomationController:
             if this_run:
                 self.state = replace(self.state, trips=self.state.trips + 1)
             self.sync_tallies.append(tally)
+            self.charm_tallies.append(tally)
             self.run_tallies.append(tally)
             if (self.config.resync_trips and len(self.sync_tallies) >= self.config.resync_trips
                     and not self.state.refresh_due):
-                self.state = replace(self.state, refresh_due=('refresh_profile', 'refresh_buffs'))
+                self.state = replace(self.state, refresh_due=tuple(
+                    kind for kind in ('refresh_profile', 'refresh_buffs', 'refresh_charms')
+                    if kind in self.config.capabilities))
             self._count_retries()
             self._project(action_id, tally)
 
@@ -600,12 +627,12 @@ class AutomationController:
 
     def _count_retries(self):
         """After each trip, queue any set-aside refresh whose turn has come."""
-        if self.xp_unread_trips is not None:
-            self.xp_unread_trips += 1
-            if self.xp_unread_trips >= self.config.retry_unread_trips:
-                self.xp_unread_trips = None
-                if 'refresh_profile' not in self.state.refresh_due:
-                    self.state = replace(self.state, refresh_due=self.state.refresh_due + ('refresh_profile',))
+        for kind in self.unread:
+            # A read that missed a field is read again every few trips until every field is filled.
+            self.unread_trips[kind] = self.unread_trips.get(kind, 0) + 1
+            if self.unread_trips[kind] >= self.config.retry_unread_trips and kind not in self.state.refresh_due:
+                self.unread_trips[kind] = 0
+                self.state = replace(self.state, refresh_due=self.state.refresh_due + (kind,))
         for kind in self.state.deferred:
             self.retry_counts[kind] = self.retry_counts.get(kind, 0) + 1
             if self.retry_counts[kind] >= self.config.retry_unread_trips and kind not in self.state.refresh_due:
@@ -613,9 +640,10 @@ class AutomationController:
                 self.state = replace(self.state, refresh_due=self.state.refresh_due + (kind,))
 
     def _synced(self):
-        """The last /profile and /buffs as read, with what the profile read missed kept from the read before."""
+        """The last /profile and /buffs as read, with what a read missed kept from the read before."""
         synced = synced_stats(self.synced['profile'], self.synced['buffs'])
         synced['profile'] = carry_forward(synced['profile'], self.earlier_profile)
+        synced['buffs'] = {**self.earlier_buffs, **synced['buffs']}
         return synced
 
     def _synced_profile(self, project_trips=False):
@@ -656,7 +684,13 @@ class AutomationController:
                      next_sync_in=(max(0, self.config.resync_trips - len(self.sync_tallies))
                                    if self.config.resync_trips else None),
                      next_level_in_seconds=(to_next * 3600 / per_hour['xp']
-                                            if to_next is not None and per_hour.get('xp') else None))
+                                            if to_next is not None and per_hour.get('xp') else None),
+                     unread={kind.removeprefix('refresh_'): {
+                         'fields': list(fields),
+                         'retry_in': max(0, self.config.retry_unread_trips - self.unread_trips.get(kind, 0))}
+                         for kind, fields in self.unread.items()},
+                     charms=charm_summary(stats['finds']['all'], parse_charms(self.synced['charms']),
+                                          summarize_finds(self.charm_tallies)['charms']))
         return stats
 
     def _uncertain(self, action_id, reason):

@@ -93,6 +93,97 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual((moved['level'], moved['xp_current']), (32, None))
 
 
+CHARMS = ('Charms are found in high tier crates. Try to get them all!\n'
+          '0/14 - :charm_yellow: Marketing Charm - Sell fish for more. (1 to next tier).\n'
+          '1/14 - :charm_pink: Endurance Charm - Catch more fish. (2 to next tier).\n'
+          '1/14 - :charm_red: Haste Charm - Fish more often. (2 to next tier).\n'
+          '1/14 - :charm_white: Quantity Charm - Increase amount of items found in chests. (1 to next tier).\n'
+          '1/14 - :charm_cyan: Worker Charm - Workers catch more fish. (2 to next tier).\n'
+          '0/14 - :charm_lblue: Treasure Charm - Catch slightly more treasure. (1 to next tier).\n'
+          '2/14 - :charm_green: Quality Charm - Increase quality of treasure. (2 to next tier).\n'
+          '1/14 - :charm_blue: Experience Charm - Increase experience from all fish. (1 to next tier).\n'
+          '\n11/840 - Charms found.')
+
+
+class CharmReplyTests(unittest.TestCase):
+    def test_counts_come_from_level_and_charms_to_next_tier(self):
+        # Quality: level 2 (1 + 2 = 3 charms) with 2 of the 3 for level 3 still to find, so 4 found.
+        from src.live_stats import parse_charms
+        parsed = parse_charms(CHARMS)
+        self.assertEqual({name: charm['counted'] for name, charm in parsed['charms'].items()},
+                         {'Marketing Charm': 0, 'Endurance Charm': 1, 'Haste Charm': 1, 'Quantity Charm': 2,
+                          'Worker Charm': 1, 'Treasure Charm': 0, 'Quality Charm': 4, 'Experience Charm': 2})
+        self.assertEqual(parsed['charms']['Quality Charm']['level'], 2)
+        self.assertEqual((parsed['found'], parsed['goal']), (11, 840))
+
+    def test_unread_charm_lines_are_named(self):
+        from src.live_stats import unread_fields
+        self.assertEqual(unread_fields('charms', CHARMS), [])
+        lost = CHARMS.replace('(2 to next tier).\n1/14 - :charm_red:', '(2 to n~xt t1er\n1/14 - :charm_red:')
+        self.assertEqual(unread_fields('charms', lost), ['Endurance Charm'])
+        self.assertEqual(unread_fields('charms', CHARMS.replace('11/840', '12/840')), ['Charms found'],
+                         'the total must agree with the lines')
+
+    def test_charms_found_since_the_reply_are_added(self):
+        from src.live_stats import charm_summary, parse_charms
+        summary = charm_summary({'charms': {'Quality Charm': 9}}, parse_charms(CHARMS), {'Quality Charm': 1})
+        quality = summary['charms']['Quality Charm']
+        self.assertEqual((quality['counted'], quality['level'], quality['into'], quality['needed']), (5, 2, 2, 3))
+        self.assertEqual((summary['total'], summary['types']), (12, 6))
+
+
+class UnreadFieldTests(unittest.TestCase):
+    def test_complete_replies_have_nothing_unread(self):
+        from src.live_stats import unread_fields
+        self.assertEqual(unread_fields('profile', PROFILE), [])
+        self.assertEqual(unread_fields('buffs', BUFFS), [])
+
+    def test_each_missing_field_is_named(self):
+        from src.live_stats import unread_fields
+        self.assertEqual(unread_fields('buffs', BUFFS.replace('Sell price: 2.20x\n', '')), ['Sell price'])
+        garbled = PROFILE.replace('1,677/6,000 XP', 'xp').replace('Pet: Dolphin (Level 51)', 'Pet: (Level 51)')
+        self.assertEqual(unread_fields('profile', garbled), ['XP progress', 'Pet'])
+
+
+class CharmTests(unittest.TestCase):
+    def test_eight_charms_at_level_fourteen_is_840(self):
+        from src.live_stats import CHARM_GOAL, charms_for_level
+        self.assertEqual(charms_for_level(14), 105)
+        self.assertEqual(CHARM_GOAL, 840)
+
+    def test_level_and_progress_from_charms_found(self):
+        from src.live_stats import charm_progress
+        # The first charm reaches level 1; level 2 needs 2 more, level 3 needs 3 more.
+        self.assertEqual(charm_progress(0), {'found': 0, 'counted': 0, 'level': 0, 'into': 0, 'needed': 1,
+                                             'at_least': False})
+        self.assertEqual(charm_progress(1)['level'], 1)
+        self.assertEqual(charm_progress(3), {'found': 3, 'counted': 3, 'level': 2, 'into': 0, 'needed': 3,
+                                             'at_least': False})
+        self.assertEqual(charm_progress(5)['into'], 2)
+        maxed = charm_progress(200)
+        self.assertEqual((maxed['level'], maxed['counted'], maxed['needed']), (14, 105, None))
+
+    def test_a_reported_level_above_the_count_raises_it(self):
+        # Charms found before tracking began: the game's "now level 4" means at least 10 were found.
+        from src.live_stats import charm_progress
+        progress = charm_progress(2, reported_level=4)
+        self.assertEqual((progress['level'], progress['counted'], progress['into'], progress['at_least']),
+                         (4, 10, 0, True))
+        self.assertFalse(charm_progress(3, reported_level=2)['at_least'], 'the count agrees')
+
+    def test_summary_totals_toward_840_and_names_a_nameless_level_line(self):
+        from src.live_stats import charm_summary, summarize_finds
+        finds = summarize_finds([{'finds': {'Quality Charm': 1}, 'charm_levels': {'Quality Charm': 1}},
+                                 {'finds': {'Quality Charm': 1}},
+                                 # Saved live: OCR lost the name in "Your Charm is now level 2!".
+                                 {'finds': {'Quality Charm': 1}, 'charm_levels': {'Charm': 2}},
+                                 {'finds': {'Haste Charm': 1}, 'charm_levels': {'Haste Charm': 1}}])
+        self.assertEqual(finds['charm_levels'], {'Quality Charm': 2, 'Haste Charm': 1})
+        summary = charm_summary(finds)
+        self.assertEqual((summary['total'], summary['goal'], summary['types']), (4, 840, 2))
+        self.assertEqual(summary['charms']['Quality Charm']['level'], 2)
+
+
 class FindNameTests(unittest.TestCase):
     def test_finds_merge_ocr_spellings_of_one_fish(self):
         # Saved live: one trip read "Ernerald Fish" (rn for m); it is the same Emerald Fish.

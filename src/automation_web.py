@@ -170,11 +170,12 @@ def state_label(status) -> str:
         return 'Paused'
     if phase == 'NEEDS_REVIEW':
         return 'Needs you'
-    if status.get('pending_kind') in ('refresh_profile', 'refresh_buffs') or phase in ('RETRYING_STARTUP',
-                                                                                        'BOOTSTRAPPING'):
+    if status.get('pending_kind') in ('refresh_profile', 'refresh_buffs', 'refresh_charms') or phase in (
+            'RETRYING_STARTUP', 'BOOTSTRAPPING'):
         if status['trips']:
             return 'Refreshing stats'
-        return 'Reading your buffs' if status.get('pending_kind') == 'refresh_buffs' else 'Reading your profile'
+        return {'refresh_buffs': 'Reading your buffs', 'refresh_charms': 'Reading your charms'}.get(
+            status.get('pending_kind'), 'Reading your profile')
     return 'Fishing'
 
 
@@ -188,22 +189,32 @@ def _scroll(label, inner):
     return f'<div class="scroll" tabindex="0" role="region" aria-label="{escape(label)}">{inner}</div>'
 
 
-def _finds_box(finds):
+def _charm_cells(charm):
+    if charm is None:
+        return '<td>?</td><td></td>'
+    level = f'{"≥" if charm["at_least"] else ""}{charm["level"]}'
+    if charm['needed'] is None:
+        return f'<td>{level}</td><td>max</td>'
+    return f'<td>{level}</td><td>{charm["into"]} of {charm["needed"]}</td>'
+
+
+def _finds_box(finds, charms=None):
     run, every = finds.get('run') or {}, finds.get('all') or {}
+    charms = charms or {}
 
     def group(title, key, levels=False):
-        names = sorted(set(every.get(key, {})) | set(run.get(key, {})),
+        names = sorted(set(every.get(key, {})) | set(run.get(key, {})) | (set(charms.get('charms', {})) if levels
+                                                                          else set()),
                        key=lambda name: -every.get(key, {}).get(name, 0))
         if not names:
             return f'<h3>{escape(title)}</h3><p class="empty">None yet.</p>'
         head = '<th scope="col">This run</th><th scope="col">All runs</th>' + (
-            '<th scope="col">Level</th>' if levels else '')
+            '<th scope="col">Level</th><th scope="col">To next level</th>' if levels else '')
         rows = ''
         for name in names:
-            level = every.get('charm_levels', {}).get(name)
             rows += (f'<tr><th scope="row">{escape(name)}</th><td>{run.get(key, {}).get(name, 0):,}</td>'
                      f'<td>{every.get(key, {}).get(name, 0):,}</td>'
-                     + (f'<td>{level if level is not None else "?"}</td>' if levels else '') + '</tr>')
+                     + (_charm_cells(charms.get('charms', {}).get(name)) if levels else '') + '</tr>')
         table = (f'<table class="mini"><thead><tr><th scope="col"><span class="visually-hidden">Name</span></th>'
                  f'{head}</tr></thead><tbody>{rows}</tbody></table>')
         return f'<h3>{escape(title)}</h3>' + _scroll(title, table)
@@ -211,7 +222,14 @@ def _finds_box(finds):
     body = (f'<div class="finds"><div>{group("Chests", "chests")}</div>'
             f'<div>{group("Special fish", "special_fish")}</div>'
             f'<div>{group("Charms", "charms", levels=True)}</div></div>')
-    return _box('Finds', body, wide=True, note='Charms are a prestige requirement.')
+    note = 'Charms are a prestige requirement.'
+    if charms:
+        note = (f'Charms toward prestige: {charms["total"]:,} of {charms["goal"]:,} ({charms["types"]} of '
+                f'{charms["type_count"]} kinds found, each up to level 14). Each level needs as many charms as its '
+                'number. ' + ('From /charms, plus any found since it was read.' if charms.get('from_reply') else
+                              '/charms not read yet: counted from the charms logged here; "≥" means the game '
+                              'reported a higher level.'))
+    return _box('Finds', body, wide=True, note=note)
 
 
 def _source_rows(title, values):
@@ -237,7 +255,8 @@ def render_panel(status, mode=None) -> str:
     if running:
         toggle = _button('resume', 'Resume') if status.get('paused') else _button('pause', 'Pause', secondary=True)
         buttons = f'<div class="actions">{toggle}{_button("stop", "Stop now")}</div>'
-    active = label in ('Fishing', 'Refreshing stats', 'Reading your profile', 'Reading your buffs')
+    active = label in ('Fishing', 'Refreshing stats', 'Reading your profile', 'Reading your buffs',
+                     'Reading your charms')
     tone = 'on' if active else ('halted' if running else '')
     strip = (f'<div class="strip {tone}"><span class="phase">{escape(label)}</span>'
              f'<span class="why">{escape(status["reason"])}</span>{buttons}</div>')
@@ -271,6 +290,9 @@ def render_panel(status, mode=None) -> str:
     if dashboard.get('next_sync_in') is not None and dashboard.get('synced_at'):
         sync_note = (f'Profile and buffs read {dashboard["trips_since_sync"]:,} trips ago; read again in '
                      f'{dashboard["next_sync_in"]:,} trips. Between reads, numbers are worked out from each trip.')
+    for kind, unread in (dashboard.get('unread') or {}).items():
+        sync_note += (f' Not read from /{kind}: {", ".join(unread["fields"])}; reading /{kind} again in '
+                      f'{unread["retry_in"]:,} trips.')
     run_box = _box('This run', '<dl>' + ''.join((
         _row('Mode', 'Live' if mode == 'live' else 'Simulation'),
         _row('Trips', f'{status["trips"]:,}' + (f' of {limit:,}' if limit else '')),
@@ -309,7 +331,7 @@ def render_panel(status, mode=None) -> str:
 
     return (f'<div data-running="{1 if running else 0}">{strip}{_level_line(profile, dashboard)}'
             f'<div class="boxes">{profile_box}{buffs_box}{run_box}{rewards_box}'
-            f'{_finds_box(dashboard.get("finds") or {})}{inventory_box}{trips_box}</div></div>')
+            f'{_finds_box(dashboard.get("finds") or {}, dashboard.get("charms"))}{inventory_box}{trips_box}</div></div>')
 
 
 def _field(name, label, value, hint=''):

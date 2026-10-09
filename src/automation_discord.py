@@ -54,7 +54,7 @@ def stable_frame(lines):
             message['key'] = (kind, json.dumps(values, sort_keys=True, ensure_ascii=False))
     return frame
 
-COMMANDS = {'refresh_profile': '/profile', 'refresh_buffs': '/buffs', 'fish': '/fish'}
+COMMANDS = {'refresh_profile': '/profile', 'refresh_buffs': '/buffs', 'refresh_charms': '/charms', 'fish': '/fish'}
 # Identical reads of a fishing reply with problems before it is delivered as it is.
 FISHING_REREADS = 2
 # Seconds after sending /profile or /buffs before an identical reply sent that minute is taken as the answer.
@@ -240,7 +240,7 @@ class DiscordTransport:
     def _identical_refresh(self, messages):
         """A /profile or /buffs reply identical to one already at the bottom cannot be told apart on screen. Its
         data is the same either way, so after a short wait an own reply of that kind sent this minute is taken."""
-        if not messages or self.pending.kind not in ('refresh_profile', 'refresh_buffs') or self.sent_clock is None:
+        if not messages or self.pending.kind not in ('refresh_profile', 'refresh_buffs', 'refresh_charms') or self.sent_clock is None:
             return False
         message = messages[-1]
         sent = _minute_of_day(message.get('sent'))

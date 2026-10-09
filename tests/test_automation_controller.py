@@ -12,7 +12,10 @@ from src.automation_transport import SimulationTransport
 from src.fishing_sessions import load_sessions
 from src.review_queue import list_items
 
-CONFIG = AutomationConfig(account='sim', username='sim0001', context_id='sim:dm')
+# /charms is left out of most tests so their command sequences stay short; its own tests add it.
+CONFIG = AutomationConfig(account='sim', username='sim0001', context_id='sim:dm',
+                          capabilities=('refresh_profile', 'refresh_buffs', 'fish'))
+CHARMS_CONFIG = ('refresh_profile', 'refresh_buffs', 'refresh_charms', 'fish')
 STEP = 0.1
 
 
@@ -103,7 +106,7 @@ class ControllerTests(unittest.TestCase):
         self.assertIn('trip limit', status['reason'])
 
     def test_fishing_waits_for_the_verified_cooldown_alone_without_jitter(self):
-        self.make(config=replace(CONFIG, max_trips=10, jitter_max=0)).start()
+        self.make(config=replace(CONFIG, max_trips=10, jitter_bands=())).start()
         self.run_for(60)
         sends = self.fish_sends()
         gaps = [later - earlier for earlier, later in zip(sends, sends[1:])]
@@ -283,6 +286,39 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(self.saved_trips(), 5)
         self.assertTrue(all(not item['blocks_actions'] for item in list_items(self.review)[0]))
 
+    def test_a_read_missing_one_field_is_read_again_until_complete(self):
+        # Buffs read without the sell price: tried again every 2 trips (here) until it reads; then every 100.
+        self.sim.script = {1: 'partial', 4: 'partial'}
+        self.make(config=replace(CONFIG, max_trips=6, resync_trips=100, retry_unread_trips=2)).start()
+        self.run_for(90)
+        self.assertEqual(self.kinds(), ['refresh_profile', 'refresh_buffs', 'fish', 'fish', 'refresh_buffs',
+                                        'fish', 'fish', 'refresh_buffs', 'fish', 'fish'])
+        dashboard = self.controller.status()['dashboard']
+        self.assertEqual(dashboard['unread'], {})
+        self.assertEqual(dashboard['buffs']['sell_price']['value'], 1.0)
+
+    def test_charms_are_read_at_startup_and_with_each_resync(self):
+        self.make(config=replace(CONFIG, max_trips=4, resync_trips=3, capabilities=CHARMS_CONFIG)).start()
+        self.run_for(60)
+        self.assertEqual(self.kinds(), ['refresh_profile', 'refresh_buffs', 'refresh_charms', 'fish', 'fish', 'fish',
+                                        'refresh_profile', 'refresh_buffs', 'refresh_charms', 'fish'])
+        charms = self.controller.status()['dashboard']['charms']
+        self.assertEqual((charms['total'], charms['goal'], charms['types']), (11, 840, 6))
+
+    def test_a_charms_reply_missing_a_line_is_read_again(self):
+        self.sim.script = {2: 'partial'}
+        self.make(config=replace(CONFIG, max_trips=3, resync_trips=100, retry_unread_trips=2,
+                                 capabilities=CHARMS_CONFIG)).start()
+        self.run_for(60)
+        self.assertEqual(self.kinds(), ['refresh_profile', 'refresh_buffs', 'refresh_charms', 'fish', 'fish',
+                                        'refresh_charms', 'fish'])
+        self.assertEqual(self.controller.status()['dashboard']['unread'], {})
+
+    def test_complete_reads_wait_for_the_regular_resync(self):
+        self.make(config=replace(CONFIG, max_trips=25, resync_trips=100)).start()
+        self.run_for(200)
+        self.assertEqual(self.kinds(), ['refresh_profile', 'refresh_buffs'] + ['fish'] * 25)
+
     def test_profile_with_unread_xp_is_read_again_after_a_few_trips(self):
         self.sim.script = {0: 'xp_unread'}
         self.make(config=replace(CONFIG, max_trips=4, resync_trips=100, retry_unread_trips=2)).start()
@@ -314,13 +350,29 @@ class ControllerTests(unittest.TestCase):
 
     def test_each_fish_waits_a_random_extra_in_steps(self):
         self.make(config=replace(CONFIG, max_trips=12)).start()
-        self.run_for(80)
+        self.run_for(120)
         fish = self.fish_sends()
         gaps = [later - earlier - 3.5 - CONFIG.cooldown_margin for earlier, later in zip(fish, fish[1:])]
-        self.assertTrue(all(-STEP <= gap <= 0.5 + 2 * STEP for gap in gaps), gaps)
+        self.assertTrue(all(-STEP <= gap <= 1.5 + 2 * STEP for gap in gaps), gaps)
         self.assertGreater(len({round(gap, 1) for gap in gaps}), 1, 'the extra wait varies')
+
+    def test_extra_wait_bands_and_their_shares(self):
+        import random
+        self.make()
+        self.controller.rng = random.Random(7)
+        for _ in range(20000):
+            self.controller._pick_jitter()
         extras = self.controller.jitters
-        self.assertTrue(all(0 <= extra <= 0.5 and abs(extra * 20 - round(extra * 20)) < 1e-9 for extra in extras))
+        def on_grid(extra, step):
+            return abs(extra / step - round(extra / step)) < 1e-9
+        low = [e for e in extras if e <= 0.5 and on_grid(e, 0.05)]
+        middle = [e for e in extras if 0.5 < e <= 1.0 and on_grid(e, 0.1)]
+        high = [e for e in extras if 1.0 < e <= 1.5 and on_grid(e, 0.1)]
+        self.assertEqual(len(low) + len(middle) + len(high), len(extras), 'every extra is in a band, on its steps')
+        # 75% / 17.5% / 7.5%; a band's shared endpoint (0.5, 1.0) counts toward the lower band here.
+        self.assertAlmostEqual(len(low) / len(extras), 0.75 + 0.175 / 6, delta=0.015)
+        self.assertAlmostEqual(len(high) / len(extras), 0.075 * 5 / 6, delta=0.01)
+        self.assertEqual({round(e, 2) for e in high}, {1.1, 1.2, 1.3, 1.4, 1.5})
 
     def test_dashboard_carries_synced_stats_forward(self):
         self.make(config=replace(CONFIG, max_trips=2)).start()

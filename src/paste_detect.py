@@ -26,6 +26,8 @@ def _kind(line):
         return 'quests'
     if line in ('You caught:', 'QUEST COMPLETE!'):
         return 'fishing'
+    if line.startswith('Charms are found in') or re.fullmatch(r'[\d,]+\s*/\s*[\d,]+\s*-\s*Charms found\.?', line, re.I):
+        return 'charms'
     return None
 
 
@@ -109,7 +111,7 @@ def detect(text: str) -> dict:
             body = '\n'.join(lines).strip('\n')
             if kind == 'fishing':
                 fishing.append(body)
-            else:
+            elif kind in responses:
                 responses[kind] = body
                 times[kind] = message['when']
     return {'responses': responses, 'fishing': '\n\n'.join(fishing), 'counts': counts, 'times': times,

@@ -18,6 +18,9 @@ def fingerprint(text: str) -> str:
 
 # Exotic fish found in chests and crates (observed in a super crate). Catchable fish come from the reference.
 EXOTIC_FISH = ('Gold Fish', 'Emerald Fish', 'Lava Fish', 'Diamond Fish')
+# The eight charms, in /charms order.
+CHARM_NAMES = ('Marketing Charm', 'Endurance Charm', 'Haste Charm', 'Quantity Charm', 'Worker Charm',
+               'Treasure Charm', 'Quality Charm', 'Experience Charm')
 
 
 def _fold(name):
@@ -28,7 +31,7 @@ def _fold(name):
 @cache
 def _known_names():
     from .catch_check import load_fish_reference
-    return tuple(EXOTIC_FISH) + tuple(row['name'] for row in (load_fish_reference() or {}).values())
+    return EXOTIC_FISH + CHARM_NAMES + tuple(row['name'] for row in (load_fish_reference() or {}).values())
 
 
 def known_name(name: str) -> str:
@@ -170,8 +173,13 @@ def parse_fishing(text: str) -> dict:
             _add(tally['finds'], name, 1)
             event(f'Found {name}')
         elif match := re.fullmatch(r'Your (.+?) is now level (\d+)!?', line, re.I):
-            tally['charm_levels'][_name(match[1])] = int(match[2])
-            event(f'{_name(match[1])} now level {match[2]}')
+            name = known_name(_name(match[1]))
+            charms = [found for found in (trip or {}).get('events', []) if found.casefold().endswith('charm')]
+            if name.casefold() == 'charm' and len(charms) == 1:
+                # Observed OCR lost the name ("Your Charm is now level 1!"); it is the charm found this trip.
+                name = charms[0].removeprefix('Found ')
+            tally['charm_levels'][name] = int(match[2])
+            event(f'{name} now level {match[2]}')
         elif match := re.fullmatch(r'You ran out of (.+?)\.?', line, re.I):
             tally['bait_ran_out'].append(_name(match[1]))
             event(f'Ran out of {_name(match[1])}')

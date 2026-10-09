@@ -28,6 +28,10 @@ class LiveFishingTests(unittest.TestCase):
         self.assertEqual(tally['chest_contents'], {'Gold Fish': 17, 'Emerald Fish': 17, 'Lava Fish': 17,
                                                    'Diamond Fish': 17})
 
+    def test_a_level_line_without_its_charm_name_belongs_to_the_charm_found(self):
+        tally = parse_fishing('You caught:\n2 Cod\nYou found a Quantity Charm Q !\nYour Charm is now level 1!\n+20 xp')
+        self.assertEqual(tally['charm_levels'], {'Quantity Charm': 1})
+
     def test_charm_emoji_read_as_a_letter_is_not_part_of_its_name(self):
         tally = parse_fishing('You caught:\n2 Cod\nYou found an epic crate\nYou found a Quantity Charm Q !\n+233 xp')
         self.assertEqual(tally['finds'], {'epic crate': 1, 'Quantity Charm': 1})

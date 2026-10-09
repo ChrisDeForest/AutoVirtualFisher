@@ -2,13 +2,13 @@
 from dataclasses import dataclass, field
 
 # The reply each action expects.
-EXPECTED_REPLY = {'refresh_profile': 'profile', 'refresh_buffs': 'buffs', 'fish': 'fishing'}
+EXPECTED_REPLY = {'refresh_profile': 'profile', 'refresh_buffs': 'buffs', 'refresh_charms': 'charms', 'fish': 'fishing'}
 
 
 @dataclass(frozen=True)
 class ActionIntent:
     action_id: str
-    kind: str                      # 'refresh_profile', 'refresh_buffs', or 'fish'
+    kind: str                      # 'refresh_profile', 'refresh_buffs', 'refresh_charms', or 'fish'
     context_id: str | None
     created_at: str                # UTC ISO time
     expected_reply_kind: str
@@ -40,12 +40,12 @@ class AutomationConfig:
     max_seconds: float | None = None  # ...or this long, whichever comes first
     reply_timeout: float = 20.0    # seconds without a correlated reply before the action becomes uncertain
     cooldown_margin: float = 0.0   # seconds added to the verified cooldown (the random jitter is added too)
-    jitter_max: float = 0.5        # up to this many seconds more before each fish, picked at random...
-    jitter_step: float = 0.05      # ...in steps of this many seconds
+    # A random extra wait before each fish: (share of fish, from, to, step) in seconds, ends included.
+    jitter_bands: tuple = ((0.75, 0.0, 0.5, 0.05), (0.175, 0.5, 1.0, 0.1), (0.075, 1.0, 1.5, 0.1))
     mode: str = 'simulation'       # the separate native CLI explicitly selects 'live'
-    capabilities: tuple = field(default=('refresh_profile', 'refresh_buffs', 'fish'))
-    resync_trips: int | None = 100   # /profile and /buffs are read again after this many trips
-    retry_unread_trips: int = 10     # an unreadable /profile or /buffs is tried again after this many trips
+    capabilities: tuple = field(default=('refresh_profile', 'refresh_buffs', 'refresh_charms', 'fish'))
+    resync_trips: int | None = 100   # /profile, /buffs and /charms are read again after this many trips
+    retry_unread_trips: int = 10     # a reply missing anything is read again after this many trips
     assumed_cooldown: float = 5.0    # seconds, while /buffs is unread ("You must wait" replies correct it)
 
 

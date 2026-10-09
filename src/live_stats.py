@@ -7,7 +7,7 @@ catches add at wiki sell price times the sell multiplier. The next sync replaces
 from copy import deepcopy
 import re
 
-from .fishing_log import EXOTIC_FISH, known_name
+from .fishing_log import CHARM_NAMES, EXOTIC_FISH, known_name
 from .player_planner import xp_required
 from .player_state import _clean, parse_responses
 
@@ -38,6 +38,33 @@ def synced_stats(profile_text: str, buffs_text: str) -> dict:
     return {'profile': profile,
             'inventory': {category: dict(items or {}) for category, items in parsed['inventory'].items()},
             'buffs': {name: value for name, value in buffs.items() if value is not None}}
+
+
+PROFILE_PARTS = (('balance', 'Balance'), ('level', 'Level'), ('xp_current', 'XP progress'), ('rod', 'Rod'),
+                 ('biome', 'Biome'), ('fish_value', 'Fish value'))
+BUFF_PARTS = (('sell_price', 'Sell price'), ('fish_catch', 'Fish catch'), ('fish_quality', 'Fish quality'),
+              ('treasure_chance', 'Treasure chance'), ('treasure_quality', 'Treasure quality'),
+              ('xp_multiplier', 'XP multiplier'), ('fishing_cooldown', 'Fishing cooldown'))
+
+
+def unread_fields(kind: str, text: str) -> list[str]:
+    """What this one /profile, /buffs or /charms reply does not show readably. A pet counts once the reply has a
+    pet line. A /charms reply needs all eight charm lines, and its total must agree with them."""
+    if kind == 'charms':
+        parsed = parse_charms(text)
+        missing = [name for name in CHARM_NAMES if name not in parsed['charms']]
+        if not missing and parsed['found'] != sum(charm['counted'] for charm in parsed['charms'].values()):
+            missing.append('Charms found')
+        return missing
+    if kind == 'buffs':
+        buffs = synced_stats('', text)['buffs']
+        return [label for field, label in BUFF_PARTS if field not in buffs]
+    profile = synced_stats(text, '')['profile']
+    missing = [label for field, label in PROFILE_PARTS if profile.get(field) is None]
+    if any(re.match(r'Pet:', _clean(line), re.I) for line in text.splitlines()) and (
+            not profile.get('pet') or profile.get('pet_level') is None) and profile.get('pet') != 'None':
+        missing.append('Pet')
+    return missing
 
 
 def carry_forward(profile: dict, earlier: dict | None) -> dict:
@@ -147,8 +174,85 @@ def summarize_finds(tallies, earlier: dict | None = None) -> dict:
             name = known_name(name)
             group = 'special_fish' if name.casefold().endswith('fish') else 'other'
             finds[group][name] = finds[group].get(name, 0) + count
-        finds['charm_levels'].update(tally.get('charm_levels', {}))
+        charms = [known_name(name) for name in tally.get('finds', {}) if known_name(name).casefold().endswith('charm')]
+        for name, level in tally.get('charm_levels', {}).items():
+            if name.casefold() == 'charm' and len(charms) == 1:
+                name = charms[0]  # saved before the parser named it: the charm found that trip
+            # Levels only rise; the highest the game reported stands.
+            finds['charm_levels'][name] = max(level, finds['charm_levels'].get(name, 0))
     return finds
+
+
+# Charms: the first one found reaches level 1, and each level after needs as many more as its number (level 2 needs
+# 2 more, level 3 needs 3). Eight charms, each to level 14, is the 840 needed to prestige.
+CHARM_TYPES, CHARM_MAX_LEVEL = 8, 14
+
+
+def charms_for_level(level: int) -> int:
+    """Charms of one kind needed to reach this level from none."""
+    return level * (level + 1) // 2
+
+
+CHARM_GOAL = CHARM_TYPES * charms_for_level(CHARM_MAX_LEVEL)
+
+
+def charm_progress(found: int, reported_level: int | None = None) -> dict:
+    """One charm's level and progress from how many were found here. A higher level reported by the game (charms
+    found before tracking began) raises it; the count is then at least what that level needs."""
+    counted = min(found, charms_for_level(CHARM_MAX_LEVEL))
+    level = 0
+    while level < CHARM_MAX_LEVEL and charms_for_level(level + 1) <= counted:
+        level += 1
+    at_least = reported_level is not None and reported_level > level
+    if at_least:
+        level = min(reported_level, CHARM_MAX_LEVEL)
+        counted = charms_for_level(level)
+    return {'found': found, 'counted': counted, 'level': level, 'into': counted - charms_for_level(level),
+            'needed': None if level >= CHARM_MAX_LEVEL else level + 1, 'at_least': at_least}
+
+
+CHARM_LINE = re.compile(r'(\d+)\s*/\s*14\s*-.*?\b([A-Za-z]+)\s+Charm\b.*?(?:\((\d+)\s+to next tier\))?\W*$', re.I)
+CHARMS_FOUND = re.compile(r'([\d,]+)\s*/\s*([\d,]+)\s*-\s*Charms found', re.I)
+
+
+def parse_charms(text: str) -> dict:
+    """A /charms reply: each charm's level and charms counted ("2/14 - Quality Charm - ... (2 to next tier)" is
+    level 2, with 2 of the 3 for level 3 still to find: 1 + 2 + 1 = 4), and the "11/840 - Charms found" total.
+    A line whose level or charms to next tier cannot be read is left out."""
+    charms, found, goal = {}, None, None
+    for line in (_clean(line) for line in (text or '').splitlines()):
+        if total := CHARMS_FOUND.search(line):
+            found, goal = int(total[1].replace(',', '')), int(total[2].replace(',', ''))
+            continue
+        match = CHARM_LINE.search(line)
+        if not match:
+            continue
+        name = known_name(f'{match[2]} Charm')
+        level = int(match[1])
+        if name not in CHARM_NAMES or level > CHARM_MAX_LEVEL:
+            continue
+        if level == CHARM_MAX_LEVEL:
+            counted = charms_for_level(level)
+        elif match[3] is not None and 1 <= int(match[3]) <= level + 1:
+            counted = charms_for_level(level) + level + 1 - int(match[3])
+        else:
+            continue
+        charms[name] = {'level': level, 'counted': counted}
+    return {'charms': charms, 'found': found, 'goal': goal}
+
+
+def charm_summary(finds: dict, synced: dict | None = None, since: dict | None = None) -> dict:
+    """Every charm's progress and the total toward the 840 goal. With a /charms reply (`synced`), its counts plus
+    the charms found since (`since`); without one, or for a line it did not show, the charms logged in `finds`."""
+    levels = finds.get('charm_levels', {})
+    read = (synced or {}).get('charms', {})
+    counts = {name: finds.get('charms', {}).get(name, 0) for name in finds.get('charms', {})}
+    counts.update({name: charm['counted'] + (since or {}).get(name, 0) for name, charm in read.items()})
+    names = set(counts) | {name for name in levels if name.casefold() != 'charm'}
+    charms = {name: charm_progress(counts.get(name, 0), levels.get(name)) for name in names}
+    return {'charms': charms, 'total': sum(charm['counted'] for charm in charms.values()), 'goal': CHARM_GOAL,
+            'types': sum(charm['counted'] > 0 for charm in charms.values()), 'type_count': CHARM_TYPES,
+            'from_reply': bool(read)}
 
 
 def add_unlisted_finds(inventory: dict, found: dict, listed: dict | None = None) -> dict:
