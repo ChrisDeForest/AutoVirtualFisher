@@ -8,16 +8,53 @@ from copy import deepcopy
 import re
 
 from .player_planner import xp_required
-from .player_state import parse_responses
+from .player_state import _clean, parse_responses
+
+# Read only when the whole line did not parse: observed "P4 Level 31, xp to next level." with the numbers lost.
+LEVEL_ONLY = re.compile(r'(?:P(\d+)\s+)?Level (\d+),', re.I)
+PET = re.compile(r'Pet:\s*(.*?)\s*\(Level (\d+)\)', re.I)
+# Fields a later read that could not see them keeps from the earlier read; the XP ones only on the same level.
+CARRIED = ('prestige', 'xp_current', 'xp_required', 'xp_to_next_level', 'rod', 'biome', 'pet', 'pet_level')
 
 
 def synced_stats(profile_text: str, buffs_text: str) -> dict:
     """What a /profile and /buffs reply show, best effort: unreadable fields are None or absent."""
-    profile = parse_responses(profile=profile_text or '')
+    parsed = parse_responses(profile=profile_text or '')
+    profile = dict(parsed['profile'])
+    lines = [_clean(line) for line in (profile_text or '').splitlines()]
+    if profile.get('level') is None:
+        found = [match for match in map(LEVEL_ONLY.match, lines) if match]
+        if len(found) == 1:
+            profile['level'] = int(found[0][2])
+            if found[0][1] is not None and profile.get('prestige') is None:
+                profile['prestige'] = int(found[0][1])
+    pets = [match for match in map(PET.match, lines) if match]
+    profile['pet_level'] = int(pets[0][2]) if len(pets) == 1 else None
+    if profile.get('pet') and profile['pet_level'] is not None:
+        # The parser keeps "Dolphin (Level 51)" whole; shown here as name and level.
+        profile['pet'] = re.sub(r'\s*\(Level \d+\)$', '', profile['pet'], flags=re.I) or None
     buffs = parse_responses(buffs=buffs_text or '')['buffs'] if buffs_text else {}
-    return {'profile': dict(profile['profile']),
-            'inventory': {category: dict(items or {}) for category, items in profile['inventory'].items()},
+    return {'profile': profile,
+            'inventory': {category: dict(items or {}) for category, items in parsed['inventory'].items()},
             'buffs': {name: value for name, value in buffs.items() if value is not None}}
+
+
+def carry_forward(profile: dict, earlier: dict | None) -> dict:
+    """A fresh read, with what it could not see kept from the earlier projected profile. XP carries only while
+    the level (and prestige) still match; a pet's name only while its level does."""
+    if not earlier:
+        return profile
+    same_level = (profile.get('level') is not None and profile['level'] == earlier.get('level')
+                  and profile.get('prestige') in (None, earlier.get('prestige')))
+    same_pet = profile.get('pet_level') in (None, earlier.get('pet_level'))
+    result = dict(profile)
+    for field in CARRIED:
+        if result.get(field) is not None or earlier.get(field) is None:
+            continue
+        if field.startswith('xp') and not same_level or field == 'pet' and not same_pet:
+            continue
+        result[field] = earlier[field]
+    return result
 
 
 def level_after(level: int, xp_current: int, gained: int, increments: list[int]) -> tuple[int, int, int | None]:

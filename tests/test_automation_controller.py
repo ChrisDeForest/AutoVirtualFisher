@@ -283,6 +283,17 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(self.saved_trips(), 5)
         self.assertTrue(all(not item['blocks_actions'] for item in list_items(self.review)[0]))
 
+    def test_profile_with_unread_xp_is_read_again_after_a_few_trips(self):
+        self.sim.script = {0: 'xp_unread'}
+        self.make(config=replace(CONFIG, max_trips=4, resync_trips=100, retry_unread_trips=2)).start()
+        self.run_for(60)
+        self.assertEqual([intent.kind for _, intent in self.sim.sent],
+                         ['refresh_profile', 'refresh_buffs', 'fish', 'fish', 'refresh_profile', 'fish', 'fish'])
+        profile = self.controller.status()['dashboard']['profile']
+        self.assertEqual(profile['level'], 10)
+        self.assertIsNotNone(profile['xp_current'], 'the second read showed the XP progress')
+        self.assertEqual(self.saved_trips(), 4)
+
     def test_dashboard_carries_synced_stats_forward(self):
         self.make(config=replace(CONFIG, max_trips=2)).start()
         self.run_for(30)

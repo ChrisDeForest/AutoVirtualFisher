@@ -13,6 +13,12 @@ class PlayerStateTests(unittest.TestCase):
         result = parse_responses(profile='Inventory of BugParticle')
         self.assertEqual(result['profile']['account_name'], 'BugParticle')
 
+    def test_a_pet_line_without_its_name_leaves_the_pet_unknown(self):
+        # Observed live OCR: the emoji and the name were lost, leaving "Pet: (Level 51)".
+        result = parse_responses(profile='Inventory of epicmouse\nPet: (Level 51)')
+        self.assertIsNone(result['profile']['pet'])
+        self.assertEqual((result['unparsed']['profile'], result['warnings']), ([], []))
+
     def test_profile_heading_strips_discord_badge(self):
         result = parse_responses(profile='Inventory of epicmouse :badge_bronze:')
         self.assertEqual(result['profile']['account_name'], 'epicmouse')

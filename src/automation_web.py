@@ -134,6 +134,8 @@ def _level_line(profile, dashboard):
     meta = []
     if xp is not None and required:
         meta.append(f'{xp:,} of {required:,} XP')
+    else:
+        meta.append('XP not read yet; /profile is read again in a few trips')
     eta = _duration(dashboard.get('next_level_in_seconds'))
     if eta:
         meta.append(f'{eta} to level {level + 1}')
@@ -144,6 +146,13 @@ def _level_line(profile, dashboard):
                 f'style="width:{share:.1f}%"></span><span class="bobber" style="left:{share:.1f}%"></span></div>')
     return (f'<div class="level"><div class="level-head"><p class="level-number">{escape(title)}</p>'
             + ''.join(f'<span class="level-meta">{escape(item)}</span>' for item in meta) + f'</div>{line}</div>')
+
+
+def _pet(profile):
+    name, level = profile.get('pet'), profile.get('pet_level')
+    if level is None:
+        return name
+    return f'{name}, level {level}' if name else f'level {level} (name not read)'
 
 
 def _catch_text(catches):
@@ -241,7 +250,7 @@ def render_panel(status, mode=None) -> str:
         _row('Balance', _num(profile.get('balance'), '$'), gained.get('money')),
         _row('Fish value', _num(profile.get('fish_value'), '$'), gained.get('fish_value')),
         _row('Rod', profile.get('rod')), _row('Biome', profile.get('biome')),
-        _row('Pet', profile.get('pet')),
+        _row('Pet', _pet(profile)),
         _row('Bait', profile.get('bait') or ('none' if 'bait' in profile and profile.get('rod') else None)),
     )) + '</dl>')
 

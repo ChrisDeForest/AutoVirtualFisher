@@ -1,7 +1,7 @@
 import unittest
 
 from src.fishing_log import parse_fishing
-from src.live_stats import level_after, project, synced_stats
+from src.live_stats import carry_forward, level_after, project, synced_stats
 
 PROFILE = ('Inventory of epicmouse\nBalance: $54,950.\nP4 Level 31, 1,677/6,000 XP to next level.\n'
            'Currently using Steel Rod.\nCurrent biome: River\nPet: Dolphin (Level 51)\nFish Inventory\n306 Fish\n'
@@ -69,6 +69,28 @@ class ProjectionTests(unittest.TestCase):
         self.assertIsNone(stats['profile']['balance'])
         self.assertEqual(stats['profile']['xp_current'], 1682)
         self.assertEqual(stats['buffs'], {})
+
+    def test_level_shows_when_ocr_drops_the_xp_numbers(self):
+        # Observed live: "P4 Level 31, xp to next level." The level and prestige are still plain to read.
+        synced = synced_stats(PROFILE.replace('1,677/6,000 XP', 'xp'), '')
+        profile = synced['profile']
+        self.assertEqual((profile['level'], profile['prestige'], profile['xp_current']), (31, 4, None))
+
+    def test_pet_level_is_read_and_a_lost_name_is_not_the_pet(self):
+        self.assertEqual((self.synced['profile']['pet'], self.synced['profile']['pet_level']), ('Dolphin', 51))
+        # Observed live: OCR dropped the emoji and name, leaving "Pet: (Level 51)".
+        lost = synced_stats(PROFILE.replace('Pet: Dolphin (Level 51)', 'Pet: (Level 51)'), '')['profile']
+        self.assertEqual((lost['pet'], lost['pet_level']), (None, 51))
+
+    def test_a_resync_keeps_what_it_could_not_read_from_the_earlier_projection(self):
+        earlier = project(self.synced, [trip('1 Cod\n+23 XP')], self.increments, self.fish)['profile']
+        garbled = PROFILE.replace('1,677/6,000 XP', 'xp').replace('Pet: Dolphin (Level 51)', 'Pet: (Level 51)')
+        profile = carry_forward(synced_stats(garbled, '')['profile'], earlier)
+        self.assertEqual((profile['level'], profile['xp_current'], profile['xp_required']), (31, 1700, 6000))
+        self.assertEqual((profile['pet'], profile['pet_level']), ('Dolphin', 51))
+        # A different level means the earlier XP no longer applies.
+        moved = carry_forward(synced_stats(garbled.replace('Level 31', 'Level 32'), '')['profile'], earlier)
+        self.assertEqual((moved['level'], moved['xp_current']), (32, None))
 
 
 class FindsTests(unittest.TestCase):

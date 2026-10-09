@@ -21,7 +21,7 @@ from .automation_policy import next_action
 from .automation_state import AutomationState, apply_observation
 from .catch_check import load_fish_reference
 from .fishing_sessions import load_sessions
-from .live_stats import project, summarize_finds, synced_stats
+from .live_stats import carry_forward, project, summarize_finds, synced_stats
 from .player_planner import load_level_increments
 from .startup_fields import apply_startup, reply_problems, startup_problems
 from .fishing_log import parse_fishing
@@ -99,6 +99,8 @@ class AutomationController:
         self.synced_at = {}
         self.sync_tallies, self.run_tallies = [], []
         self.retry_counts = {}         # deferred refresh -> trips since it was last tried
+        self.earlier_profile = None    # the projected profile when /profile was last read, for what a read misses
+        self.xp_unread_trips = None    # trips since a /profile read that showed no XP progress
         self.finds_before = None       # finds from earlier automation trips, loaded once per run
 
     # --- run control ---
@@ -447,10 +449,14 @@ class AutomationController:
                 self._safe_event('startup_retry_scheduled', action_id, command=kind,
                                  attempt=attempts, problems=problems, delay=STARTUP_RETRY_DELAY)
         elif result == 'refreshed':
+            if observation.kind == 'profile' and self.synced['profile']:
+                self.earlier_profile = self._synced_profile(project_trips=True)
             self.synced[observation.kind] = observation.text
             self.synced_at[observation.kind] = observation.observed_at
             if observation.kind == 'profile':
                 self.sync_tallies = []
+                # The XP numbers can be lost to OCR while the level reads; the bar needs them, so read again soon.
+                self.xp_unread_trips = 0 if self._synced_profile().get('xp_current') is None else None
             self.state = replace(self.state, refresh_due=tuple(k for k in self.state.refresh_due if k != kind),
                                  deferred=tuple(k for k in self.state.deferred if k != kind))
             self.retry_counts.pop(kind, None)
@@ -546,16 +552,35 @@ class AutomationController:
 
     def _count_retries(self):
         """After each trip, queue any set-aside refresh whose turn has come."""
+        if self.xp_unread_trips is not None:
+            self.xp_unread_trips += 1
+            if self.xp_unread_trips >= self.config.retry_unread_trips:
+                self.xp_unread_trips = None
+                if 'refresh_profile' not in self.state.refresh_due:
+                    self.state = replace(self.state, refresh_due=self.state.refresh_due + ('refresh_profile',))
         for kind in self.state.deferred:
             self.retry_counts[kind] = self.retry_counts.get(kind, 0) + 1
             if self.retry_counts[kind] >= self.config.retry_unread_trips and kind not in self.state.refresh_due:
                 self.retry_counts[kind] = 0
                 self.state = replace(self.state, refresh_due=self.state.refresh_due + (kind,))
 
+    def _synced(self):
+        """The last /profile and /buffs as read, with what the profile read missed kept from the read before."""
+        synced = synced_stats(self.synced['profile'], self.synced['buffs'])
+        synced['profile'] = carry_forward(synced['profile'], self.earlier_profile)
+        return synced
+
+    def _synced_profile(self, project_trips=False):
+        synced = self._synced()
+        if not project_trips:
+            return synced['profile']
+        increments, fish = _references()
+        return project(synced, self.sync_tallies, increments, fish)['profile']
+
     def _dashboard(self):
         """The synced stats carried forward over the trips since, plus this run's totals and hourly rates."""
         increments, fish = _references()
-        synced = synced_stats(self.synced['profile'], self.synced['buffs'])
+        synced = self._synced()
         stats = project(synced, self.sync_tallies, increments, fish)
         run = project(synced, self.run_tallies, increments, fish)['gained']
         elapsed = max(1.0, self.monotonic() - self.started_at) if self.started_at is not None else None

@@ -11,6 +11,7 @@ from urllib.parse import urlencode
 from urllib.request import urlopen
 
 from src.automation_transport import SimulationTransport
+from src.automation_web import render_panel
 from src.fishing_sessions import load_sessions
 from src.player_web import Handler
 
@@ -172,6 +173,20 @@ class AutomationWebTests(unittest.TestCase):
         self.assertIn('Level 10', panel)
         self.assertIn('0.05 s', panel)
         self.assertIn('/automation/panel', self.get(), 'the page refreshes its boxes')
+
+    def test_level_line_without_xp_and_pet_with_level(self):
+        status = {'running': False, 'reason': 'done', 'phase': 'STOPPED', 'trips': 0, 'config': {'max_trips': 0},
+                  'dashboard': {'profile': {'level': 31, 'prestige': 4, 'xp_current': None, 'xp_required': None,
+                                            'pet': None, 'pet_level': 51}}}
+        panel = render_panel(status)
+        self.assertIn('Level 31 (prestige 4)', panel)
+        self.assertIn('XP not read yet', panel)
+        self.assertIn('level 51 (name not read)', panel)
+        self.assertNotIn('Level 51)', panel)
+        status['dashboard']['profile'].update(pet='Dolphin', xp_current=1677, xp_required=6000)
+        panel = render_panel(status)
+        self.assertIn('Dolphin, level 51', panel)
+        self.assertIn('class="line"', panel)
 
     def test_pause_and_resume_buttons(self):
         self.post(action='start', mode='simulation', max_trips='1000', max_minutes='5')

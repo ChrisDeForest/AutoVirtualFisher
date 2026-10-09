@@ -210,6 +210,9 @@ def parse_responses(profile='', buffs='', prestige_shop='', pet='', quests=''):
                         value = _name(value)
                         if not value:
                             raise ValueError('Missing equipment name')
+                        if field == 'pet' and re.fullmatch(r'Level \d+\)?', value, re.I):
+                            # Observed OCR: "Pet: (Level 51)", the emoji and name lost. The pet stays unknown.
+                            continue
                         if field == 'bait':
                             stock = re.fullmatch(r'(.+?)\s+\((\d+(?:,\d{3})*)\)', value)
                             if stock:
