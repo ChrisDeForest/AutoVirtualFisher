@@ -3,6 +3,7 @@
 The page holds the start form; /automation/panel renders the live part (status, level line, and the profile, buffs,
 run, inventory and recent-trip boxes), which the page swaps in every two seconds."""
 from html import escape
+from .fishing_log import CHARM_NAMES
 
 MAX_TRIPS, MAX_MINUTES = 1000, 600
 DEFAULT_CHANNEL = 'Virtual Fisher'
@@ -51,7 +52,12 @@ STYLE = """<style>
 .box .stat.group dt { color:var(--ink); font-weight:600; }
 .scroll { max-height:340px; overflow-y:auto; padding-right:10px; scrollbar-color:#3d5a69 transparent; }
 .scroll:focus-visible { outline-offset:2px; }
-.finds { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:0 28px; }
+.rewards-row { grid-column:1 / -1; display:grid; grid-template-columns:minmax(200px,1fr) minmax(0,3.2fr);
+  gap:22px 34px; }
+.rewards-row .box.wide { grid-column:auto; }
+.finds { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(0,1.7fr); gap:0 24px; }
+.mini.charms th[scope=row] { white-space:nowrap; }
+.mini.charms td + td, .mini.charms th + th { padding-left:10px; }
 .finds h3 { font-size:15px; color:var(--ink); margin:10px 0 2px; }
 .mini { width:100%; border-collapse:collapse; font-size:14px; font-variant-numeric:tabular-nums; }
 .mini th, .mini td { padding:6px 0; border-bottom:1px solid #263d4a; text-align:right; font-weight:400; }
@@ -59,7 +65,7 @@ STYLE = """<style>
 .mini thead th { color:var(--muted); font-size:13px; } .mini td + td, .mini th + th { padding-left:14px; }
 .visually-hidden { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
 @media(max-width:900px) { .finds { grid-template-columns:minmax(0,1fr); } }
-@media(max-width:900px) { .boxes { grid-template-columns:minmax(0,1fr); } .box.wide { grid-column:auto; }
+@media(max-width:900px) { .boxes, .rewards-row { grid-template-columns:minmax(0,1fr); } .box.wide { grid-column:auto; }
   .start .pair { grid-template-columns:minmax(0,1fr); } }
 @media(prefers-reduced-motion:no-preference) { .line .cast, .line .bobber { transition:all .6s ease-out; } }
 </style>"""
@@ -195,7 +201,7 @@ def _charm_cells(charm):
     level = f'{"≥" if charm["at_least"] else ""}{charm["level"]}'
     if charm['needed'] is None:
         return f'<td>{level}</td><td>max</td>'
-    return f'<td>{level}</td><td>{charm["into"]} of {charm["needed"]}</td>'
+    return f'<td>{level}</td><td>{charm["into"]}/{charm["needed"]}</td>'
 
 
 def _finds_box(finds, charms=None):
@@ -203,21 +209,27 @@ def _finds_box(finds, charms=None):
     charms = charms or {}
 
     def group(title, key, levels=False):
-        names = sorted(set(every.get(key, {})) | set(run.get(key, {})) | (set(charms.get('charms', {})) if levels
-                                                                          else set()),
+        names = sorted(set(every.get(key, {})) | set(run.get(key, {})),
                        key=lambda name: -every.get(key, {}).get(name, 0))
+        if levels:
+            # All eight charms, in /charms order, then anything else read as a charm.
+            names = list(CHARM_NAMES) + [name for name in names + sorted(charms.get('charms', {}))
+                                         if name not in CHARM_NAMES]
+            names = list(dict.fromkeys(names))
         if not names:
             return f'<h3>{escape(title)}</h3><p class="empty">None yet.</p>'
-        head = '<th scope="col">This run</th><th scope="col">All runs</th>' + (
-            '<th scope="col">Level</th><th scope="col">To next level</th>' if levels else '')
+        head = ('<th scope="col" title="This run">Run</th><th scope="col" title="All runs">All</th>' + (
+            '<th scope="col" title="Level">Lvl</th><th scope="col" title="Charms to the next level">Next</th>'
+            if levels else ''))
         rows = ''
         for name in names:
             rows += (f'<tr><th scope="row">{escape(name)}</th><td>{run.get(key, {}).get(name, 0):,}</td>'
                      f'<td>{every.get(key, {}).get(name, 0):,}</td>'
                      + (_charm_cells(charms.get('charms', {}).get(name)) if levels else '') + '</tr>')
-        table = (f'<table class="mini"><thead><tr><th scope="col"><span class="visually-hidden">Name</span></th>'
-                 f'{head}</tr></thead><tbody>{rows}</tbody></table>')
-        return f'<h3>{escape(title)}</h3>' + _scroll(title, table)
+        table = (f'<table class="mini{" charms" if levels else ""}"><thead><tr><th scope="col">'
+                 f'<span class="visually-hidden">Name</span></th>{head}</tr></thead><tbody>{rows}</tbody></table>')
+        # Eight charm rows always fit; other lists can grow long and scroll.
+        return f'<h3>{escape(title)}</h3>' + (table if levels else _scroll(title, table))
 
     body = (f'<div class="finds"><div>{group("Chests", "chests")}</div>'
             f'<div>{group("Special fish", "special_fish")}</div>'
@@ -330,8 +342,10 @@ def render_panel(status, mode=None) -> str:
                      if recent else '<p class="empty">No trips yet.</p>')
 
     return (f'<div data-running="{1 if running else 0}">{strip}{_level_line(profile, dashboard)}'
-            f'<div class="boxes">{profile_box}{buffs_box}{run_box}{rewards_box}'
-            f'{_finds_box(dashboard.get("finds") or {}, dashboard.get("charms"))}{inventory_box}{trips_box}</div></div>')
+            f'<div class="boxes">{profile_box}{buffs_box}{run_box}'
+            # Rewards takes a narrow share of its row so the finds tables (charms most of all) fit without scrolling.
+            f'<div class="rewards-row">{rewards_box}{_finds_box(dashboard.get("finds") or {}, dashboard.get("charms"))}'
+            f'</div>{inventory_box}{trips_box}</div></div>')
 
 
 def _field(name, label, value, hint=''):

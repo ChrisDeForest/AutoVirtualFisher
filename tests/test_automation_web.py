@@ -201,6 +201,16 @@ class AutomationWebTests(unittest.TestCase):
         self.post(action='resume')
         self.assertFalse(self.handler.automation.status()['paused'])
 
+    def test_all_eight_charms_are_listed_without_scrolling(self):
+        from src.automation_web import _finds_box
+        from src.fishing_log import CHARM_NAMES
+        html = _finds_box({'run': {}, 'all': {'charms': {'Quality Charm': 3}}})
+        charms = html[html.index('<h3>Charms</h3>'):]
+        for name in CHARM_NAMES:
+            self.assertIn(f'<th scope="row">{name}</th>', charms)
+        self.assertNotIn('class="scroll"', charms, 'eight rows fit without scrolling')
+        self.assertLess(charms.index('Marketing Charm'), charms.index('Experience Charm'), 'in /charms order')
+
     def test_finds_rewards_and_scrolling_lists(self):
         self.post(action='start', mode='simulation', max_trips='2', max_minutes='5')
         self.wait_until_stopped()
