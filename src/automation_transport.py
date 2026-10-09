@@ -13,10 +13,10 @@ from .observation import Identity, Observation, check_identity, recipients
 
 # Outcomes a test can script per send (by send index):
 #   ok, unreadable (a catch count, or profile/buffs digits, misread; the misread differs per attempt, as a reply
-#   caught mid-render would), unreadable_fixed (the same misread every time, as the same pixels give), missing (the game acts but no reply is seen), duplicate (the reply is
+#   caught mid-render would), noisy (a fishing reply with one extra garbled line), unreadable_fixed (the same misread every time, as the same pixels give), missing (the game acts but no reply is seen), duplicate (the reply is
 #   delivered twice), other_player_first (another player's reply arrives first), uncorrelated (the reply carries
 #   no evidence of which action it answers), send_error (the hand-over fails).
-OUTCOMES = ('ok', 'unreadable', 'unreadable_fixed', 'missing', 'duplicate', 'other_player_first', 'uncorrelated', 'send_error')
+OUTCOMES = ('ok', 'unreadable', 'unreadable_fixed', 'noisy', 'missing', 'duplicate', 'other_player_first', 'uncorrelated', 'send_error')
 FISH = ('Salmon', 'Cod')
 VISIBLE_REPLIES = 12
 
@@ -62,6 +62,8 @@ class SimulationTransport:
         if outcome == 'send_error':
             raise TransportError('Simulated hand-over failure.')
         text, kind = self._play(intent, now)
+        if outcome == 'noisy' and kind == 'fishing':
+            text += '\n$6 , 6O0 recieved for levelling up'  # an extra line OCR garbled beyond reading
         if outcome in ('unreadable', 'unreadable_fixed') and kind == 'fishing':
             lines = text.split('\n')
             lines[2] = lines[2].split(' ', 1)[1]  # OCR lost the count: "Salmon"

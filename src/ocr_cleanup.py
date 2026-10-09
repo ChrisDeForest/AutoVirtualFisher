@@ -131,6 +131,9 @@ def clean_ocr(lines: list[str], label: str, capture: bool = False) -> str:
             header(other['name'], bool(other['tag']), other['time'])
             continue
         invoker = None
+        # Observed: OCR spaces a thousands comma ("$6 , 600"). Only with a space before the comma, which real text
+        # never has ("Level 32, 723/6,500" is left alone), and exactly three digits after it.
+        line = re.sub(r'(?<=\d) , ?(?=\d{3}(?!\d))', ',', line)
         # The game writes "(Lvl 30)"; OCR often reads the "l" as "1" ("Lv130").
         line = re.sub(r'\(Lv[1lI|]\s?(\d+)\)', r'(Lvl \1)', line)
         if pet_header and (match := pet_header.match(line)):

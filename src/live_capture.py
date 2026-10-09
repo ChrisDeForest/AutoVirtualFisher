@@ -64,6 +64,25 @@ TOP_BAR_FRACTION = 0.15
 KIND_SECTION = {'profile': 'profile', 'buffs': 'buffs', 'prestige_shop': 'prestige', 'pet': 'pets', 'quests': 'quests'}
 
 
+def fishing_core_problems(text: str) -> list[str]:
+    """Problems with what a trip needs to count: exactly one result, known fish, and its XP line. Extra lines
+    that cannot be read (events, rewards) are left out of this; see fishing_problems."""
+    tally = parse_fishing(text)
+    reasons = []
+    if tally['trips'] != 1:
+        reasons.append(f'Expected one fishing result, found {tally["trips"]}.')
+    reference = load_fish_reference() or {}
+    unknown = [name for name in tally['catches'] if name.casefold() not in reference]
+    if unknown:
+        reasons.append('Not in the wiki fish table: ' + ', '.join(unknown))
+    if tally['trips'] == 1 and tally['trip_details'][0]['xp'] is None:
+        reasons.append('No XP line was read.')
+    # A fish name alone ("Salmon") is a catch line that lost its count: the catch itself is unknown.
+    reasons += [warning for warning in tally['warnings']
+                if warning.split(':', 1)[-1].strip().casefold() in reference]
+    return reasons
+
+
 def fishing_problems(text: str) -> list[str]:
     """Why one fishing reply cannot be counted as exactly one trip; empty when it reads cleanly."""
     tally = parse_fishing(text)

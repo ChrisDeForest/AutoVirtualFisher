@@ -22,6 +22,17 @@ class LiveFishingTests(unittest.TestCase):
         self.assertEqual(tally['level_ups'], [31])
         self.assertEqual(tally['quests_completed'][0]['items'], {'uncommon chest': 1})
 
+    def test_reward_chest_contents_belong_to_the_quest(self):
+        # Observed 2026-10-09: a quest's reward chest is opened after the trip's "+N XP" line, so its XP is not
+        # part of that line. A chest fished up is reported before it and is included.
+        tally = parse_fishing('\n'.join([
+            'You caught:', '3 Cod', '+193 XP', 'QUEST COMPLETE!', 'Daily Level-ups Tier 1', 'Reward:',
+            '+$960', '1x uncommon chest', 'You got 260 XP from the chest.', 'You got $40 from the chest']))
+        self.assertEqual(tally['warnings'], [])
+        quest = tally['quests_completed'][0]
+        self.assertEqual((quest['money'], quest['xp'], quest['items']), (960, 260, {'uncommon chest': 1}))
+        self.assertEqual((tally['chest_xp'], tally['chest_money'], tally['fishing_xp']), (0, 40, 193))
+
     def test_level_up_without_its_level_stays_unreadable(self):
         # Observed: OCR dropped "now level 31" entirely. A guessed level must not be recorded.
         tally = parse_fishing('You caught:\n2 Fish\n+117 xp\nLEVEL UP! You are\n$6,200 received for leveling up.')

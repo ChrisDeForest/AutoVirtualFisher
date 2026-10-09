@@ -46,3 +46,13 @@ class LiveReviewRegressionTests(unittest.TestCase):
         from src.automation_discord import stable_frame
         reply = stable_frame(REPLIES['20261008T170125.']['text'].splitlines())['messages'][-1]
         self.assertEqual(fishing_problems('\n'.join(reply['lines'])), [])
+
+    def test_level_up_trip_with_spaced_comma_counts_everything(self):
+        # Observed 2026-10-09: "$6 , 600 received for leveling up." made the whole trip unreadable.
+        from src.fishing_log import parse_fishing
+        text = clean_ocr(REPLIES['20261009T024221.']['text'].splitlines(), 'regression')
+        tally = parse_fishing(text)
+        self.assertEqual(tally['warnings'], [])
+        self.assertEqual((tally['level_ups'], tally['level_up_money'], tally['fishing_xp']), ([33], 6600, 193))
+        self.assertEqual(tally['quests_completed'][0]['xp'], 260, "the reward chest XP is the quest's")
+        self.assertEqual(tally['quests_completed'][0]['items'], {'uncommon chest': 1})

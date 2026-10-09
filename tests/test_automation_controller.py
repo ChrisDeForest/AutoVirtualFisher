@@ -324,6 +324,17 @@ class ControllerTests(unittest.TestCase):
     def test_send_failure_is_noted_and_fishing_continues(self):
         self.assert_moves_on('send_error')
 
+    def test_readable_trip_with_a_garbled_extra_line_still_counts(self):
+        # Observed 2026-10-09: one garbled level-up line made a whole trip (catch, XP, level-up) uncounted.
+        self.sim.script = {3: 'noisy'}
+        self.make(config=replace(CONFIG, max_trips=3)).start()
+        self.run_for(30)
+        self.assertEqual(self.saved_trips(), 3)
+        self.assertEqual(self.controller.status()['dashboard']['gained']['xp'], self.sim.totals['xp'])
+        [note] = list_items(self.review)[0]
+        self.assertFalse(note['blocks_actions'])
+        self.assertIn('the rest was counted', ' '.join(note['reasons']))
+
     def test_three_unknown_outcomes_in_a_row_stop_the_run(self):
         self.sim.script = {2: 'missing', 3: 'missing', 4: 'missing'}
         self.make().start()

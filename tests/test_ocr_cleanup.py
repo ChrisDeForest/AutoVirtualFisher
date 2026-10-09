@@ -160,3 +160,13 @@ class GarbledButtonTests(unittest.TestCase):
         for line in ('Salmon', 'Fish', 'Reward:', 'Exotic Fish', 'Special'):
             with self.subTest(line=line):
                 self.assertIn(line, clean_ocr(['You caught:', line], 't').splitlines())
+
+
+class SpacedNumberTests(unittest.TestCase):
+    def test_spaces_around_a_thousands_comma_are_removed(self):
+        from src.ocr_cleanup import clean_ocr
+        self.assertEqual(clean_ocr(['$6 , 600 received for leveling up.'], 't'), '$6,600 received for leveling up.')
+        self.assertEqual(clean_ocr(['4 , 954 Cod'], 't'), '4,954 Cod')
+        self.assertEqual(clean_ocr(['Pet: Dolphin, 51'], 't'), 'Pet: Dolphin, 51', 'only digit groups of three')
+        level = 'P4 Level 32, 723/6,500 XP to next level.'
+        self.assertEqual(clean_ocr([level], 't'), level, 'a normal comma and space is never joined')

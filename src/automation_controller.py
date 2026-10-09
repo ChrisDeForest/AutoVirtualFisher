@@ -26,7 +26,7 @@ from .player_planner import load_level_increments
 from .startup_fields import apply_startup, reply_problems, startup_problems
 from .fishing_log import parse_fishing
 from .fishing_sessions import save_session
-from .live_capture import fishing_problems
+from .live_capture import fishing_core_problems, fishing_problems
 from .observation import VERIFIED
 from .player_snapshots import new_record_id
 from .review_queue import add_item
@@ -400,11 +400,18 @@ class AutomationController:
             result = 'unreadable' if problems else 'refreshed'
         elif wait:
             result = 'cooldown'
-        elif fishing_problems(observation.text):
+        elif fishing_core_problems(observation.text):
             result = 'unreadable'
         else:
+            # The catch and XP read cleanly: the trip counts even if an extra line (an event, a reward) did not.
             result = 'trip'
-            tally = {field: value for field, value in parse_fishing(observation.text).items() if field != 'warnings'}
+            parsed = parse_fishing(observation.text)
+            tally = {field: value for field, value in parsed.items() if field != 'warnings'}
+            if parsed['warnings']:
+                add_item(self.roots['review'], self.config.account, 'fishing', observation.text,
+                         ['Some lines of this result could not be read; the rest was counted.'] + parsed['warnings'],
+                         identity_status=observation.identity_status, observation_id=observation.observation_id,
+                         blocks_actions=False)
         try:
             self._event('acknowledged', action_id, observation_id=observation.observation_id, result=result,
                         tally=tally)

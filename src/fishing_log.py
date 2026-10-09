@@ -69,11 +69,14 @@ def parse_fishing(text: str) -> dict:
             xp = re.fullmatch(rf'\+({NUMBER}) XP', line, re.I)
             # Observed OCR reads "1x" as "lx"; only a lone l/I before x, never inside a number.
             item = re.fullmatch(r'(\d+|[lI])x (.+)', line)
-            if reward is not None and (money or xp or item):
+            # A reward chest is opened after the trip's "+N XP" line, so its XP is not in that line: it is the
+            # quest's. Its money and items are counted as chest finds, as for any chest.
+            chest_xp = re.fullmatch(rf'You got ({NUMBER}) XP from the chest[.!]?', line, re.I)
+            if reward is not None and (money or xp or item or chest_xp):
                 if money:
                     reward['money'] += _number(money[1])
-                elif xp:
-                    reward['xp'] += _number(xp[1])
+                elif xp or chest_xp:
+                    reward['xp'] += _number((xp or chest_xp)[1])
                 else:
                     _add(reward['items'], _name(item[2]), 1 if item[1] in 'lI' else int(item[1]))
                 continue
