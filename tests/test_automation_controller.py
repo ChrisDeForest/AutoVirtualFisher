@@ -102,13 +102,13 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual((status['running'], status['trips']), (False, 3))
         self.assertIn('trip limit', status['reason'])
 
-    def test_fishing_waits_for_the_verified_cooldown_plus_margin(self):
+    def test_fishing_waits_for_the_verified_cooldown_alone_without_jitter(self):
         self.make(config=replace(CONFIG, max_trips=10, jitter_max=0)).start()
         self.run_for(60)
         sends = self.fish_sends()
         gaps = [later - earlier for earlier, later in zip(sends, sends[1:])]
-        self.assertTrue(all(gap >= 3.5 + 0.5 - 1e-9 for gap in gaps), gaps)
-        self.assertLess(max(gaps), 3.5 + 0.5 + 0.2, 'and not much longer')
+        self.assertTrue(all(gap >= 3.5 - 1e-9 for gap in gaps), gaps)
+        self.assertLess(max(gaps), 3.5 + 0.2, 'and not much longer')
 
     def test_cooldown_reply_is_not_a_trip_and_resets_the_wait(self):
         self.make(config=replace(CONFIG, max_trips=4, cooldown_margin=-2.0)).start()  # deliberately too early
@@ -560,7 +560,7 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(len(self.fish_sends()), 100, 'no extra sends')
         self.assertTrue(all(pending is None for _, pending, _ in self.checks), 'no overlapping commands')
         gaps = [b - a for a, b in zip(self.fish_sends(), self.fish_sends()[1:])]
-        self.assertGreaterEqual(min(gaps), 4.0 - 1e-9, 'cooldown spacing')
+        self.assertGreaterEqual(min(gaps), 3.5 - 1e-9, 'cooldown spacing')
 
     def test_one_hundred_trips_across_a_crash_and_restart(self):
         self.make(journal=FaultyJournal(self.journal_root, on='dispatched', nth=52),

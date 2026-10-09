@@ -39,7 +39,7 @@ class AutomationConfig:
     max_trips: int | None = None   # bounded runs stop after this many confirmed trips...
     max_seconds: float | None = None  # ...or this long, whichever comes first
     reply_timeout: float = 20.0    # seconds without a correlated reply before the action becomes uncertain
-    cooldown_margin: float = 0.5   # seconds added to the verified cooldown
+    cooldown_margin: float = 0.0   # seconds added to the verified cooldown (the random jitter is added too)
     jitter_max: float = 0.5        # up to this many seconds more before each fish, picked at random...
     jitter_step: float = 0.05      # ...in steps of this many seconds
     mode: str = 'simulation'       # the separate native CLI explicitly selects 'live'

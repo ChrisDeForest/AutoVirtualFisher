@@ -260,7 +260,7 @@ and across all automation runs, and splits quest, chest and level-up rewards.
 Simulation runs the loop against a simulated Virtual Fisher.
 Each step is: choose the next action (refresh `/profile`, then `/buffs` for the
 cooldown, then fish), record it in the journal, send it, confirm the reply that
-answers it, update state, and wait out the verified cooldown plus 0.5 s.
+answers it, update state, and wait out the verified cooldown plus a random 0-0.5 s (in 0.05 s steps).
 
 - At most one command is unanswered at a time. Every command is journaled
   (`src/data/automation_sim/journal/`) before it is sent, and its hand-over and
