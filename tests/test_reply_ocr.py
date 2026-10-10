@@ -117,6 +117,21 @@ class ReplyOcrTests(unittest.TestCase):
         boxes = [box('unreadable body', 100), box('Inventory', 200), box('harms', 201)]
         self.assertEqual(chrome_rows(boxes), {1, 2})
 
+    def test_level_line_missing_its_xp_is_completed_from_an_agreeing_reread(self):
+        # Live: Windows OCR dropped "8,698/20,000" from the line at every scale; Tesseract read it each time.
+        from src.reply_ocr import complete_level_line
+        primary = 'P4 Level 49, XP to next level.'
+        whole = 'P4 Level 49, 8,698/20,000 XP to next level.'
+        self.assertEqual(complete_level_line(primary, iter([[whole], None, [whole]])), whole)
+        self.assertEqual(complete_level_line(primary, iter([[whole], ['P4 Level 49, 8,690/20,000 XP to next level.']])),
+                         primary, 'two rereads must agree on every digit')
+        level_48 = 'P4 Level 48, 8,698/20,000 XP to next level.'
+        self.assertEqual(complete_level_line(primary, iter([[level_48], [level_48]])), primary,
+                         'rereads that disagree with the line on the level are not used')
+        rereads = iter([[whole]])
+        self.assertEqual(complete_level_line(whole, rereads), whole)
+        self.assertEqual(list(rereads), [[whole]], 'a complete line is not reread')
+
     def test_a_button_beside_a_shop_item_keeps_the_item(self):
         # /shop rods: a Select button level with each rod name, far to its right, is part of the reply.
         from src.reply_ocr import chrome_rows

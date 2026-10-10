@@ -46,6 +46,12 @@ class PlayerStateTests(unittest.TestCase):
         self.assertEqual(prestige['source'], 'inferred minimum')
         self.assertEqual(result['warnings'], [])
 
+    def test_bold_zero_read_as_letter_o_is_zero_azure_fish(self):
+        # Live OCR of the bold "0" in "You have: 0 <azure fish emoji>." at every scale tried.
+        for line in ('You have: O', 'You have: o.'):
+            self.assertEqual(parse_responses(prestige_shop='Prestige Shop\n' + line)['prestige']['azure_fish'], 0)
+        self.assertIsNone(parse_responses(prestige_shop='Prestige Shop\nYou have: Of')['prestige']['azure_fish'])
+
     def test_direct_profile_prestige_wins_over_shop_inference(self):
         result = parse_responses(
             profile='P4 Level 29, 5,363/5,500 XP to next level.',

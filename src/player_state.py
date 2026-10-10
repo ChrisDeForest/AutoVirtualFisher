@@ -242,9 +242,10 @@ def parse_responses(profile='', buffs='', prestige_shop='', pet='', quests=''):
         line = _clean(original).rstrip('.').rstrip()
         if not line or line == 'Prestige Shop' or line.startswith('Spend your Azure Fish'):
             continue
-        balance = re.fullmatch(rf'You have:\s*({NUMBER})(?:\s+Azure Fish)?\s*', line, re.I)
+        # Observed: OCR reads the bold count "0" as the letter O.
+        balance = re.fullmatch(rf'You have:\s*({NUMBER}|O)(?:\s+Azure Fish)?\s*', line, re.I)
         if balance:
-            result['prestige']['azure_fish'] = _number(balance[1])
+            result['prestige']['azure_fish'] = 0 if balance[1].upper() == 'O' else _number(balance[1])
             continue
         matched = False
         for upgrade in PRESTIGE_UPGRADES:

@@ -134,6 +134,52 @@ def profile_field_candidates(primary, alternate, peers):
     return candidate
 
 
+LEVEL_LINE = re.compile(r'(?:P(\d+)\s+)?Level (\d+),\s*(\d[\d,]*/\d[\d,]* )?XP to next level\.?')
+# Tesseract crops for a level line whose XP Windows OCR dropped. Observed: Windows OCR dropped "8,698/20,000" at
+# every scale and crop tried; Tesseract read the whole line at scales 2, 3 and 4.
+LEVEL_REREAD_SCALES = (2, 3, 4)
+
+
+def complete_level_line(text, rereads, agree=2):
+    """A profile level line with its "current/required" XP. Windows OCR may drop that word and keep the rest
+    ("P4 Level 49, XP to next level."); `rereads` yields line lists (or None) from rereading that line, each
+    pulled only when needed. A reread line is used once `agree` rereads gave exactly it, as a whole level line
+    with the line's own prestige and level: no digit is guessed."""
+    line = LEVEL_LINE.fullmatch(text.strip())
+    if line is None or line[3]:
+        return text
+    seen = {}
+    for read in rereads:
+        for candidate in {c.strip() for c in read or ()}:
+            found = LEVEL_LINE.fullmatch(candidate)
+            if found and found[3] and (found[1], found[2]) == (line[1], line[2]):
+                seen[candidate] = seen.get(candidate, 0) + 1
+                if seen[candidate] >= agree:
+                    return candidate
+    return text
+
+
+def _level_rereads(image, area, executable):
+    """Tesseract reads of one line, enlarged at each of LEVEL_REREAD_SCALES; a crop that fails gives None."""
+    from .screenshot_ocr import save_region
+    for scale in LEVEL_REREAD_SCALES:
+        handle, temporary = tempfile.mkstemp(suffix='.png')
+        os.close(handle)
+        output = Path(temporary)
+        try:
+            if Path(image).suffix.lower() == '.bmp':
+                from .ocr_image import contrast_region
+                # Tesseract reads light-on-dark Discord text poorly: inverted crop.
+                contrast_region(image, output, tuple(round(value) for value in area), scale=scale)
+            else:
+                save_region(image, output, area, scale)
+            yield _tesseract(executable, output, 7)
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            yield None
+        finally:
+            output.unlink(missing_ok=True)
+
+
 def profile_level_peers(primary, peers, extra_lines):
     """Supplement a missed level line with a separate pixel read corroborated by the primary."""
     wanted = parse_responses(profile='\n'.join(clean_ocr(primary, 'reply').splitlines()))['profile']
@@ -335,8 +381,15 @@ def repair_reply_regions(boxes, image, image_height, extra_controls=()):
         else:
             ready = all(key in fields for key in required)
         if ready:
-            # Optional OCR noise cannot justify expensive rereads once startup is readable.
-            result += [b['text'] for b in body]
+            # Optional OCR noise cannot justify expensive rereads once startup is readable. The XP of the level
+            # line is the exception: only that one line is reread, and only when its XP is missing.
+            texts = [b['text'] for b in body]
+            if kind == 'profile':
+                for position, box in enumerate(body):
+                    pad = max(1, box['bottom'] - box['top'])
+                    area = (box['left'] - pad, box['top'] - pad / 2, box['right'] + 6 * pad, box['bottom'] + pad / 2)
+                    texts[position] = complete_level_line(box['text'], _level_rereads(image, area, executable))
+            result += texts
             index = end
             continue
         height = max(1, anchor['bottom'] - anchor['top'])
