@@ -6,6 +6,7 @@ did not read cleanly, so the read is tried again. Paged shops are judged complet
 """
 import re
 
+from .paste_detect import SLASH
 from .player_state import _clean, parse_responses
 
 UPGRADES = ('Better Fish', 'Salesman', 'Bait Efficiency', 'More Chests', 'Worker Motivation', 'Artifact Specialist',
@@ -157,8 +158,9 @@ def parse_shop_rods(text):
 def parse_rod(text):
     lines = _lines(text)
     current = next((m[1].strip() for m in (re.match(r'Currently using:\s*(.+)$', l, re.I) for l in lines) if m), None)
-    owned = [re.sub(r'^\W+', '', line) for line in lines
-             if re.match(r'^\W*[A-Z][a-z]+ Rod$', line) and not line.lower().startswith('currently')]
+    # A rod's icon may read as one stray letter ("J Supporter Rod").
+    owned = [match[1] for match in (re.match(r'^\W*(?:[A-Za-z]\s+)?([A-Z][a-z]+ Rod)$', line) for line in lines
+                                    if not line.lower().startswith('currently')) if match]
     return _result({'current': current, 'owned': owned}, [] if current else ['Rod in use'], lines)
 
 
@@ -172,7 +174,7 @@ def parse_bait(text):
         if match:
             found = True
             current = None if match[1].strip().upper() == 'NONE' else match[1].strip()
-        elif not line.startswith('/bait'):
+        elif not re.match(SLASH + r'?\s*bait\b', line, re.I):
             # The format of owned bait has not been seen yet; kept as read.
             other.append(line)
     return _result({'current': current, 'other_lines': other}, [] if found else ['Bait in use'], lines)

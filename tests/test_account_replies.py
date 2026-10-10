@@ -85,6 +85,17 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(parsed['values'], {'current': None, 'other_lines': []})
         self.assertEqual(parsed['unread'], [])
 
+    def test_rod_and_bait_with_the_slash_misread(self):
+        # Live OCR: the leading slash read as I or [, and a rod icon as J.
+        from src.paste_detect import _kind
+        rod = ['Irod <rod name>', 'Currently using: Fiberglass Rod', 'J Supporter Rod', 'Plastic Rod', 'Steel Rod',
+               'Fiberglass Rod']
+        bait = ['Ibait <bait type> to use bait.', '[bait none is valid.', 'Current bait: NONE']
+        self.assertEqual((_kind(rod[0]), _kind(bait[0])), ('rod', 'bait'))
+        self.assertEqual(PARSERS['rod']('\n'.join(rod))['values']['owned'],
+                         ['Supporter Rod', 'Plastic Rod', 'Steel Rod', 'Fiberglass Rod'])
+        self.assertEqual(PARSERS['bait']('\n'.join(bait))['values'], {'current': None, 'other_lines': []})
+
     def test_biome(self):
         parsed = PARSERS['biome'](sample.BIOME)
         self.assertEqual(parsed['values'], {'current': 'River', 'unlocked': ['River'], 'next': 'Volcanic',
