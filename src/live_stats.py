@@ -223,7 +223,8 @@ def charm_progress(found: int, reported_level: int | None = None, max_level: int
             'needed': None if max_level is not None and level >= max_level else level + 1, 'at_least': at_least}
 
 
-CHARM_LINE = re.compile(r'(\d+)\s*/\s*(\d+)\s*-.*?\b([A-Za-z]+)\s+Charm\b.*?(?:\((\d+)\s+to next tier\))?\W*$', re.I)
+CHARM_LINE = re.compile(r'(\d+)\s*/\s*(\d+)\s*-?.*?\b([A-Za-z]+)\s+Charm\b.*?(?:\((\d+)\s+to next tier\))?\W*$', re.I)
+CHARM_START = re.compile(r'\W*\d+\s*/\s*\d+')
 CHARMS_FOUND = re.compile(r'([\d,]+)\s*/\s*([\d,]+)\s*-\s*Charms found', re.I)
 
 
@@ -231,9 +232,16 @@ def parse_charms(text: str) -> dict:
     """A /charms reply: each charm's level and charms counted ("2/14 - Quality Charm - ... (2 to next tier)" is
     level 2, with 2 of the 3 for level 3 still to find: 1 + 2 + 1 = 4), the max level its lines show ("/14"), and
     the "11/840 - Charms found" total and goal. A line whose level or charms to next tier cannot be read is left
-    out; so is the max level when the lines disagree on it."""
+    out; so is the max level when the lines disagree on it. A narrow window wraps a charm over several lines (the
+    count apart from its name, the tier note below it): each "N/M" starts a charm and the lines after it join it."""
     charms, maxes, found, goal = {}, set(), None, None
+    entries = []
     for line in (_clean(line) for line in (text or '').splitlines()):
+        if entries and line and not CHARM_START.match(line):
+            entries[-1] += ' ' + line
+        else:
+            entries.append(line)
+    for line in entries:
         if total := CHARMS_FOUND.search(line):
             found, goal = int(total[1].replace(',', '')), int(total[2].replace(',', ''))
             continue

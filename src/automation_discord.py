@@ -13,6 +13,7 @@ import time
 from secrets import token_hex
 
 from .account_reads import ACCOUNT_READS, NEXT_PAGE, PAGE_TWO
+from .account_replies import PAGE
 from .automation_models import (CapabilityError, ContextStatus, DispatchReceipt, NOT_FOREGROUND, NotDispatched,
                                 TransportError)
 from .live_capture import capture_frame, channel_matches
@@ -60,7 +61,6 @@ COMMANDS = {'refresh_profile': '/profile', 'refresh_buffs': '/buffs', 'refresh_c
             **{kind: read.command for kind, read in ACCOUNT_READS.items()},
             # Page 2 of a paged read is a click on the → button, never typed.
             **{kind: NEXT_PAGE for kind in PAGE_TWO}}
-PAGE = re.compile(r'Page\s*(\d+)\s*/\s*(\d+)', re.I)
 # Identical reads of a fishing reply with problems before it is delivered as it is.
 FISHING_REREADS = 2
 # Seconds after sending /profile or /buffs before an identical reply sent that minute is taken as the answer.
@@ -104,10 +104,26 @@ def _center(box):
     return ((box['left'] + box['right']) / 2, (box['top'] + box['bottom']) / 2)
 
 
-def composer_target(boxes, channel):
-    pattern = re.compile(r'Message\s*@\s*' + re.escape(channel), re.I)
+def composer_box(boxes, channel):
+    """The empty message box's "Message @channel" placeholder. The blinking caret sits on its M, so OCR may
+    read it without one."""
+    pattern = re.compile(r'M?essage\s*@\s*' + re.escape(channel), re.I)
     found = [box for box in boxes if pattern.fullmatch(box['text'].strip())]
-    return _center(found[0]) if len(found) == 1 else None
+    return found[0] if len(found) == 1 else None
+
+
+def composer_target(boxes, channel):
+    box = composer_box(boxes, channel)
+    return _center(box) if box is not None else None
+
+
+def composer_click(boxes, channel):
+    """Where to click the message box: in its empty part just right of the placeholder, so the pointer
+    never covers the placeholder text."""
+    box = composer_box(boxes, channel)
+    if box is None:
+        return None
+    return (box['right'] + 2 * (box['bottom'] - box['top']), _center(box)[1])
 
 
 def command_target(boxes, command, composer=None):

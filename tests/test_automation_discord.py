@@ -201,6 +201,14 @@ class DiscordTests(unittest.TestCase):
         self.assertEqual((reply.kind, reply.correlation), ('shop_upgrades', 'u2'))
         self.assertIn('Page 2/2', reply.text)
 
+    def test_page_number_slash_read_as_one_still_clicks(self):
+        # In a narrower window OCR read "Page 1/2" as "Page 112".
+        from src import account_samples as sample
+        self.page_one_on_screen()
+        self.driver.lines = [line.replace('Page 1/2', 'Page 112') for line in self.driver.lines]
+        self.send()
+        self.assertEqual(self.driver.clicks, [(284.0, 640)])
+
     def test_page_one_unchanged_is_never_the_answer(self):
         self.page_one_on_screen()
         self.send()
@@ -463,6 +471,8 @@ class TargetTests(unittest.TestCase):
         self.assertEqual(composer_target([box('Message @Virtual Fisher')], 'Virtual Fisher'), (380, 810))
         self.assertIsNone(composer_target([box('Message @someoneelse')], 'Virtual Fisher'))
         self.assertIsNone(composer_target([box('Message #Virtual Fisher')], 'Virtual Fisher'))
+        # The blinking caret sits on the M of an empty box.
+        self.assertEqual(composer_target([box('essage @Virtual Fisher')], 'Virtual Fisher'), (380, 810))
 
     def test_picker_requires_exact_command_and_bot_nearby(self):
         self.assertEqual(command_target([box('/fish', y=600), box('Virtual Fisher', y=620)], '/fish'), (380, 610))

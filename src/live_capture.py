@@ -37,6 +37,9 @@ RIGHT_REACH_HEIGHTS = 25
 REREAD_OFFSET_HEIGHTS = 1
 # Reread scales that must agree before a recovered count is trusted (one alone misread "10" as "IO").
 REREAD_SCALES = (2, 3)
+# Where the enlarged read of the message box and slash-command picker starts, as a share of the window's height.
+# A full picker reaches about 750 px above the box: half of a 1535 px window cut off its top row (the command).
+INPUT_REGION_TOP = .25
 # Seconds from the start of one capture to the next. The fishing cooldown changes as you level up and resets
 # when you prestige, so capture keeps pace with the cooldown in your latest /buffs: a capture every three quarters
 # of it, so at most one new reply normally arrives between captures and each capture overlaps the one before.
@@ -406,7 +409,7 @@ def make_capture(keep_dir: Path | None = None, keep_limit: int = KEEP_LIMIT, win
             if info['blank']:
                 return {'status': 'blank', 'lines': []}
             boxes = read_image_boxes(image)
-            input_boxes = read_region_boxes(image, (0, info['height'] * .5, info['width'], info['height']), 2) if input_region else boxes
+            input_boxes = read_region_boxes(image, (0, info['height'] * INPUT_REGION_TOP, info['width'], info['height']), 2) if input_region else boxes
             column, edge, height = chat_column(boxes)
 
             def reread(left, top, right, bottom):

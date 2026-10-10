@@ -28,12 +28,21 @@ def chrome_rows(boxes, extra_controls=()):
         return set()
     left, right = min(b['left'] for b in boxes), max(b['right'] for b in boxes)
     padding = 3 * max(b['bottom'] - b['top'] for b in boxes)
+    def level(box, control):
+        return (abs((box['top'] + box['bottom'] - control['top'] - control['bottom']) / 2)
+                <= min(box['bottom'] - box['top'], control['bottom'] - control['top']) / 2)
+
+    def beside_item(control):
+        # A shop's Select button sits level with its item, far to the right of the name: part of the reply.
+        # The button's text may sit a little lower than the name's, so any vertical overlap counts.
+        gap = 10 * (control['bottom'] - control['top'])
+        return any(box['top'] < control['bottom'] and control['top'] < box['bottom'] and box['text'].strip() not in BUTTONS and box['right'] < control['left'] - gap
+                   for box in boxes)
+
     controls = [b for b in [*boxes, *extra_controls] if b['text'].strip() in BUTTONS
                 and left <= b['left'] <= right + padding]
-    return {index for index, box in enumerate(boxes) if any(
-        abs((box['top'] + box['bottom'] - control['top'] - control['bottom']) / 2)
-        <= min(box['bottom'] - box['top'], control['bottom'] - control['top']) / 2
-        for control in controls)}
+    controls = [control for control in controls if not beside_item(control)]
+    return {index for index, box in enumerate(boxes) if any(level(box, control) for control in controls)}
 
 
 def _numbers(lines):

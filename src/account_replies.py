@@ -17,7 +17,8 @@ BIOMES = ('River', 'Volcanic', 'Ocean', 'Sky', 'Space', 'Alien')
 # Button labels and the shop's own wording: never items, never unread.
 BUTTONS = {'back', 'return', 'select', 'selected', 'deselect', 'maxed'}
 
-PAGE = re.compile(r'Page\s*(\d+)\s*/\s*(\d+)', re.I)
+# OCR may read the slash of "Page 1/2" as a 1 ("Page 112"), l, I or |.
+PAGE = re.compile(r'Page\s*(\d+)\s*(?:/|[1lI|](?=\s*\d))\s*(\d+)', re.I)
 LEVELLED = re.compile(r'(.+?)\s*\(\s*(\S+)\s*/\s*(\S+)\s*\)$')
 MONEY = re.compile(r'^\W*\$\s*([\d,]+)\W*$')
 HOOK_PRICE = re.compile(r'^\D{0,3}?(\d[\d,]*)$')
@@ -144,8 +145,11 @@ def parse_shop_rods(text):
             item['price'] = value
     _attach(items, order, set_status)
     for item in items.values():
-        item.pop('_priced', None)
-    more = next((int(m[1]) for m in (re.search(r'More rods unlocked at level (\d+)', l, re.I) for l in lines) if m),
+        # Every rod shows a price, Select or Selected. OCR cleanup drops a line that is only a button word, so a
+        # rod with neither a price nor Selected shows Select: it is owned.
+        if not item.pop('_priced', None) or item['price'] is None:
+            item['owned'] = True
+    more =next((int(m[1]) for m in (re.search(r'More rods unlocked at level (\d+)', l, re.I) for l in lines) if m),
                 None)
     return _result({'items': items, 'balance': _balance(lines, 'Your balance'), 'more_at_level': more}, (), lines)
 

@@ -14,6 +14,12 @@ class ShopTests(unittest.TestCase):
         self.assertEqual(len(parsed['values']['items']), 5)
         self.assertEqual(parsed['unread'], [])
 
+    def test_page_slash_read_as_one(self):
+        parsed = PARSERS['shop_upgrades'](sample.UPGRADES_PAGE_1.replace('Page 1/2', 'Page 112'))
+        self.assertEqual(parsed['page'], (1, 2))
+        parsed = PARSERS['shop_upgrades'](sample.UPGRADES_PAGE_2.replace('Page 2/2', 'Page 212'))
+        self.assertEqual(parsed['page'], (2, 2))
+
     def test_upgrades_page_2(self):
         parsed = PARSERS['shop_upgrades'](sample.UPGRADES_PAGE_2)
         self.assertEqual(parsed['page'], (2, 2))
@@ -50,6 +56,14 @@ class ShopTests(unittest.TestCase):
         second = PARSERS['shop_rods'](sample.RODS_PAGE_2)['values']
         self.assertEqual(second['items']['Magma Rod']['price'], 10000000)
         self.assertEqual(second['more_at_level'], 100)
+
+    def test_rod_without_price_or_selected_is_owned(self):
+        # Live: OCR cleanup drops lines that are only a button word, so the owned rods' Select never arrives.
+        text = '\n'.join(line for line in sample.RODS_PAGE_1.splitlines() if line != 'Select')
+        items = PARSERS['shop_rods'](text)['values']['items']
+        for name in ('Supporter Rod', 'Plastic Rod', 'Steel Rod'):
+            self.assertEqual(items[name], {'owned': True, 'selected': False, 'price': None})
+        self.assertEqual(items['Improved Rod'], {'owned': False, 'selected': False, 'price': 500})
 
     def test_boat_shop(self):
         parsed = PARSERS['shop_boats'](sample.BOATS)

@@ -117,6 +117,19 @@ class ReplyOcrTests(unittest.TestCase):
         boxes = [box('unreadable body', 100), box('Inventory', 200), box('harms', 201)]
         self.assertEqual(chrome_rows(boxes), {1, 2})
 
+    def test_a_button_beside_a_shop_item_keeps_the_item(self):
+        # /shop rods: a Select button level with each rod name, far to its right, is part of the reply.
+        from src.reply_ocr import chrome_rows
+        def box(text, left, top, right):
+            return dict(text=text, left=left, top=top, right=right, bottom=top + 20)
+        boxes = [box('Supporter Rod', 620, 835, 775), box('Select', 1123, 845, 1181),
+                 box('Rod given as thanks for supporting Virtual Fisher.', 583, 874, 1018),
+                 box('Page 1/2', 583, 1276, 659), box('Back', 605, 1326, 649)]
+        self.assertEqual(chrome_rows(boxes), {4})
+        # Live: the button's text sat 9 px lower than the rod name's.
+        boxes = [dict(box('Plastic Rod', 621, 915, 740), bottom=933), dict(box('Select', 1123, 925, 1181), bottom=940)]
+        self.assertEqual(chrome_rows(boxes), set())
+
     def test_numeric_labels_and_inventory_categories_must_agree(self):
         peer = [line.replace('Balance:', 'TEMP:').replace('Fish Value:', 'Balance:')
                 .replace('TEMP:', 'Fish Value:') for line in PEER]

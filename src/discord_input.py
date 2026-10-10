@@ -4,7 +4,7 @@ from ctypes import wintypes
 import time
 
 from .automation_models import FocusLost, Interrupted, NotDispatched, TransportError
-from .automation_discord import CHALLENGE, composer_target, command_target, command_text
+from .automation_discord import CHALLENGE, composer_click, composer_target, command_target, command_text
 from .live_capture import channel_matches, make_capture
 from .window_capture import window_process
 
@@ -137,16 +137,17 @@ class WindowsDiscordDriver:
         try:
             frame = self._frame(cancelled)
             initial_boxes = frame.get('boxes', [])
-            composer = composer_target(frame.get('original_boxes', initial_boxes), self.channel)
+            placeholder = frame.get('original_boxes', initial_boxes)
+            composer = composer_target(placeholder, self.channel)
             if composer is None and getattr(self, 'draft_composer', None) is not None:
-                composer, initial_boxes = self._clear_draft(cancelled)
+                composer, initial_boxes, placeholder = self._clear_draft(cancelled)
             if composer is None:
                 # Discord hides the "Message @..." placeholder whenever the box holds anything, even a space.
                 raise NotDispatched('The message box placeholder is not visible: it may hold a draft (even a space '
                                     'or new line). Click it, clear it (Ctrl+A, Delete), then start again.')
             # From the first click, anything left in the box is this command's draft.
-            self.draft_composer = composer
-            self._click(composer, cancelled)
+            self.draft_composer = composer_click(placeholder, self.channel)
+            self._click(self.draft_composer, cancelled)
             self._text(command, cancelled)
             # The picker is rendered asynchronously. No submit until an exact VF command row is seen.
             target = None
@@ -185,12 +186,14 @@ class WindowsDiscordDriver:
 
     def _clear_draft(self, cancelled):
         """Go back a step: clear what an interrupted command left in the message box, at the spot it was typed,
-        and check the box is empty again. Returns (composer, boxes); composer is None if it did not clear."""
+        and check the box is empty again. Returns (composer, boxes, placeholder boxes); composer is None if it did
+        not clear."""
         self._click(self.draft_composer, cancelled)
         self._clear(cancelled)
         frame = self._frame(cancelled)
         boxes = frame.get('boxes', [])
-        composer = composer_target(frame.get('original_boxes', boxes), self.channel)
+        placeholder = frame.get('original_boxes', boxes)
+        composer = composer_target(placeholder, self.channel)
         if composer is not None:
             self.draft_composer = None
-        return composer, boxes
+        return composer, boxes, placeholder

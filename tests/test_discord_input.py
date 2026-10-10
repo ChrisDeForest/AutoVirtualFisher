@@ -62,6 +62,18 @@ class NativeDispatchTests(unittest.TestCase):
         self.assertEqual(driver.events[-1], ('key', 13))
 
     @patch('src.discord_input.time.sleep')
+    def test_click_lands_in_the_box_right_of_the_placeholder(self, sleep):
+        driver = self.driver([{'boxes': [box('Message @Virtual Fisher', 800)]},
+                              {'boxes': [box('/fish', 600), box('Virtual Fisher', 620)]}])
+        driver.dispatch('/fish', lambda: False)
+        self.assertEqual(driver.events[0], ('click', (500.0, 810.0)))
+
+    def test_picker_read_reaches_a_full_picker_in_a_tall_window(self):
+        # Live: a 1535 px window, "/rod" matched eight commands, and the picker's top row sat at y=757.
+        from src.live_capture import INPUT_REGION_TOP
+        self.assertLess(INPUT_REGION_TOP * 1535, 757 - 40)
+
+    @patch('src.discord_input.time.sleep')
     def test_historical_bracket_glyph_never_matches_picker(self, sleep):
         old = [box('[fish', 600), box('Virtual Fisher', 620)]
         driver = self.driver([{'boxes': [box('Message @Virtual Fisher', 800)] + old}]
@@ -202,5 +214,5 @@ class FocusTests(unittest.TestCase):
         driver._frame = lambda cancelled: next(sequence)
         driver.events.clear()
         driver.dispatch('/fish', lambda: False)
-        self.assertEqual(driver.events[:2], [('click', (380.0, 810.0)), ('clear', None)])
+        self.assertEqual(driver.events[:2], [('click', (500.0, 810.0)), ('clear', None)])
         self.assertEqual(driver.events[-1], ('key', 13))

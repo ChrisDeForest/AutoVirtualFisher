@@ -116,6 +116,26 @@ class CharmReplyTests(unittest.TestCase):
         self.assertEqual(parsed['charms']['Quality Charm']['level'], 2)
         self.assertEqual((parsed['found'], parsed['goal']), (11, 840))
 
+    def test_charm_lines_wrapped_by_a_narrow_window(self):
+        # Live OCR of a narrower window: the count apart from its name, the tier note wrapped to the next line.
+        from src.live_stats import parse_charms
+        text = chr(10).join((
+            'Charms are found in high tier crates. Try to get them all!', '0/14-',
+            'Marketing Charm - Sell fish for more. (1 to next tier).', "1/14-'2",
+            'Endurance Charm - Catch more fish. (2 to next tier).', '1/14',
+            'Haste Charm - Fish more often. (2 to next tier).',
+            '1/14- Quantity Charm - Increase amount of items found in', 'chests. (1 to next tier).', '1/14-',
+            'Worker Charm - Workers catch more fish. (2 to next tier).', '0/14-',
+            'Treasure Charm - Catch slightly more treasure. (1 to next', 'tier).',
+            '2/14 - Quality Charm - Increase quality of treasure. (2 to next', 'tier).',
+            '1/14- Experience Charm - Increase experience from all fish. (1 to', 'next tier).',
+            '11/840 - Charms found.'))
+        parsed = parse_charms(text)
+        self.assertEqual({name: charm['counted'] for name, charm in parsed['charms'].items()},
+                         {'Marketing Charm': 0, 'Endurance Charm': 1, 'Haste Charm': 1, 'Quantity Charm': 2,
+                          'Worker Charm': 1, 'Treasure Charm': 0, 'Quality Charm': 4, 'Experience Charm': 2})
+        self.assertEqual((parsed['found'], parsed['goal'], parsed['max_level']), (11, 840, 14))
+
     def test_unread_charm_lines_are_named(self):
         from src.live_stats import unread_fields
         self.assertEqual(unread_fields('charms', CHARMS), [])
