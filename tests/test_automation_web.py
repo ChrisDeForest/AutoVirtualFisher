@@ -206,6 +206,19 @@ class AutomationWebTests(unittest.TestCase):
         status = {'running': True, 'phase': 'WAITING_FOCUS', 'trips': 3, 'paused': False}
         self.assertEqual(state_label(status), 'Waiting for Discord')
 
+    def test_account_reads_are_not_fishing(self):
+        from src.account_reads import ACCOUNT_READS, PAGE_TWO
+        from src.automation_web import state_label
+        for kind in (*ACCOUNT_READS, *PAGE_TWO):
+            for trips in (0, 12):
+                status = {'running': True, 'phase': 'WAITING_REPLY', 'trips': trips, 'paused': False,
+                          'pending_kind': kind}
+                self.assertTrue(state_label(status).startswith('Reading '), (kind, state_label(status)))
+        status = {'running': True, 'phase': 'WAITING_REPLY', 'trips': 0, 'paused': False,
+                  'pending_kind': 'refresh_shop_rods_page2'}
+        self.assertEqual(state_label(status), 'Reading the rod shop')
+        self.assertEqual(state_label(dict(status, pending_kind='fish')), 'Fishing')
+
     def test_account_box_lists_what_replies_showed(self):
         from src import account_samples as sample
         from src.account_replies import PARSERS

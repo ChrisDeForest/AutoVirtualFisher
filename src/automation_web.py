@@ -11,6 +11,13 @@ PHASES = {'BOOTSTRAPPING': 'Starting', 'WAITING_REPLY': 'Waiting for Virtual Fis
           'WAITING_DELIVERY': 'Waiting for Discord to send', 'WAITING_COOLDOWN': 'Cooling down',
           'RETRYING_STARTUP': 'Reading your profile again', 'PAUSED': 'Paused', 'READY': 'Ready',
           'SENDING': 'Sending', 'NEEDS_REVIEW': 'Needs you', 'FAILED': 'Stopped by a problem', 'STOPPED': 'Stopped'}
+# What the run is reading while an account read (or its page 2) waits for its reply.
+ACCOUNT_READ_LABELS = {
+    'refresh_upgrades': 'Reading the upgrade shop', 'refresh_shop_rods': 'Reading the rod shop',
+    'refresh_rod': 'Reading your rods', 'refresh_bait': 'Reading your bait', 'refresh_biome': 'Reading your biome',
+    'refresh_boats': 'Reading the boat shop', 'refresh_pets': 'Reading your pets',
+    'refresh_prestige_shop': 'Reading the prestige shop', 'refresh_league': 'Reading the league shop',
+    'refresh_boosts': 'Reading your boosts'}
 BUFFS = (('sell_price', 'Sell price'), ('fish_catch', 'Fish catch'), ('fish_quality', 'Fish quality'),
          ('treasure_chance', 'Treasure chance'), ('treasure_quality', 'Treasure quality'),
          ('xp_multiplier', 'XP multiplier'))
@@ -184,6 +191,9 @@ def state_label(status) -> str:
             return 'Refreshing stats'
         return {'refresh_buffs': 'Reading your buffs', 'refresh_charms': 'Reading your charms'}.get(
             status.get('pending_kind'), 'Reading your profile')
+    kind = status.get('pending_kind') or ''
+    if kind in ACCOUNT_READ_LABELS or kind.removesuffix('_page2') in ACCOUNT_READ_LABELS:
+        return ACCOUNT_READ_LABELS[kind.removesuffix('_page2')]
     return 'Fishing'
 
 
@@ -332,8 +342,7 @@ def render_panel(status, mode=None) -> str:
     if running:
         toggle = _button('resume', 'Resume') if status.get('paused') else _button('pause', 'Pause', secondary=True)
         buttons = f'<div class="actions">{toggle}{_button("stop", "Stop now")}</div>'
-    active = label in ('Fishing', 'Refreshing stats', 'Reading your profile', 'Reading your buffs',
-                     'Reading your charms')
+    active = label in ('Fishing', 'Refreshing stats') or label.startswith('Reading ')
     tone = 'on' if active else ('halted' if running else '')
     strip = (f'<div class="strip {tone}"><span class="phase">{escape(label)}</span>'
              f'<span class="why">{escape(status["reason"])}</span>{buttons}</div>')
