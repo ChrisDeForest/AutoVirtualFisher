@@ -258,6 +258,67 @@ def _source_rows(title, values):
     return rows
 
 
+def _levels(items):
+    return ', '.join(f'{name} {item["level"]}/{item["max"]}' for name, item in items.items())
+
+
+def _account_rows(sections):
+    """(label, text, unread) per account reply, in reading order; text is None when never read."""
+    def section(kind):
+        found = sections.get(kind)
+        return (found or {}).get('values'), (found or {}).get('unread') or []
+
+    rows = []
+    values, unread = section('shop_upgrades')
+    rows.append(('Upgrades', _levels(values['items']) if values else None, unread))
+    values, unread = section('shop_rods')
+    if values:
+        owned = [name + (' (in use)' if item['selected'] else '') for name, item in values['items'].items()
+                 if item['owned']]
+        priced = [(item['price'], name) for name, item in values['items'].items() if item['price']]
+        text = ', '.join(owned) + (f'; next {min(priced)[1]}, ${min(priced)[0]:,}' if priced else '')
+    rows.append(('Rods', text if values else None, unread))
+    values, unread = section('shop_boats')
+    if values:
+        owned = [name for name, item in values['items'].items() if item['owned']]
+        priced = [(item['price'], name) for name, item in values['items'].items() if item['price']]
+        text = (', '.join(owned) or 'none') + (f'; {min(priced)[1]} next, ${min(priced)[0]:,}' if priced else '')
+    rows.append(('Boats', text if values else None, unread))
+    values, unread = section('bait')
+    rows.append(('Bait', (values['current'] or 'None') if values else None, unread))
+    values, unread = section('biome')
+    rows.append(('Biome', ', '.join(values['unlocked'] or [values['current'] or '?']) if values else None, unread))
+    values, unread = section('pet')
+    if values:
+        text = ', '.join(f'{name} {pet["level"]}' + (' (current)' if name == values['current'] else '')
+                         for name, pet in values['owned'].items())
+    rows.append(('Pets', text if values else None, unread))
+    values, unread = section('prestige_shop')
+    if values:
+        owned = [name for name, bought in (values['upgrades'] or {}).items() if bought]
+        text = (', '.join(owned) or 'none') + f'; Azure Fish: {values["azure_fish"]}'
+    rows.append(('Prestige shop', text if values else None, unread))
+    values, unread = section('shop_league')
+    rows.append(('League', (_levels(values['items']) + f'; Hooks: {values["hooks"]}') if values else None, unread))
+    values, unread = section('boosts')
+    rows.append(('Boosts', (f'global {values["global_duration"]}' if values['global_duration'] else 'none')
+                 if values else None, unread))
+    return rows
+
+
+def _account_box(account):
+    """The account as replies last showed it (part 1's read-only check)."""
+    sections = (account or {}).get('sections') or {}
+    rows = ''
+    for label, text, unread in _account_rows(sections):
+        shown = escape(text) if text is not None else '<span class="unknown">Not read yet</span>'
+        if unread:
+            shown += f'<br><span class="note">Not read: {escape(", ".join(unread))}</span>'
+        rows += f'<div class="stat"><dt>{escape(label)}</dt><dd class="known">{shown}</dd></div>'
+    return _box('Account', f'<dl>{rows}</dl>', wide=True,
+                note='As Virtual Fisher last showed it; read at startup and every re-read.')
+
+
 def render_panel(status, mode=None) -> str:
     """The live part of the page: run status, level line, and the stat boxes."""
     if not status:
@@ -347,7 +408,7 @@ def render_panel(status, mode=None) -> str:
             f'<div class="boxes">{profile_box}{buffs_box}{run_box}'
             # Rewards takes a narrow share of its row so the finds tables (charms most of all) fit without scrolling.
             f'<div class="rewards-row">{rewards_box}{_finds_box(dashboard.get("finds") or {}, dashboard.get("charms"))}'
-            f'</div>{inventory_box}{trips_box}</div></div>')
+            f'</div>{inventory_box}{trips_box}{_account_box(status.get("account"))}</div></div>')
 
 
 def _field(name, label, value, hint=''):

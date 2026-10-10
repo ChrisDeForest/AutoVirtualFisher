@@ -2,7 +2,10 @@
 from dataclasses import dataclass, field
 
 # The reply each action expects.
-EXPECTED_REPLY = {'refresh_profile': 'profile', 'refresh_buffs': 'buffs', 'refresh_charms': 'charms', 'fish': 'fishing'}
+from .account_reads import ALL_READS, reply_of
+
+EXPECTED_REPLY = {'refresh_profile': 'profile', 'refresh_buffs': 'buffs', 'refresh_charms': 'charms', 'fish': 'fishing',
+                  **{kind: reply_of(kind) for kind in ALL_READS}}
 
 
 @dataclass(frozen=True)
@@ -43,7 +46,7 @@ class AutomationConfig:
     # A random extra wait before each fish: (share of fish, from, to, step) in seconds, ends included.
     jitter_bands: tuple = ((0.75, 0.0, 0.5, 0.05), (0.175, 0.5, 1.0, 0.1), (0.075, 1.0, 1.5, 0.1))
     mode: str = 'simulation'       # the separate native CLI explicitly selects 'live'
-    capabilities: tuple = field(default=('refresh_profile', 'refresh_buffs', 'refresh_charms', 'fish'))
+    capabilities: tuple = field(default=('refresh_profile', 'refresh_buffs', 'refresh_charms', *ALL_READS, 'fish'))
     resync_trips: int | None = 100   # /profile, /buffs and /charms are read again after this many trips
     retry_unread_trips: int = 10     # a reply missing anything is read again after this many trips
     assumed_cooldown: float = 5.0    # seconds, while /buffs is unread ("You must wait" replies correct it)

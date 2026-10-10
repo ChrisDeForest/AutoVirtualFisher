@@ -457,7 +457,8 @@ class Handler(BaseHTTPRequestHandler):
                                               max_trips=trips, max_seconds=minutes * 60 if minutes else None)
                     cls.automation = AutomationController(game, config, AutomationJournal(root / 'journal'),
                                                           root / 'fishing', root / 'review', monotonic=clock,
-                                                          utc=utc, interval=cls.automation_tick)
+                                                          utc=utc, interval=cls.automation_tick,
+                                                          state_path=root / 'account_state.json')
                     cls.automation_mode = 'simulation'
                     cls.automation.start(thread=True)
             elif action == 'stop' and current:

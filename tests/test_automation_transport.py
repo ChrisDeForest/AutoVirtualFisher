@@ -28,6 +28,21 @@ class SimulationTransportTests(unittest.TestCase):
     def transport(self, **options):
         return SimulationTransport(self.clock.monotonic, self.clock.utc, **options)
 
+    def test_every_account_read_and_page_is_answered_and_reads_cleanly(self):
+        from src.account_reads import ALL_READS, reply_of
+        from src.account_replies import PARSERS
+        from src.account_state import apply_read, empty_state
+        sim = self.transport(latency=0)
+        state = empty_state()
+        for number, kind in enumerate(ALL_READS):
+            sim.send(ActionIntent(f'r{number}', kind, 'sim:dm', self.clock.utc().isoformat(), reply_of(kind)))
+            reply = sim.poll()[-1]
+            self.assertEqual(reply.identity_status, 'verified', reply.kind)
+            state = apply_read(state, reply.kind, PARSERS[reply.kind](reply.text), '2026-10-10T00:00:00+00:00')
+        self.assertEqual(len(state['sections']), 10)
+        self.assertEqual({kind: section['unread'] for kind, section in state['sections'].items()
+                          if section['unread']}, {})
+
     def test_successful_trip_arrives_after_latency_with_correlation(self):
         sim = self.transport(latency=0.5)
         sim.send(intent(1))

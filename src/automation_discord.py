@@ -12,6 +12,7 @@ import threading
 import time
 from secrets import token_hex
 
+from .account_reads import ACCOUNT_READS, NEXT_PAGE, PAGE_TWO
 from .automation_models import CapabilityError, ContextStatus, DispatchReceipt, NotDispatched, TransportError
 from .live_capture import capture_frame
 from .observation import Identity, Observation, VERIFIED, check_identity, recipients
@@ -54,7 +55,11 @@ def stable_frame(lines):
             message['key'] = (kind, json.dumps(values, sort_keys=True, ensure_ascii=False))
     return frame
 
-COMMANDS = {'refresh_profile': '/profile', 'refresh_buffs': '/buffs', 'refresh_charms': '/charms', 'fish': '/fish'}
+COMMANDS = {'refresh_profile': '/profile', 'refresh_buffs': '/buffs', 'refresh_charms': '/charms', 'fish': '/fish',
+            **{kind: read.command for kind, read in ACCOUNT_READS.items()},
+            # Page 2 of a paged read is a click on the → button, never typed.
+            **{kind: NEXT_PAGE for kind in PAGE_TWO}}
+PAGE = re.compile(r'Page\s*(\d+)\s*/\s*(\d+)', re.I)
 # Identical reads of a fishing reply with problems before it is delivered as it is.
 FISHING_REREADS = 2
 # Seconds after sending /profile or /buffs before an identical reply sent that minute is taken as the answer.
@@ -158,6 +163,7 @@ class DiscordTransport:
         self.last_frame = None
         self.last_lines = None         # the raw chat lines of the latest capture, for diagnosis
         self.title = None
+        self.captcha_bottom = None     # the newest message when a captcha was delivered
         self.lock = threading.Lock()
 
     def enable(self):
@@ -221,6 +227,7 @@ class DiscordTransport:
             self.last_frame = frame
             if self.cancelled.is_set():
                 raise NotDispatched('Stopped before input.')
+            point = self._next_page_point(intent, before, frame) if COMMANDS[intent.kind] == NEXT_PAGE else None
             try:
                 # Only the bottom of the chat matters: what was newest before sending.
                 self.baseline, self.pending = _bottom(frame['messages']), intent
@@ -230,6 +237,9 @@ class DiscordTransport:
                 self.last_issue = None
                 now = self.local()
                 self.sent_clock, self.sent_minute = self.monotonic(), now.hour * 60 + now.minute
+                if point is not None:
+                    self.driver.click(point, self.cancelled.is_set)
+                    return DispatchReceipt(intent.action_id, self.utc().isoformat(), 'Next-page button clicked')
                 self.driver.dispatch(COMMANDS[intent.kind], self.cancelled.is_set)
                 return DispatchReceipt(intent.action_id, self.utc().isoformat(), 'Native UI command submitted')
             except Exception as error:
@@ -237,10 +247,47 @@ class DiscordTransport:
                 self.blocked = f'Dispatch could not be confirmed: {error}'
                 raise TransportError(self.blocked) from error
 
+    def _next_page_point(self, intent, capture, frame):
+        """Where to click for page 2: the rightmost button of the lowest button row, which must be an enabled
+        arrow, under this read's page 1 as the newest message. Refuses (nothing clicked) otherwise."""
+        messages = frame['messages']
+        page = PAGE.search('\n'.join(messages[-1]['lines'])) if messages else None
+        if not (messages and messages[-1]['kind'] == intent.expected_reply_kind and page and page[1] == '1'
+                and int(page[2]) > 1):
+            raise NotDispatched('Page 1 of this read is not the newest message.')
+        rows = capture.get('buttons') or []
+        if not rows:
+            raise NotDispatched('Next-page button not found.')
+        row = max(rows, key=lambda found: found['y'])
+        arrow = max(row['runs'], key=lambda run: run['right'])
+        if not arrow['enabled']:
+            raise NotDispatched('The next-page button is disabled.')
+        return ((arrow['left'] + arrow['right']) / 2, row['y'])
+
+    def captcha_cleared(self):
+        """After a captcha: whether a newer Virtual Fisher message that is not a captcha now sits below it. The
+        bot answers nothing else until the captcha is solved, so such a message means it was."""
+        if self.captcha_bottom is None:
+            return False
+        with self.lock:
+            try:
+                capture = self.driver.capture()
+            except Exception:
+                return False
+            if self._check(capture):
+                return False
+            messages = stable_frame(capture['lines'])['messages']
+            if not messages or messages[-1]['kind'] == 'captcha' or not _is_new(_bottom(messages), self.captcha_bottom):
+                return False
+            self.captcha_bottom = None
+            return True
+
     def _identical_refresh(self, messages):
         """A /profile or /buffs reply identical to one already at the bottom cannot be told apart on screen. Its
         data is the same either way, so after a short wait an own reply of that kind sent this minute is taken."""
-        if not messages or self.pending.kind not in ('refresh_profile', 'refresh_buffs', 'refresh_charms') or self.sent_clock is None:
+        # Typed reads only: a page-2 click must show a changed page.
+        if (not messages or not self.pending.kind.startswith('refresh_') or self.pending.kind in PAGE_TWO
+                or self.sent_clock is None):
             return False
         message = messages[-1]
         sent = _minute_of_day(message.get('sent'))
@@ -271,7 +318,7 @@ class DiscordTransport:
                     return []
                 lines = capture['lines']
                 invocations = [index for index, line in enumerate(lines) if re.match(r'^\S+ used\b', line)]
-                if invocations:
+                if invocations and COMMANDS[self.pending.kind] != NEXT_PAGE:
                     tail = lines[invocations[-1]:]
                     from .ocr_cleanup import MESSAGE_HEADER
                     command = COMMANDS[self.pending.kind].lstrip('/')
@@ -307,9 +354,14 @@ class DiscordTransport:
                                               'captcha', recipient, '\n'.join(message['lines']), status,
                                               correlation=action.action_id)
                     self.pending = self.baseline = self.candidate = None
+                    self.captcha_bottom = _bottom(frame['messages'])
                     self.last_issue = 'Virtual Fisher asked for a captcha.'
                     return [observation]
                 expected = message['kind'] == self.pending.expected_reply_kind
+                if expected and self.pending.kind in PAGE_TWO:
+                    # Page 2 replaces page 1 in the same message; only a later page answers the click.
+                    page = PAGE.search('\n'.join(message['lines']))
+                    expected = bool(page and int(page[1]) >= 2)
                 cooldown = self.pending.kind == 'fish' and any(
                     line.startswith('You must wait') for line in message['lines'])
                 # An own invocation is required in addition to recipient identity.

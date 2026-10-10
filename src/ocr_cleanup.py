@@ -105,7 +105,8 @@ def clean_ocr(lines: list[str], label: str, capture: bool = False) -> str:
             continue
         if after_used:
             after_used = False
-            if re.fullmatch(r'\W*\s*\w+', line):
+            # The command name; subcommands are two or three words ("shop upgrades", "prestige shop").
+            if re.fullmatch(r'\W*\s*\w+(?:\s+\w+){0,2}', line):
                 continue
         if in_tip and line[:1].islower():
             continue

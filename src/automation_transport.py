@@ -8,14 +8,18 @@ from dataclasses import replace
 from random import Random
 from typing import Protocol
 
-from .automation_models import ActionIntent, CapabilityError, ContextStatus, DispatchReceipt, TransportError
+from . import account_samples as samples
+from .account_reads import ALL_READS, reply_of
+from .automation_models import (ActionIntent, CapabilityError, ContextStatus, DispatchReceipt, NotDispatched,
+                                TransportError)
 from .observation import Identity, Observation, check_identity, recipients
 
 # Outcomes a test can script per send (by send index):
 #   ok, unreadable (a catch count, or profile/buffs digits, misread; the misread differs per attempt, as a reply
 #   caught mid-render would), noisy (a fishing reply with one extra garbled line), unreadable_fixed (the same misread every time, as the same pixels give), missing (the game acts but no reply is seen), duplicate (the reply is
 #   delivered twice), other_player_first (another player's reply arrives first), uncorrelated (the reply carries
-#   no evidence of which action it answers), send_error (the hand-over fails).
+#   no evidence of which action it answers), send_error (the hand-over fails), partial (one field lost to OCR),
+#   captcha, xp_unread (the profile's XP numbers lost), no_button (page 2's arrow not found; nothing sent).
 OUTCOMES = ('ok', 'unreadable', 'unreadable_fixed', 'noisy', 'missing', 'duplicate', 'other_player_first', 'uncorrelated', 'send_error')
 FISH = ('Salmon', 'Cod')
 # A real /charms reply (11 charms found).
@@ -29,6 +33,13 @@ SIM_CHARMS = ('Charms are found in high tier crates. Try to get them all!\n'
               '2/14 - :charm_green: Quality Charm - Increase quality of treasure. (2 to next tier).\n'
               '1/14 - :charm_blue: Experience Charm - Increase experience from all fish. (1 to next tier).\n'
               '11/840 - Charms found.')
+# Account replies, both pages, as seen on 2026-10-09.
+SIM_ACCOUNT = {'refresh_upgrades': samples.UPGRADES_PAGE_1, 'refresh_upgrades_page2': samples.UPGRADES_PAGE_2,
+               'refresh_shop_rods': samples.RODS_PAGE_1, 'refresh_shop_rods_page2': samples.RODS_PAGE_2,
+               'refresh_rod': samples.ROD, 'refresh_bait': samples.BAIT, 'refresh_biome': samples.BIOME,
+               'refresh_boats': samples.BOATS, 'refresh_pets': samples.PETS,
+               'refresh_prestige_shop': samples.PRESTIGE_SHOP, 'refresh_league': samples.LEAGUE_PAGE_1,
+               'refresh_league_page2': samples.LEAGUE_PAGE_2, 'refresh_boosts': samples.BOOSTS}
 VISIBLE_REPLIES = 12
 
 
@@ -45,7 +56,7 @@ class Transport(Protocol):
 class SimulationTransport:
     """A simulated player in a Virtual Fisher DM. `poll()` returns the replies currently "on screen" (the most
     recent ones, oldest first), so a restarted controller sees what the previous one may have missed."""
-    capabilities = ('refresh_profile', 'refresh_buffs', 'refresh_charms', 'fish')
+    capabilities = ('refresh_profile', 'refresh_buffs', 'refresh_charms', *ALL_READS, 'fish')
 
     def __init__(self, monotonic, utc, display_name='sim', username='sim0001', context_id='sim:dm', cooldown=3.5,
                  latency=0.4, seed=1, script=None):
@@ -64,6 +75,14 @@ class SimulationTransport:
     def inspect_context(self) -> ContextStatus:
         return self.context
 
+    def solve_captcha(self):
+        """The person answers the captcha; the next check sees a newer reply below it."""
+        self.captcha_solved = True
+
+    def captcha_cleared(self) -> bool:
+        solved, self.captcha_solved = getattr(self, 'captcha_solved', False), False
+        return solved
+
     def send(self, intent: ActionIntent) -> DispatchReceipt:
         if intent.kind not in self.capabilities:
             raise CapabilityError(f'The simulation cannot {intent.kind}.')
@@ -72,6 +91,8 @@ class SimulationTransport:
         outcome = self.script.get(index, 'ok')
         if outcome == 'send_error':
             raise TransportError('Simulated hand-over failure.')
+        if outcome == 'no_button':
+            raise NotDispatched('Next-page button not found.')
         text, kind = self._play(intent, now)
         if outcome == 'noisy' and kind == 'fishing':
             text += '\n$6 , 6O0 recieved for levelling up'  # an extra line OCR garbled beyond reading
@@ -87,7 +108,8 @@ class SimulationTransport:
         if outcome == 'partial':
             # One field lost to OCR, the rest readable.
             text = text.replace('Sell price: 1.00x\n', '').replace('Currently using Steel Rod.\n', '').replace(
-                'Catch more fish. (2 to next tier).', 'Catch more fish. (2 to n~xt t1er')
+                'Catch more fish. (2 to next tier).', 'Catch more fish. (2 to n~xt t1er').replace(
+                'Fishing Frenzy (0/5)', 'Fishing Frenzv (0/S)')
         if outcome == 'captcha':
             text, kind = 'Please complete this captcha to continue fishing.\nUse /captcha with the code shown.', 'captcha'
         if outcome == 'xp_unread' and kind == 'profile':
@@ -120,6 +142,8 @@ class SimulationTransport:
                     'Fish Value: $500', 'profile')
         if intent.kind == 'refresh_charms':
             return SIM_CHARMS, 'charms'
+        if intent.kind in SIM_ACCOUNT:
+            return SIM_ACCOUNT[intent.kind], reply_of(intent.kind)
         if intent.kind == 'refresh_buffs':
             return (f"{username}'s current multipliers (including bait):\nSell price: 1.00x\nFish catch: 1.00x\n"
                     'Fish quality: 1.00x\nTreasure chance: 1.00x\nTreasure quality: 1.00x\nXP Multiplier: 1.00x\n'

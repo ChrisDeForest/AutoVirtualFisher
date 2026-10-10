@@ -16,6 +16,12 @@ from src.review_queue import list_items
 CONFIG = AutomationConfig(account='sim', username='sim0001', context_id='sim:dm',
                           capabilities=('refresh_profile', 'refresh_buffs', 'fish'))
 CHARMS_CONFIG = ('refresh_profile', 'refresh_buffs', 'refresh_charms', 'fish')
+# Every read: what a live run does.
+from src.account_reads import ALL_READS  # noqa: E402
+READS_CONFIG = ('refresh_profile', 'refresh_buffs', 'refresh_charms', *ALL_READS, 'fish')
+ACCOUNT_ORDER = ['refresh_upgrades', 'refresh_upgrades_page2', 'refresh_shop_rods', 'refresh_shop_rods_page2',
+                 'refresh_rod', 'refresh_bait', 'refresh_biome', 'refresh_boats', 'refresh_pets',
+                 'refresh_prestige_shop', 'refresh_league', 'refresh_league_page2', 'refresh_boosts']
 STEP = 0.1
 
 
@@ -72,10 +78,10 @@ class ControllerTests(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
-    def make(self, journal=None, config=CONFIG):
+    def make(self, journal=None, config=CONFIG, state_path=None):
         self.controller = AutomationController(self.sim, config, journal or AutomationJournal(self.journal_root),
                                                self.fishing, self.review, monotonic=self.clock.monotonic,
-                                               utc=self.clock.utc)
+                                               utc=self.clock.utc, state_path=state_path)
         return self.controller
 
     def run_for(self, seconds, controller=None):
@@ -314,6 +320,45 @@ class ControllerTests(unittest.TestCase):
                                         'refresh_charms', 'fish'])
         self.assertEqual(self.controller.status()['dashboard']['unread'], {})
 
+    # --- reading the account ---
+
+    def test_the_account_is_read_at_startup_and_each_resync_and_saved(self):
+        from src.account_state import load_state
+        path = self.journal_root.parent / 'account_state.json'
+        self.make(config=replace(CONFIG, max_trips=4, resync_trips=3, capabilities=READS_CONFIG),
+                  state_path=path).start()
+        self.run_for(150)
+        startup = ['refresh_profile', 'refresh_buffs', 'refresh_charms'] + ACCOUNT_ORDER
+        self.assertEqual(self.kinds(), startup + ['fish'] * 3 + startup + ['fish'])
+        sections = load_state(path)['sections']
+        self.assertEqual(len(sections), 10)
+        self.assertEqual({kind: section['unread'] for kind, section in sections.items() if section['unread']}, {})
+        self.assertEqual(sections['shop_upgrades']['values']['items']['Better Chests']['price'], 100000)
+        self.assertEqual(self.controller.status()['account']['sections']['pet']['values']['current'], 'Dolphin')
+
+    def test_page_two_that_cannot_be_clicked_never_stops_fishing(self):
+        # Send 3 (counting from 0) is /shop upgrades page 2, after profile, buffs and page 1.
+        self.sim.script = {3: 'no_button'}
+        reads = ('refresh_profile', 'refresh_buffs', 'refresh_upgrades', 'refresh_upgrades_page2', 'fish')
+        self.make(config=replace(CONFIG, max_trips=4, resync_trips=100, retry_unread_trips=2,
+                                 capabilities=reads)).start()
+        self.run_for(80)
+        self.assertEqual(self.kinds(), ['refresh_profile', 'refresh_buffs', 'refresh_upgrades',
+                                        'refresh_upgrades_page2', 'fish', 'fish', 'refresh_upgrades',
+                                        'refresh_upgrades_page2', 'fish', 'fish'])
+        self.assertEqual(self.saved_trips(), 4)
+        self.assertEqual(self.controller.status()['dashboard']['unread'], {})
+
+    def test_a_garbled_league_line_is_read_again(self):
+        self.sim.script = {3: 'partial'}   # /shop league page 2
+        reads = ('refresh_profile', 'refresh_buffs', 'refresh_league', 'refresh_league_page2', 'fish')
+        self.make(config=replace(CONFIG, max_trips=3, resync_trips=100, retry_unread_trips=2,
+                                 capabilities=reads)).start()
+        self.run_for(80)
+        self.assertEqual(self.kinds(), ['refresh_profile', 'refresh_buffs', 'refresh_league', 'refresh_league_page2',
+                                        'fish', 'fish', 'refresh_league', 'refresh_league_page2', 'fish'])
+        self.assertEqual(self.controller.status()['account']['sections']['shop_league']['unread'], [])
+
     def test_complete_reads_wait_for_the_regular_resync(self):
         self.make(config=replace(CONFIG, max_trips=25, resync_trips=100)).start()
         self.run_for(200)
@@ -347,6 +392,20 @@ class ControllerTests(unittest.TestCase):
         self.controller.resume()
         self.run_for(30)
         self.assertEqual(self.saved_trips(), 5)
+
+    def test_a_captcha_pause_ends_once_a_newer_reply_appears(self):
+        self.sim.script = {3: 'captcha'}
+        self.make(config=replace(CONFIG, max_trips=4))
+        self.controller.alert = lambda message: None
+        self.controller.start()
+        self.run_for(20)
+        self.assertEqual(self.controller.status()['phase'], 'CAPTCHA', 'still paused without an answer')
+        self.sim.solve_captcha()
+        self.run_for(30)
+        self.assertFalse(self.controller.status()['paused'])
+        self.assertEqual(self.saved_trips(), 4)
+        events = [event['type'] for event in AutomationJournal(self.journal_root).events()[0]]
+        self.assertIn('captcha_solved', events)
 
     def test_each_fish_waits_a_random_extra_in_steps(self):
         self.make(config=replace(CONFIG, max_trips=12)).start()

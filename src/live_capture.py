@@ -229,7 +229,7 @@ def _understood(kind, lines):
     if kind == 'fishing':
         unknown = {warning.removeprefix('Unrecognized line: ') for warning in parse_fishing(text)['warnings']}
         return tuple(line for line in lines if _clean(line) not in unknown)
-    if kind is not None and kind != 'charms':
+    if kind in ('profile', 'buffs', 'prestige_shop', 'pet', 'quests'):
         unparsed = set(parse_responses(**{kind: text})['unparsed'].get(kind, []))
         return tuple(line for line in lines if line not in unparsed)
     return tuple(lines)
@@ -382,8 +382,15 @@ def make_capture(keep_dir: Path | None = None, keep_limit: int = KEEP_LIMIT, win
             if keep_dir is not None and lines != last_kept['lines']:
                 _keep(image, Path(keep_dir), info, boxes, lines, bmp_to_png, keep_limit)
                 last_kept['lines'] = lines
-            return {'status': 'ok', 'lines': lines, 'boxes': input_boxes, 'original_boxes': boxes, 'context': {'window': window[0], 'title': window[1],
-                                                                 'channel': channel_name(boxes, info['height'])}}
+            try:
+                from .ocr_image import button_rows
+                # Arrow buttons have no text; found by colour before the image is deleted.
+                buttons = button_rows(image, boxes)
+            except (OSError, ValueError):
+                buttons = []
+            return {'status': 'ok', 'lines': lines, 'boxes': input_boxes, 'original_boxes': boxes,
+                    'buttons': buttons, 'context': {'window': window[0], 'title': window[1],
+                                                    'channel': channel_name(boxes, info['height'])}}
         finally:
             image.unlink(missing_ok=True)
 
@@ -745,8 +752,8 @@ class LiveCapture:
                     # A credible depletion ends the bait even when the rest of the trip could not be read.
                     flush()
                     self._set_bait(None, 'verified', 'Bait ran out')
-            elif kind in ('charms', 'captcha'):
-                # Read by automation runs; this capture logbook keeps no charm or captcha record.
+            elif kind not in ('profile', 'buffs', 'prestige_shop', 'pet', 'quests'):
+                # Charms, captchas and account replies are read by automation runs; this logbook keeps no record.
                 self.counts['ignored'] += 1
             else:
                 reasons = self._player_problems(kind, text)

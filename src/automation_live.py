@@ -44,7 +44,8 @@ def build_live(channel, account, username, root=DEFAULT_LIVE_ROOT, max_trips=Non
     config = AutomationConfig(account, username, transport.context_id,
                               max_trips=max_trips, max_seconds=max_seconds, mode='live')
     controller = AutomationController(transport, config, AutomationJournal(folder / 'journal'),
-                                      folder / 'fishing', folder / 'review', interval=interval, alert=show_alert)
+                                      folder / 'fishing', folder / 'review', interval=interval, alert=show_alert,
+                                      state_path=folder / 'account_state.json')
     return controller, transport
 
 

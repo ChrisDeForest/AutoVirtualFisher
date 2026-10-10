@@ -28,7 +28,23 @@ def _kind(line):
         return 'fishing'
     if line.startswith('Charms are found in') or re.fullmatch(r'[\d,]+\s*/\s*[\d,]+\s*-\s*Charms found\.?', line, re.I):
         return 'charms'
+    # Account replies read by automation runs (each by the fixed line it always shows).
+    for kind, marker in ACCOUNT_MARKERS:
+        if marker.match(line):
+            return kind
     return None
+
+
+ACCOUNT_MARKERS = (
+    ('shop_upgrades', re.compile(r'Upgrades in this category are permanent', re.I)),
+    ('shop_rods', re.compile(r'Fishing Rod Shop$', re.I)),
+    ('rod', re.compile(r'/rod\s*<rod name>', re.I)),
+    ('bait', re.compile(r'/bait\s*<bait type>', re.I)),
+    ('biome', re.compile(r'Current Biome:', re.I)),
+    ('shop_boats', re.compile(r'All boats are permanent', re.I)),
+    ('shop_league', re.compile(r'League Shop$', re.I)),
+    ('boosts', re.compile(r'Active Boosts$', re.I)),
+)
 
 
 def split_messages(text: str) -> list[dict]:
@@ -104,7 +120,8 @@ def detect(text: str) -> dict:
             kinds = [found for found in (_kind(_clean(line)) for line in message['lines']) if found]
             pieces = [(kinds[0] if kinds else None, message['lines'])]
         for kind, lines in pieces:
-            if kind is None:
+            if kind is None or (kind != 'fishing' and kind not in responses):
+                # Replies only automation runs read (charms, shops, …) are skipped here as before.
                 skipped_bot += 1
                 continue
             counts[kind] = counts.get(kind, 0) + 1

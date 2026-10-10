@@ -16,6 +16,9 @@ import re
 import threading
 import time
 
+from .account_reads import ACCOUNT_READS, PAGE_TWO, read_of
+from .account_replies import PARSERS as ACCOUNT_PARSERS
+from .account_state import apply_read, empty_state, load_state, save_state
 from .automation_journal import AutomationJournal
 from .automation_models import AutomationConfig, CapabilityError, NotDispatched, TransportError
 from .automation_policy import next_action
@@ -40,7 +43,8 @@ STARTUP_RETRY_DELAY = 2.0
 # Unknown outcomes in a row (no reply, unreadable, failed hand-over) before a run gives up.
 UNKNOWN_LIMIT = 3
 CAPTCHA_REASON = ('Virtual Fisher asked for a captcha. Type /captcha with the code from the image in Discord '
-                  '(exact case), then press Resume.')
+                  '(exact case). Fishing carries on by itself once Virtual Fisher replies to anything again; '
+                  'Resume also works.')
 # After a refusal before any input (Discord not in front, message box not empty), the wait before trying again.
 REFUSAL_RETRY_DELAY = 2.0
 
@@ -55,6 +59,12 @@ def _references():
     return tuple(_REFERENCES)
 
 
+def _read_anything(parsed: dict) -> bool:
+    """Whether an account reply read at all: it lacks nothing it must show ("Current bait: NONE" is a reading),
+    or it showed some value."""
+    return not parsed['unread'] or any(value not in (None, {}, [], '') for value in parsed['values'].values())
+
+
 def _iso(moment: datetime) -> str:
     return moment.isoformat()
 
@@ -62,8 +72,11 @@ def _iso(moment: datetime) -> str:
 class AutomationController:
     def __init__(self, transport, config: AutomationConfig, journal: AutomationJournal, fishing_root: Path,
                  review_root: Path, monotonic=time.monotonic, utc=None, policy=next_action, interval=0.2,
-                 rng=None, alert=None):
+                 rng=None, alert=None, state_path=None):
         self.transport, self.config, self.journal, self.policy = transport, config, journal, policy
+        # The account as its replies last showed it, saved so it outlives the run (see account_state).
+        self.state_path = Path(state_path) if state_path else None
+        self.account = load_state(self.state_path) if self.state_path else empty_state()
         self.roots = {'fishing': Path(fishing_root), 'review': Path(review_root)}
         self.monotonic = monotonic
         self.utc = utc or (lambda: datetime.now(timezone.utc))
@@ -139,9 +152,9 @@ class AutomationController:
             self.paused, self.captcha = False, None
             self.jitter, self.jitters = 0.0, []
             self._reset_stats()
-            if 'refresh_charms' in self.config.capabilities:
-                # Read once the profile and cooldown are known, before the first fish.
-                self.state = replace(self.state, refresh_due=('refresh_charms',))
+            # Read once the profile and cooldown are known, before the first fish.
+            self.state = replace(self.state, refresh_due=tuple(
+                kind for kind in ('refresh_charms', *self._account_reads()) if kind in self.config.capabilities))
             self.startup_retry_at = float('-inf')
             self.acknowledged = {action for action, info in recovered['actions'].items()
                                  if info['status'] in ('acknowledged', 'projected')}
@@ -233,7 +246,7 @@ class AutomationController:
                     'context_ok': self.state.context_ok, 'config': {
                         'account': self.config.account, 'context_id': self.config.context_id,
                         'max_trips': self.config.max_trips, 'max_seconds': self.config.max_seconds},
-                    'dashboard': self._dashboard(),
+                    'dashboard': self._dashboard(), 'account': self.account,
                     'startup': {'failures': dict(self.startup_failures),
                                 'problems': dict(self.startup_problems),
                                 'confirmed_fields': dict(self.state.startup_observed_at)}}
@@ -292,6 +305,10 @@ class AutomationController:
             if self.unresolved:
                 self.phase, self.reason = 'NEEDS_REVIEW', self._unresolved_text()
                 return
+            if self.paused and self.captcha and self._captcha_cleared():
+                # The bot answers nothing else until a captcha is solved: a newer reply means it was.
+                self.paused, self.captcha = False, None
+                self._safe_event('captcha_solved', None)
             if self.paused:
                 if self.captcha:
                     self.phase, self.reason = 'CAPTCHA', CAPTCHA_REASON
@@ -349,6 +366,14 @@ class AutomationController:
             self.in_flight = None
             if failure or generation != self.generation:
                 self.state = replace(self.state, pending=None)
+            if failure and failure[0] == 'refused' and intent.kind in PAGE_TWO:
+                # Page 2's arrow was not found: nothing was clicked. Page 2 is read again with its read later.
+                self._safe_event('abandoned', intent.action_id, reason=failure[1])
+                read = read_of(intent.kind)
+                self.state = replace(self.state, refresh_due=tuple(k for k in self.state.refresh_due
+                                                                   if k != intent.kind))
+                self.unread[read], self.unread_trips[read] = [f'Page 2 ({failure[1]})'], 0
+                return
             if failure and failure[0] == 'refused':
                 # Nothing was typed: pause and try again once Discord is ready. The run is not over.
                 self._safe_event('abandoned', intent.action_id, reason=failure[1])
@@ -454,7 +479,11 @@ class AutomationController:
         wait = COOLDOWN_REPLY.search(observation.text)
         tally = None
         problems = []
-        if kind == 'refresh_charms':
+        if kind in ACCOUNT_READS or kind in PAGE_TWO:
+            parsed = ACCOUNT_PARSERS[observation.kind](observation.text)
+            problems = [] if _read_anything(parsed) else ['Nothing could be read from this reply.']
+            result = 'unreadable' if problems else 'refreshed'
+        elif kind == 'refresh_charms':
             # Any charm line read is worth keeping; a reply missing one is read again soon (see unread_fields).
             problems = [] if parse_charms(observation.text)['charms'] else ['No charm line could be read.']
             result = 'unreadable' if problems else 'refreshed'
@@ -490,6 +519,12 @@ class AutomationController:
         now = self.monotonic()
         if result == 'cooldown':
             self.ready_at = now + float(wait[1]) + self.config.cooldown_margin + self.jitter
+        elif result == 'unreadable' and (kind in ACCOUNT_READS or kind in PAGE_TWO):
+            # Fishing never waits on it; the whole read (both pages) is tried again later.
+            self.state = replace(self.state, refresh_due=tuple(k for k in self.state.refresh_due if k != kind))
+            self._defer(read_of(kind), observation, problems)
+        elif result == 'refreshed' and (kind in ACCOUNT_READS or kind in PAGE_TWO):
+            self._refreshed_account(kind, observation, parsed)
         elif result == 'unreadable' and kind in self.state.refresh_due:
             # A resync or retry that could not be read: fishing never waits on it; it is tried again later.
             self._defer(kind, observation, problems)
@@ -558,7 +593,7 @@ class AutomationController:
             if (self.config.resync_trips and len(self.sync_tallies) >= self.config.resync_trips
                     and not self.state.refresh_due):
                 self.state = replace(self.state, refresh_due=tuple(
-                    kind for kind in ('refresh_profile', 'refresh_buffs', 'refresh_charms')
+                    kind for kind in ('refresh_profile', 'refresh_buffs', 'refresh_charms', *self._account_reads())
                     if kind in self.config.capabilities))
             self._count_retries()
             self._project(action_id, tally)
@@ -610,6 +645,41 @@ class AutomationController:
             return
         self.ready_at = max(self.ready_at, self.monotonic() + (self.state.cooldown_seconds or 0)
                             + self.config.cooldown_margin + self.jitter)
+
+    def _captcha_cleared(self):
+        check = getattr(self.transport, 'captcha_cleared', None)
+        try:
+            return bool(check and check())
+        except Exception:
+            return False
+
+    def _account_reads(self):
+        return tuple(kind for kind in ACCOUNT_READS if kind in self.config.capabilities)
+
+    def _refreshed_account(self, kind, observation, parsed):
+        """Apply an account reply and save the state. Page 1 of a paged read queues page 2 next; a read that
+        still lacks something (after both pages) is read again every few trips."""
+        self.account = apply_read(self.account, observation.kind, parsed, observation.observed_at)
+        if self.state_path:
+            try:
+                save_state(self.state_path, self.account)
+            except OSError as error:
+                self._safe_event('state_not_saved', None, reason=str(error))
+        read = read_of(kind)
+        due = tuple(k for k in self.state.refresh_due if k != kind)
+        page_two = f'{kind}_page2'
+        if page_two in PAGE_TWO and page_two in self.config.capabilities:
+            self.state = replace(self.state, refresh_due=(page_two,) + tuple(k for k in due if k != page_two))
+            return
+        self.state = replace(self.state, refresh_due=due,
+                             deferred=tuple(k for k in self.state.deferred if k != read))
+        self.retry_counts.pop(read, None)
+        unread = self.account['sections'][observation.kind]['unread']
+        if unread:
+            self.unread[read], self.unread_trips[read] = list(unread), 0
+        else:
+            self.unread.pop(read, None)
+            self.unread_trips.pop(read, None)
 
     def _defer(self, kind, observation, problems):
         """Set an unreadable /profile or /buffs aside: noted in Needs review, tried again every few trips. Without

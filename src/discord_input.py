@@ -80,6 +80,10 @@ class WindowsDiscordDriver:
         # Release even when stop arrives after mouse-down.
         self._event(0, 0x0004, lambda: False, release=True)
 
+    def click(self, point, cancelled):
+        """Click a message button at window coordinates, with the same foreground and stop guards as typing."""
+        self._click(point, cancelled)
+
     def _key(self, vk, cancelled):
         self._event(1, (vk, 0, 0), cancelled)
         self._event(1, (vk, 0, 2), lambda: False, release=True)

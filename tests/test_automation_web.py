@@ -201,6 +201,27 @@ class AutomationWebTests(unittest.TestCase):
         self.post(action='resume')
         self.assertFalse(self.handler.automation.status()['paused'])
 
+    def test_account_box_lists_what_replies_showed(self):
+        from src import account_samples as sample
+        from src.account_replies import PARSERS
+        from src.account_state import apply_read, empty_state
+        account = empty_state()
+        for kind, text in (('shop_upgrades', sample.UPGRADES_PAGE_1), ('shop_upgrades', sample.UPGRADES_PAGE_2),
+                           ('shop_rods', sample.RODS_PAGE_1), ('shop_boats', sample.BOATS), ('pet', sample.PETS),
+                           ('shop_league', sample.LEAGUE_PAGE_1), ('bait', sample.BAIT), ('biome', sample.BIOME)):
+            account = apply_read(account, kind, PARSERS[kind](text), '2026-10-10T00:00:00+00:00')
+        status = {'running': False, 'reason': 'done', 'phase': 'STOPPED', 'trips': 0, 'config': {'max_trips': 0},
+                  'dashboard': {}, 'account': account}
+        panel = unescape(render_panel(status))
+        self.assertIn('<h2>Account</h2>', panel)
+        for text in ('Better Fish 7/21', 'Better Chests 0/5', 'Fiberglass Rod (in use)', 'Rowboat',
+                     'Fishing Boat next, $25,000', 'Dolphin 52 (current)', 'Super Crates 2/5', 'None',
+                     'River', 'Hooks: 11'):
+            self.assertIn(text, panel)
+        self.assertIn('Not read: Worker Crates, Fishing Frenzy, Duplicator 2.0', panel, 'league page 2 missing')
+        self.assertIn('Prestige shop', panel)
+        self.assertIn('Not read yet', panel)
+
     def test_all_eight_charms_are_listed_without_scrolling(self):
         from src.automation_web import _finds_box
         from src.fishing_log import CHARM_NAMES

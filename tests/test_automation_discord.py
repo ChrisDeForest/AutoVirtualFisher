@@ -97,7 +97,19 @@ class Driver:
         self.foreground = True
 
     def capture(self):
-        return dict(status=self.status, lines=self.lines, context=self.context)
+        return dict(status=self.status, lines=self.lines, context=self.context, buttons=self.buttons)
+
+    buttons = ()
+    clicks = None
+
+    def click(self, point, cancelled):
+        if cancelled():
+            raise TransportError('Stopped')
+        self.clicks = (self.clicks or []) + [point]
+        if self.on_click:
+            self.on_click()
+
+    on_click = None
 
     def is_foreground(self):
         return self.foreground
@@ -154,6 +166,65 @@ class DiscordTests(unittest.TestCase):
         self.assertEqual(self.transport.poll(), [])
         replies = self.transport.poll()
         self.assertEqual([(reply.kind, reply.correlation) for reply in replies], [('charms', 'c1')])
+
+    def account(self, kind, text, stamp='11:42 PM'):
+        return ['epicmouse used', '% ' + kind, 'Virtual Fisher ' + stamp, *text.splitlines()]
+
+    def test_account_read_is_typed_and_delivered(self):
+        from src import account_samples as sample
+        self.intent = ActionIntent('u1', 'refresh_upgrades', self.transport.context_id, self.now.isoformat(),
+                                   'shop_upgrades')
+        self.send()
+        self.assertEqual(self.driver.sent, ['/shop upgrades'])
+        self.driver.lines = self.driver.lines + self.account('shop upgrades', sample.UPGRADES_PAGE_1)
+        self.assertEqual(self.transport.poll(), [])
+        self.assertEqual([reply.kind for reply in self.transport.poll()], ['shop_upgrades'])
+
+    def page_one_on_screen(self):
+        from src import account_samples as sample
+        self.driver.lines = self.driver.lines + self.account('shop upgrades', sample.UPGRADES_PAGE_1)
+        self.driver.buttons = [{'y': 640, 'height': 16, 'runs': [{'left': 137, 'right': 227, 'enabled': False},
+                                                                  {'left': 239, 'right': 329, 'enabled': True}]}]
+        self.intent = ActionIntent('u2', 'refresh_upgrades_page2', self.transport.context_id, self.now.isoformat(),
+                                   'shop_upgrades')
+
+    def test_page_two_clicks_the_enabled_arrow_and_waits_for_the_page_to_change(self):
+        from src import account_samples as sample
+        self.page_one_on_screen()
+        page_two = self.account('shop upgrades', sample.UPGRADES_PAGE_2)
+        self.driver.on_click = lambda: setattr(self.driver, 'lines', self.driver.lines[:-len(page_two)] + page_two)
+        self.send()
+        self.assertEqual(self.driver.clicks, [(284.0, 640)])
+        self.assertEqual(self.driver.sent, [], 'nothing typed')
+        self.assertEqual(self.transport.poll(), [])
+        [reply] = self.transport.poll()
+        self.assertEqual((reply.kind, reply.correlation), ('shop_upgrades', 'u2'))
+        self.assertIn('Page 2/2', reply.text)
+
+    def test_page_one_unchanged_is_never_the_answer(self):
+        self.page_one_on_screen()
+        self.send()
+        self.now = self.now.replace(minute=5)
+        for _ in range(4):
+            self.assertEqual(self.transport.poll(), [])
+
+    def test_no_enabled_arrow_refuses_without_clicking(self):
+        from src.automation_models import NotDispatched
+        self.page_one_on_screen()
+        self.driver.buttons[0]['runs'][1]['enabled'] = False
+        with self.assertRaises(NotDispatched):
+            self.send()
+        self.assertIsNone(self.driver.clicks)
+
+    def test_captcha_clears_once_a_newer_reply_appears_below_it(self):
+        self.send()
+        self.driver.lines = self.driver.lines + ['epicmouse used', '% fish', 'Virtual Fisher 11:42 AM',
+                                                 'Please complete this captcha to continue fishing.']
+        self.transport.poll()
+        self.assertEqual([reply.kind for reply in self.transport.poll()], ['captcha'])
+        self.assertFalse(self.transport.captcha_cleared(), 'the captcha is still the newest message')
+        self.driver.lines = self.driver.lines + fish(3, 3, 30)
+        self.assertTrue(self.transport.captcha_cleared())
 
     def test_captcha_message_is_delivered_as_a_captcha(self):
         self.send()
@@ -422,8 +493,10 @@ class ControllerIntegrationTests(unittest.TestCase):
                                      'epicmouse9925', utc=clock.utc)
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
+            # Bootstrap and one trip; the account reads have tests of their own.
             config = AutomationConfig('epicmouse', 'epicmouse9925', transport.context_id,
-                                      max_trips=1, max_seconds=120, mode='live')
+                                      max_trips=1, max_seconds=120, mode='live',
+                                      capabilities=('refresh_profile', 'refresh_buffs', 'refresh_charms', 'fish'))
             controller = AutomationController(transport, config, AutomationJournal(root/'journal'),
                                               root/'fish', root/'review', utc=clock.utc,
                                               monotonic=clock.monotonic)

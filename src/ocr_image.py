@@ -46,3 +46,57 @@ def contrast_region(source, output, region, scale=3, threshold=None, border=12):
     Path(output).write_bytes(b'\x89PNG\r\n\x1a\n'
         + chunk(b'IHDR', struct.pack('>IIBBBBB', out_width, out_height, 8, 0, 0, 0, 0))
         + chunk(b'IDAT', zlib.compress(b''.join(rows), 6)) + chunk(b'IEND', b''))
+
+
+def _bmp(source):
+    """(data, offset, width, height, top_down) of a native 32-bit BMP."""
+    data = Path(source).read_bytes()
+    if data[:2] != b'BM' or len(data) < 54:
+        raise ValueError('Expected a native BMP capture.')
+    offset = struct.unpack_from('<I', data, 10)[0]
+    width, signed_height = struct.unpack_from('<ii', data, 18)
+    bits, compression = struct.unpack_from('<HI', data, 28)
+    if bits != 32 or compression != 0 or width <= 0 or signed_height == 0:
+        raise ValueError('Unsupported BMP layout.')
+    return data, offset, width, abs(signed_height), signed_height < 0
+
+
+def _blurple(b, g, r):
+    """'on' for an enabled Discord primary button, 'off' for a disabled one, else None."""
+    if b >= 200 and b - r >= 80 and g <= 160:
+        return 'on'
+    if 100 <= b < 200 and b - r >= 40 and r <= 110:
+        return 'off'
+    return None
+
+
+def button_rows(source, boxes) -> list[dict]:
+    """Message button rows: for each OCR box reading exactly "Back", the blurple buttons on its row to the right,
+    as runs {'left', 'right', 'enabled'} in window pixels. The arrow buttons carry no text for OCR, so they are
+    found by colour; an arrow glyph inside a button is bridged."""
+    data, offset, width, height, top_down = _bmp(source)
+    rows = []
+    for box in boxes:
+        if box.get('text', '').strip() != 'Back':
+            continue
+        text_height = max(1, box['bottom'] - box['top'])
+        y = round((box['top'] + box['bottom']) / 2)
+        if not 0 <= y < height:
+            continue
+        source_y = y if top_down else height - 1 - y
+        start = offset + source_y * width * 4
+        runs, gap_limit = [], 0.6 * text_height
+        for x in range(max(0, int(box['right'])), width):
+            pixel = start + x * 4
+            colour = _blurple(data[pixel], data[pixel + 1], data[pixel + 2])
+            if colour is None:
+                continue
+            if runs and runs[-1]['colour'] == colour and x - runs[-1]['right'] - 1 <= gap_limit:
+                runs[-1]['right'] = x
+            else:
+                runs.append({'left': x, 'right': x, 'colour': colour})
+        runs = [{'left': run['left'], 'right': run['right'], 'enabled': run['colour'] == 'on'}
+                for run in runs if run['right'] - run['left'] + 1 >= 1.5 * text_height]
+        if runs:
+            rows.append({'y': y, 'height': text_height, 'runs': runs})
+    return rows
