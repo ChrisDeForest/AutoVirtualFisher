@@ -330,8 +330,49 @@ def channel_name(boxes: list[dict], image_height: float) -> str | None:
         if box['top'] > image_height * TOP_BAR_FRACTION:
             break
         if match := re.fullmatch(r'Search\s+(.+?)(?:#\d{4})?', box['text'].strip()):
-            return match[1].strip()
+            name = match[1].strip()
+            # A narrow (snapped) window shortens it to "Search Virtual …": not a name on its own.
+            return None if TRUNCATED.search(name) else name
     return None
+
+
+TRUNCATED = re.compile(r'(\.{2,}|…)$')
+
+
+def channel_hints(boxes: list[dict], image_height: float) -> dict:
+    """Every place the open DM's name shows: the search box (possibly shortened), the chat header in the top bar
+    ("Virtual Fisher /fish"), and the message box placeholder ("Message @Virtual Fisher", hidden while a draft is
+    typed). channel_matches weighs them."""
+    hints = {'search': None, 'header': [], 'composer': None}
+    for box in boxes:
+        text = box['text'].strip()
+        if box['top'] <= image_height * TOP_BAR_FRACTION:
+            if match := re.fullmatch(r'Search\s+(.+?)(?:#\d{4})?', text):
+                hints['search'] = hints['search'] or match[1].strip()
+            else:
+                hints['header'].append(text)
+        if match := re.fullmatch(r'Message\s*@\s*(.+)', text):
+            hints['composer'] = match[1].strip()
+    return hints
+
+
+def channel_matches(context: dict, expected: str) -> bool:
+    """Whether the capture shows the expected DM. A full name anywhere confirms it: the search box, the message
+    box placeholder, or the top bar's chat header. A full search name that differs always fails, and a shortened
+    search name must agree with the expected one."""
+    expected_key = expected.casefold()
+    if (context.get('channel') or '').casefold() == expected_key:
+        return True
+    hints = context.get('channel_hints') or {}
+    search = (hints.get('search') or '').strip()
+    if search:
+        prefix = TRUNCATED.sub('', search).strip().casefold()
+        if not TRUNCATED.search(search) or not expected_key.startswith(prefix):
+            return False
+    if (hints.get('composer') or '').casefold() == expected_key:
+        return True
+    return any(text.casefold() == expected_key or text.casefold().startswith(expected_key + ' ')
+               for text in hints.get('header') or [])
 
 
 def context_key(context: dict) -> str:
@@ -390,7 +431,8 @@ def make_capture(keep_dir: Path | None = None, keep_limit: int = KEEP_LIMIT, win
                 buttons = []
             return {'status': 'ok', 'lines': lines, 'boxes': input_boxes, 'original_boxes': boxes,
                     'buttons': buttons, 'context': {'window': window[0], 'title': window[1],
-                                                    'channel': channel_name(boxes, info['height'])}}
+                                                    'channel': channel_name(boxes, info['height']),
+                                                    'channel_hints': channel_hints(boxes, info['height'])}}
         finally:
             image.unlink(missing_ok=True)
 

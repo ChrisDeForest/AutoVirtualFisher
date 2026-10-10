@@ -13,8 +13,9 @@ import time
 from secrets import token_hex
 
 from .account_reads import ACCOUNT_READS, NEXT_PAGE, PAGE_TWO
-from .automation_models import CapabilityError, ContextStatus, DispatchReceipt, NotDispatched, TransportError
-from .live_capture import capture_frame
+from .automation_models import (CapabilityError, ContextStatus, DispatchReceipt, NOT_FOREGROUND, NotDispatched,
+                                TransportError)
+from .live_capture import capture_frame, channel_matches
 from .observation import Identity, Observation, VERIFIED, check_identity, recipients
 
 
@@ -181,7 +182,7 @@ class DiscordTransport:
             return 'Capture unavailable: ' + str(capture.get('status'))
         if context.get('window') != self.window:
             return 'Different Discord window.'
-        if (context.get('channel') or '').casefold() != self.channel.casefold():
+        if not channel_matches(context, self.channel):
             return 'Different or unreadable channel.'
         title = context.get('title')
         if not title:
@@ -189,7 +190,7 @@ class DiscordTransport:
         if self.title is not None and title != self.title:
             return 'Discord window title changed; context must be checked again.'
         if not self.driver.is_foreground():
-            return 'Discord must remain in the foreground.'
+            return NOT_FOREGROUND
         # A captcha is not checked here: a new one at the bottom of the chat is delivered as a reply, and the
         # controller pauses until the person resumes. One already answered may stay on screen for a while.
         self.title = title
@@ -242,6 +243,10 @@ class DiscordTransport:
                     return DispatchReceipt(intent.action_id, self.utc().isoformat(), 'Next-page button clicked')
                 self.driver.dispatch(COMMANDS[intent.kind], self.cancelled.is_set)
                 return DispatchReceipt(intent.action_id, self.utc().isoformat(), 'Native UI command submitted')
+            except NotDispatched:
+                # Nothing was sent (the driver says so: interrupted, or refused before the final Enter).
+                self.pending = self.baseline = None
+                raise
             except Exception as error:
                 # Enter may or may not have been pressed. Not repeated; the controller decides when to move on.
                 self.blocked = f'Dispatch could not be confirmed: {error}'

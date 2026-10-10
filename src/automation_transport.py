@@ -10,8 +10,8 @@ from typing import Protocol
 
 from . import account_samples as samples
 from .account_reads import ALL_READS, reply_of
-from .automation_models import (ActionIntent, CapabilityError, ContextStatus, DispatchReceipt, NotDispatched,
-                                TransportError)
+from .automation_models import (ActionIntent, CapabilityError, ContextStatus, DispatchReceipt, Interrupted,
+                                NOT_FOREGROUND, NotDispatched, TransportError)
 from .observation import Identity, Observation, check_identity, recipients
 
 # Outcomes a test can script per send (by send index):
@@ -19,7 +19,8 @@ from .observation import Identity, Observation, check_identity, recipients
 #   caught mid-render would), noisy (a fishing reply with one extra garbled line), unreadable_fixed (the same misread every time, as the same pixels give), missing (the game acts but no reply is seen), duplicate (the reply is
 #   delivered twice), other_player_first (another player's reply arrives first), uncorrelated (the reply carries
 #   no evidence of which action it answers), send_error (the hand-over fails), partial (one field lost to OCR),
-#   captcha, xp_unread (the profile's XP numbers lost), no_button (page 2's arrow not found; nothing sent).
+#   captcha, xp_unread (the profile's XP numbers lost), no_button (page 2's arrow not found; nothing sent),
+#   interrupted (Discord lost focus while typing; nothing sent; out of focus until focus()).
 OUTCOMES = ('ok', 'unreadable', 'unreadable_fixed', 'noisy', 'missing', 'duplicate', 'other_player_first', 'uncorrelated', 'send_error')
 FISH = ('Salmon', 'Cod')
 # A real /charms reply (11 charms found).
@@ -93,6 +94,11 @@ class SimulationTransport:
             raise TransportError('Simulated hand-over failure.')
         if outcome == 'no_button':
             raise NotDispatched('Next-page button not found.')
+        if outcome == 'interrupted':
+            # Discord lost focus while the command was typed: nothing was sent, and it stays out of focus until
+            # the test gives it back (focus()).
+            self.context = ContextStatus(False, self.context.context_id, NOT_FOREGROUND)
+            raise Interrupted(f'Typing {intent.kind} was interrupted when Discord stopped being the active window.')
         text, kind = self._play(intent, now)
         if outcome == 'noisy' and kind == 'fishing':
             text += '\n$6 , 6O0 recieved for levelling up'  # an extra line OCR garbled beyond reading
@@ -124,8 +130,16 @@ class SimulationTransport:
                 self._queue(deliver, f'sim-{index}', kind, text, correlation)
         return DispatchReceipt(intent.action_id, self.utc().isoformat(), f'simulated send {index}')
 
+    def unfocus(self):
+        self.context = ContextStatus(False, self.context.context_id, NOT_FOREGROUND)
+
+    def focus(self):
+        self.context = ContextStatus(True, self.context.context_id)
+
     def poll(self) -> list[Observation]:
         now = self.monotonic()
+        if not self.context.ok:
+            return []  # nothing can be read while Discord is not active
         due = [entry for entry in self.queue if entry[0] <= now]
         self.queue = [entry for entry in self.queue if entry[0] > now]
         # Stamped when they appear, as a capture would observe them.

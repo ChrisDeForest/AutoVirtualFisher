@@ -677,3 +677,40 @@ class CapturePngTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class ChannelTests(unittest.TestCase):
+    """Observed 2026-10-10: snapped to half the screen, Discord shortens the search box to "Search Virtual …"."""
+
+    @staticmethod
+    def box(text, top, left=600):
+        return {'text': text, 'top': top, 'bottom': top + 20, 'left': left, 'right': left + 200}
+
+    def hints(self, *boxes):
+        from src.live_capture import channel_hints
+        return channel_hints(list(boxes), 1525)
+
+    def test_full_search_name_still_works(self):
+        from src.live_capture import channel_matches
+        context = {'channel': 'Virtual Fisher', 'channel_hints': self.hints(self.box('Search Virtual Fisher', 70))}
+        self.assertTrue(channel_matches(context, 'Virtual Fisher'))
+
+    def test_shortened_search_with_the_header_or_message_box_confirms_it(self):
+        from src.live_capture import channel_matches
+        for name_box in (self.box('Virtual Fisher /fish', 74, left=610), self.box('Message @Virtual Fisher', 1460)):
+            with self.subTest(name_box=name_box['text']):
+                hints = self.hints(self.box('Search Virtual ...', 70, left=1060), name_box)
+                self.assertTrue(channel_matches({'channel': None, 'channel_hints': hints}, 'Virtual Fisher'))
+
+    def test_another_dm_never_matches(self):
+        from src.live_capture import channel_matches
+        farmer = self.hints(self.box('Search Virtual ...', 70, left=1060), self.box('Virtual Farmer /play', 74))
+        self.assertFalse(channel_matches({'channel': None, 'channel_hints': farmer}, 'Virtual Fisher'))
+        other = self.hints(self.box('Search BugParticle', 70), self.box('Message @Virtual Fisher', 1460))
+        self.assertFalse(channel_matches({'channel': 'BugParticle', 'channel_hints': other}, 'Virtual Fisher'),
+                         'a full, different search name always wins')
+
+    def test_a_shortened_search_alone_is_not_enough(self):
+        from src.live_capture import channel_matches
+        hints = self.hints(self.box('Search Virtual ...', 70, left=1060))
+        self.assertFalse(channel_matches({'channel': None, 'channel_hints': hints}, 'Virtual Fisher'))

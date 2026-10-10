@@ -3,9 +3,9 @@ import ctypes
 from ctypes import wintypes
 import time
 
-from .automation_models import NotDispatched, TransportError
+from .automation_models import FocusLost, Interrupted, NotDispatched, TransportError
 from .automation_discord import CHALLENGE, composer_target, command_target, command_text
-from .live_capture import make_capture
+from .live_capture import channel_matches, make_capture
 from .window_capture import window_process
 
 
@@ -43,8 +43,10 @@ class WindowsDiscordDriver:
         return self.api.GetForegroundWindow() == self.window
 
     def _guard(self, cancelled):
-        if cancelled() or not self.is_foreground():
-            raise TransportError('Stopped or foreground window changed.')
+        if cancelled():
+            raise TransportError('Stopped.')
+        if not self.is_foreground():
+            raise FocusLost('Discord stopped being the active window.')
 
     def _event(self, kind, payload, cancelled, release=False):
         if not release:
@@ -82,7 +84,11 @@ class WindowsDiscordDriver:
 
     def click(self, point, cancelled):
         """Click a message button at window coordinates, with the same foreground and stop guards as typing."""
-        self._click(point, cancelled)
+        try:
+            self._click(point, cancelled)
+        except FocusLost as error:
+            raise Interrupted('Discord stopped being the active window before the button was clicked; it is '
+                              'clicked once Discord is back.') from error
 
     def _key(self, vk, cancelled):
         self._event(1, (vk, 0, 0), cancelled)
@@ -98,7 +104,7 @@ class WindowsDiscordDriver:
         frame = self.capture()
         context = frame.get('context') or {}
         if frame['status'] != 'ok' or context.get('window') != self.window \
-                or (context.get('channel') or '').casefold() != self.channel.casefold():
+                or not channel_matches(context, self.channel):
             raise TransportError('Target changed or capture unavailable during command entry.')
         challenges = len(CHALLENGE.findall('\n'.join(frame.get('lines', []))))
         if self.challenges is not None and challenges > self.challenges:
@@ -122,43 +128,69 @@ class WindowsDiscordDriver:
         self._key(0x08, cancelled)                                   # Backspace
 
     def dispatch(self, command, cancelled):
-        # Until the first click nothing has reached Discord: a refusal here certainly sent nothing.
+        """Type a slash command and send it. Every step first checks that Discord is still the active window.
+        Until the final Enter nothing has reached the game: losing focus before it raises Interrupted, and the
+        next attempt clears what was left in the message box, at the spot it was typed, before retyping."""
         self.challenges = None  # captcha text already on screen; only one appearing during entry stops it
+        interrupted = (f'Typing {command} was interrupted when Discord stopped being the active window; it is '
+                       'cleared and retyped once Discord is back.')
         try:
             frame = self._frame(cancelled)
-        except TransportError as error:
-            raise NotDispatched(str(error)) from error
-        initial_boxes = frame.get('boxes', [])
-        composer = composer_target(frame.get('original_boxes', initial_boxes), self.channel)
-        if composer is None:
-            # Discord hides the "Message @..." placeholder whenever the box holds anything, even a space.
-            raise NotDispatched('The message box placeholder is not visible: it may hold a draft (even a space '
-                                'or new line). Click it, clear it (Ctrl+A, Delete), then start again.')
-        self._click(composer, cancelled)
-        self._text(command, cancelled)
-        # The picker is rendered asynchronously. No submit until an exact VF command row is seen.
-        target = None
-        old_commands = {command_text(b['text']) for b in initial_boxes}
-        for _ in range(5):
+            initial_boxes = frame.get('boxes', [])
+            composer = composer_target(frame.get('original_boxes', initial_boxes), self.channel)
+            if composer is None and getattr(self, 'draft_composer', None) is not None:
+                composer, initial_boxes = self._clear_draft(cancelled)
+            if composer is None:
+                # Discord hides the "Message @..." placeholder whenever the box holds anything, even a space.
+                raise NotDispatched('The message box placeholder is not visible: it may hold a draft (even a space '
+                                    'or new line). Click it, clear it (Ctrl+A, Delete), then start again.')
+            # From the first click, anything left in the box is this command's draft.
+            self.draft_composer = composer
+            self._click(composer, cancelled)
+            self._text(command, cancelled)
+            # The picker is rendered asynchronously. No submit until an exact VF command row is seen.
+            target = None
+            old_commands = {command_text(b['text']) for b in initial_boxes}
+            for _ in range(5):
+                time.sleep(0.2)
+                frame = self._frame(cancelled)
+                # Text already visible before typing is not evidence of a newly opened picker.
+                picker_boxes = [b for b in frame.get('boxes', [])
+                                if command_text(b['text']) != command.casefold()
+                                or command.casefold() not in old_commands]
+                target = command_target(picker_boxes, command, composer)
+                if target is not None:
+                    break
+            if target is None:
+                # Enter was never pressed, so the game received nothing. Clear the typed draft for the next run.
+                try:
+                    self._clear(cancelled)
+                    self.draft_composer = None
+                    note = 'the typed draft was cleared'
+                except TransportError:
+                    note = 'clear the typed draft from the message box before starting again'
+                raise NotDispatched(f'VF slash-command picker could not be verified; command not submitted ({note}).')
+            # Keyboard selection followed by submission, as Discord's slash-command flow requires. Never click the
+            # picker command. The final Enter's key-down is the point of sending: before it, nothing was sent.
+            self._key(0x0D, cancelled)
             time.sleep(0.2)
-            frame = self._frame(cancelled)
-            # Text already visible before typing is not evidence of a newly opened picker.
-            picker_boxes = [b for b in frame.get('boxes', [])
-                            if command_text(b['text']) != command.casefold()
-                            or command.casefold() not in old_commands]
-            target = command_target(picker_boxes, command, composer)
-            if target is not None:
-                break
-        if target is None:
-            # Enter was never pressed, so the game received nothing. Clear the typed draft for the next run.
-            try:
-                self._clear(cancelled)
-                note = 'the typed draft was cleared'
-            except TransportError:
-                note = 'clear the typed draft from the message box before starting again'
-            raise NotDispatched(f'VF slash-command picker could not be verified; command not submitted ({note}).')
-        # Keyboard selection followed by submission, as Discord's slash-command flow requires.
-        # Each key retains foreground/cancellation guards. Never click the picker command.
-        self._key(0x0D, cancelled)
-        time.sleep(0.2)
-        self._key(0x0D, cancelled)
+            self._key(0x0D, cancelled)
+        except NotDispatched:
+            raise
+        except FocusLost as error:
+            raise Interrupted(interrupted) from error
+        except TransportError as error:
+            raise NotDispatched(f'{error} {command} was not sent.') from error
+        self.draft_composer = None
+
+    def _clear_draft(self, cancelled):
+        """Go back a step: clear what an interrupted command left in the message box, at the spot it was typed,
+        and check the box is empty again. Returns (composer, boxes); composer is None if it did not clear."""
+        self._click(self.draft_composer, cancelled)
+        self._clear(cancelled)
+        frame = self._frame(cancelled)
+        boxes = frame.get('boxes', [])
+        composer = composer_target(frame.get('original_boxes', boxes), self.channel)
+        if composer is not None:
+            self.draft_composer = None
+        return composer, boxes

@@ -20,7 +20,8 @@ from .account_reads import ACCOUNT_READS, PAGE_TWO, read_of
 from .account_replies import PARSERS as ACCOUNT_PARSERS
 from .account_state import apply_read, empty_state, load_state, save_state
 from .automation_journal import AutomationJournal
-from .automation_models import AutomationConfig, CapabilityError, NotDispatched, TransportError
+from .automation_models import (AutomationConfig, CapabilityError, Interrupted, NOT_FOREGROUND, NotDispatched,
+                                TransportError)
 from .automation_policy import next_action
 from .automation_state import AutomationState, apply_observation
 from .catch_check import load_fish_reference
@@ -113,6 +114,8 @@ class AutomationController:
         self.captcha = None            # the captcha message that paused the run, until resumed
         self.captchas_seen = set()     # observation ids of captcha messages already acted on
         self.jitter = 0.0              # the random extra wait before the next fish
+        self.focus_note = None         # what an interruption left to redo, shown while Discord is not active
+        self.focus_lost_at = None      # when Discord lost focus while a reply was awaited
         self.jitters = []              # every extra wait picked this run
         self._reset_stats()
 
@@ -151,6 +154,7 @@ class AutomationController:
             self.refused_until, self.refused_reason = float('-inf'), ''
             self.paused, self.captcha = False, None
             self.jitter, self.jitters = 0.0, []
+            self.focus_note, self.focus_lost_at = None, None
             self._reset_stats()
             # Read once the profile and cooldown are known, before the first fish.
             self.state = replace(self.state, refresh_due=tuple(
@@ -283,6 +287,18 @@ class AutomationController:
             if self.failed:
                 self.phase, self.reason = 'FAILED', self.failed
                 return
+            if self.state.pending is not None and not context.ok and context.reason == NOT_FOREGROUND:
+                # Sent; its reply can only be read with Discord active. This time does not count toward the wait.
+                if self.focus_lost_at is None:
+                    self.focus_lost_at = now
+                self.phase = 'WAITING_FOCUS'
+                self.reason = (f'{self.state.pending.kind} was sent; its reply is read once Discord is the active '
+                               'window again.')
+                return
+            if self.focus_lost_at is not None:
+                if self.sent_at is not None:
+                    self.sent_at = (self.sent_at[0] + now - self.focus_lost_at, self.sent_at[1])
+                self.focus_lost_at = None
             if self.state.pending is not None:
                 sending_seen = getattr(self.transport, 'sending_seen', False)
                 timeout = max(self.config.reply_timeout, 60) if sending_seen else self.config.reply_timeout
@@ -315,6 +331,11 @@ class AutomationController:
                 else:
                     self.phase, self.reason = 'PAUSED_BY_YOU', 'Paused. Resume to carry on fishing.'
                 return
+            if not context_ok and context.reason == NOT_FOREGROUND:
+                self.phase = 'WAITING_FOCUS'
+                self.reason = 'Waiting for Discord to be the active window.' + (
+                    f' {self.focus_note}' if self.focus_note else '')
+                return
             if not context_ok:
                 self.phase = 'PAUSED'
                 self.reason = context.reason or f'Not the configured channel ({context.context_id}).'
@@ -323,7 +344,11 @@ class AutomationController:
                 self._finish('Bounded run complete: trip limit reached.')
                 return
             if now < self.refused_until:
-                self.phase, self.reason = 'PAUSED', f'{self.refused_reason} Trying again shortly.'
+                if self.refused_reason.startswith('Waiting for Discord'):
+                    self.phase = 'WAITING_FOCUS'
+                    self.reason = self.refused_reason + (f' {self.focus_note}' if self.focus_note else '')
+                else:
+                    self.phase, self.reason = 'PAUSED', f'{self.refused_reason} Trying again shortly.'
                 return
             if now < self.startup_retry_at:
                 self.phase = 'RETRYING_STARTUP'
@@ -355,6 +380,8 @@ class AutomationController:
         # The hand-over happens outside the lock so stop() is never blocked behind it; it is recorded either way.
         try:
             receipt, failure = self.transport.send(intent), None
+        except Interrupted as error:
+            receipt, failure = None, ('interrupted', str(error))
         except NotDispatched as error:
             receipt, failure = None, ('refused', str(error))
         except CapabilityError as error:
@@ -366,6 +393,18 @@ class AutomationController:
             self.in_flight = None
             if failure or generation != self.generation:
                 self.state = replace(self.state, pending=None)
+            if failure and (failure[0] == 'interrupted' or failure[1] == NOT_FOREGROUND):
+                # Discord lost focus mid-command: nothing was sent. The same command is chosen again, from a clean
+                # message box, as soon as Discord is the active window (see the context check in tick).
+                self._safe_event('interrupted', intent.action_id, reason=failure[1])
+                self.focus_note = failure[1] if failure[0] == 'interrupted' else None
+                # Retried calmly, not every tick, if the window check itself still passes.
+                self.refused_until = self.monotonic() + REFUSAL_RETRY_DELAY
+                self.refused_reason = 'Waiting for Discord to be the active window.'
+                self.phase = 'WAITING_FOCUS'
+                self.reason = 'Waiting for Discord to be the active window.' + (
+                    f' {self.focus_note}' if self.focus_note else '')
+                return
             if failure and failure[0] == 'refused' and intent.kind in PAGE_TWO:
                 # Page 2's arrow was not found: nothing was clicked. Page 2 is read again with its read later.
                 self._safe_event('abandoned', intent.action_id, reason=failure[1])
@@ -402,6 +441,7 @@ class AutomationController:
                 self._safe_event('uncertain', intent.action_id, reason=self.unresolved[intent.action_id])
                 return
             self.sent_at = (self.monotonic(), receipt.sent_at)
+            self.focus_note = None
             self.phase, self.reason = 'WAITING_REPLY', f'Waiting for the reply to {intent.kind}.'
             if intent.kind == 'fish':
                 self._pick_jitter()

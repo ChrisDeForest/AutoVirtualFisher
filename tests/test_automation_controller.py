@@ -393,6 +393,37 @@ class ControllerTests(unittest.TestCase):
         self.run_for(30)
         self.assertEqual(self.saved_trips(), 5)
 
+    # --- Discord losing focus ---
+
+    def test_an_interrupted_command_is_retried_once_discord_is_back(self):
+        self.sim.script = {2: 'interrupted'}       # the first /fish
+        self.make(config=replace(CONFIG, max_trips=3)).start()
+        self.run_for(10)
+        status = self.controller.status()
+        self.assertEqual(status['phase'], 'WAITING_FOCUS')
+        self.assertIn('interrupted', status['reason'])
+        self.assertEqual(self.kinds(), ['refresh_profile', 'refresh_buffs', 'fish'], 'nothing more while unfocused')
+        self.sim.focus()
+        self.run_for(30)
+        self.assertEqual(self.kinds(), ['refresh_profile', 'refresh_buffs'] + ['fish'] * 4)
+        self.assertEqual(self.saved_trips(), 3)
+        self.assertEqual(self.controller.status()['unresolved'], [])
+        self.assertEqual(list_items(self.review)[0], [], 'an interruption is not an unknown outcome')
+
+    def test_time_without_focus_does_not_run_out_the_reply_wait(self):
+        self.make(config=replace(CONFIG, max_trips=2)).start()
+        while not any(intent.kind == 'fish' for _, intent in self.sim.sent):
+            self.run_for(STEP)
+        self.sim.unfocus()                          # the reply is on its way; Discord is in the background
+        self.run_for(45)                            # longer than the 20 s reply timeout
+        status = self.controller.status()
+        self.assertEqual(status['phase'], 'WAITING_FOCUS')
+        self.assertIn('fish was sent', status['reason'])
+        self.sim.focus()
+        self.run_for(30)
+        self.assertEqual(self.saved_trips(), 2)
+        self.assertEqual(list_items(self.review)[0], [], 'its reply was read, not given up on')
+
     def test_a_captcha_pause_ends_once_a_newer_reply_appears(self):
         self.sim.script = {3: 'captcha'}
         self.make(config=replace(CONFIG, max_trips=4))
@@ -582,8 +613,8 @@ class ControllerTests(unittest.TestCase):
         self.make(config=replace(CONFIG, max_trips=1)).start()
         self.run_for(5)
         status = self.controller.status()
-        self.assertEqual(status['phase'], 'PAUSED')
-        self.assertIn('foreground', status['reason'])
+        self.assertEqual(status['phase'], 'WAITING_FOCUS')
+        self.assertIn('active window', status['reason'])
         self.assertLessEqual(len(refused), 5, 'retried calmly, not every tick')
         self.run_for(20)
         self.assertEqual(self.saved_trips(), 1, 'the same run carries on once Discord is back')

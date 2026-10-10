@@ -133,7 +133,8 @@ class NativeDispatchTests(unittest.TestCase):
             driver.events.append(('key', value))
             stopped[0] = True
         driver._key = key
-        with self.assertRaises(TransportError):
+        # Stopped before the final Enter: nothing was sent.
+        with self.assertRaises(NotDispatched):
             driver.dispatch('/fish', lambda: stopped[0])
         self.assertEqual([event for event in driver.events if event[0] == 'key'], [('key', 13)])
 
@@ -146,3 +147,60 @@ class NativeDispatchTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class FocusTests(unittest.TestCase):
+    driver = NativeDispatchTests.driver
+    """Discord can lose focus at any step (alt-tab, remote desktop). Before the final Enter nothing was sent."""
+
+    def frames(self):
+        return [{'boxes': [box('Message @Virtual Fisher', 800)]},
+                {'boxes': [box('/fish', 600), box('Virtual Fisher', 620)]}]
+
+    def lose_focus_at(self, driver, kind, nth=1):
+        from src.automation_models import FocusLost
+        original = getattr(driver, '_' + kind)
+        seen = {'count': 0}
+
+        def step(*args):
+            seen['count'] += 1
+            if seen['count'] == nth:
+                raise FocusLost('Discord stopped being the active window.')
+            return original(*args)
+        setattr(driver, '_' + kind, step)
+
+    @patch('src.discord_input.time.sleep')
+    def test_focus_lost_while_typing_is_an_interruption_not_an_unknown(self, sleep):
+        from src.automation_models import Interrupted
+        driver = self.driver(self.frames())
+        self.lose_focus_at(driver, 'text')
+        with self.assertRaises(Interrupted) as raised:
+            driver.dispatch('/fish', lambda: False)
+        self.assertIn('/fish', str(raised.exception))
+        self.assertFalse(any(kind == 'key' for kind, _ in driver.events), 'never pressed Enter')
+
+    @patch('src.discord_input.time.sleep')
+    def test_focus_lost_before_the_final_enter_is_an_interruption(self, sleep):
+        from src.automation_models import Interrupted
+        driver = self.driver(self.frames())
+        self.lose_focus_at(driver, 'key', nth=2)
+        with self.assertRaises(Interrupted):
+            driver.dispatch('/fish', lambda: False)
+
+    @patch('src.discord_input.time.sleep')
+    def test_the_next_attempt_clears_the_interrupted_draft_then_retypes(self, sleep):
+        from src.automation_models import Interrupted
+        driver = self.driver(self.frames())
+        self.lose_focus_at(driver, 'text')
+        with self.assertRaises(Interrupted):
+            driver.dispatch('/fish', lambda: False)
+        # Back in focus: the box holds the half-typed draft, so its placeholder is hidden until it is cleared.
+        later = [{'boxes': [box('/fi', 800)]}, {'boxes': [box('Message @Virtual Fisher', 800)]},
+                 {'boxes': [box('/fish', 600), box('Virtual Fisher', 620)]}]
+        from itertools import chain, repeat
+        sequence = chain(later, repeat(later[-1]))
+        driver._frame = lambda cancelled: next(sequence)
+        driver.events.clear()
+        driver.dispatch('/fish', lambda: False)
+        self.assertEqual(driver.events[:2], [('click', (380.0, 810.0)), ('clear', None)])
+        self.assertEqual(driver.events[-1], ('key', 13))

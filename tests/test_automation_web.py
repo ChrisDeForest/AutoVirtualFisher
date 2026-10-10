@@ -201,6 +201,11 @@ class AutomationWebTests(unittest.TestCase):
         self.post(action='resume')
         self.assertFalse(self.handler.automation.status()['paused'])
 
+    def test_waiting_for_discord_is_its_own_state(self):
+        from src.automation_web import state_label
+        status = {'running': True, 'phase': 'WAITING_FOCUS', 'trips': 3, 'paused': False}
+        self.assertEqual(state_label(status), 'Waiting for Discord')
+
     def test_account_box_lists_what_replies_showed(self):
         from src import account_samples as sample
         from src.account_replies import PARSERS

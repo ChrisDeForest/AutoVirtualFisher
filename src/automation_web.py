@@ -170,6 +170,8 @@ def state_label(status) -> str:
     phase = status['phase']
     if not status['running']:
         return 'Stopped by a problem' if phase == 'FAILED' else 'Stopped'
+    if phase == 'WAITING_FOCUS':
+        return 'Waiting for Discord'
     if phase == 'CAPTCHA':
         return 'Captcha: solve it, then Resume'
     if status.get('paused') or phase in ('PAUSED', 'PAUSED_BY_YOU'):

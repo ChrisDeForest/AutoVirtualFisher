@@ -62,3 +62,16 @@ class CapabilityError(Exception):
 
 class NotDispatched(CapabilityError):
     """Refused before any input reached the game (wrong context, no baseline, stopped): certainly not sent."""
+
+
+class Interrupted(NotDispatched):
+    """Discord stopped being the active window before the command was sent (before the final Enter, or before a
+    click): nothing reached the game. It is tried again, from a clean message box, once Discord is active."""
+
+
+class FocusLost(TransportError):
+    """Discord stopped being the active window before an input event; raised by the input driver."""
+
+
+# The context reason when Discord is not the active window.
+NOT_FOREGROUND = 'Discord must remain in the foreground.'
