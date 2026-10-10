@@ -4,7 +4,7 @@ from ctypes import wintypes
 import time
 
 from .automation_models import FocusLost, Interrupted, NotDispatched, TransportError
-from .automation_discord import CHALLENGE, composer_click, composer_target, command_target, command_text
+from .automation_discord import CHALLENGE, _center, composer_click, composer_target, command_target, command_text
 from .live_capture import channel_matches, make_capture
 from .window_capture import window_process
 
@@ -151,14 +151,20 @@ class WindowsDiscordDriver:
             self._text(command, cancelled)
             # The picker is rendered asynchronously. No submit until an exact VF command row is seen.
             target = None
-            old_commands = {command_text(b['text']) for b in initial_boxes}
+            old_commands = [b for b in initial_boxes if command_text(b['text']) == command.casefold()]
+
+            def seen_before(b):
+                # Same text at the same spot as before typing (chat history, the DM list's status).
+                height = max(1, b['bottom'] - b['top'])
+                return any(abs(_center(b)[0] - _center(old)[0]) <= height
+                           and abs(_center(b)[1] - _center(old)[1]) <= height for old in old_commands)
+
             for _ in range(5):
                 time.sleep(0.2)
                 frame = self._frame(cancelled)
                 # Text already visible before typing is not evidence of a newly opened picker.
                 picker_boxes = [b for b in frame.get('boxes', [])
-                                if command_text(b['text']) != command.casefold()
-                                or command.casefold() not in old_commands]
+                                if command_text(b['text']) != command.casefold() or not seen_before(b)]
                 target = command_target(picker_boxes, command, composer)
                 if target is not None:
                     break

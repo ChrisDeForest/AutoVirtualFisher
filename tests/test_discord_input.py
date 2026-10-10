@@ -103,6 +103,17 @@ class NativeDispatchTests(unittest.TestCase):
         self.assertEqual(driver.events[-1], ('key', 13))
 
     @patch('src.discord_input.time.sleep')
+    def test_command_seen_elsewhere_before_typing_does_not_hide_the_picker(self, sleep):
+        # Live: the DM list's "/fish" status was on screen before typing; the picker row opened elsewhere.
+        sidebar = dict(text='[fish', left=210, top=488, right=246, bottom=503)
+        driver = self.driver([
+            {'boxes': [box('Message @Virtual Fisher', 800), sidebar]},
+            {'boxes': [sidebar, box('/fish', 600), box('Virtual Fisher', 620)]},
+        ])
+        driver.dispatch('/fish', lambda: False)
+        self.assertEqual(driver.events[-1], ('key', 13))
+
+    @patch('src.discord_input.time.sleep')
     def test_historical_command_never_matches_picker(self, sleep):
         old = [box('/fish', 600), box('Virtual Fisher', 620)]
         driver = self.driver([{'boxes': [box('Message @Virtual Fisher', 800)] + old}]

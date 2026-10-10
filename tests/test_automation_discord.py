@@ -474,6 +474,15 @@ class TargetTests(unittest.TestCase):
         # The blinking caret sits on the M of an empty box.
         self.assertEqual(composer_target([box('essage @Virtual Fisher')], 'Virtual Fisher'), (380, 810))
 
+    def test_sidebar_status_is_not_a_second_picker_command(self):
+        # Live: the DM list shows "Virtual Fisher" with the status "/fish", read as "[fish", far above the picker.
+        def at(text, left, top, right, bottom):
+            return dict(text=text, left=left, top=top, right=right, bottom=bottom)
+        boxes = [at('Virtual Fisher', 210, 461, 351, 479), at('[fish', 210, 488, 246, 503),
+                 at('/fish', 570, 757, 617, 778), at('Catch some fish!', 570, 793, 695, 806),
+                 at('Virtual Fisher', 1106, 775, 1210, 788)]
+        self.assertEqual(command_target(boxes, '/fish', (693.0, 1470.5)), (593.5, 767.5))
+
     def test_picker_requires_exact_command_and_bot_nearby(self):
         self.assertEqual(command_target([box('/fish', y=600), box('Virtual Fisher', y=620)], '/fish'), (380, 610))
         self.assertIsNone(command_target([box('/fish', y=600), box('Other Bot', y=620)], '/fish'))

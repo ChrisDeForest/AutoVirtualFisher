@@ -128,15 +128,19 @@ def composer_click(boxes, channel):
 
 def command_target(boxes, command, composer=None):
     """Accept one exact picker command with a nearby bot label; ambiguous layouts fail closed."""
+    def in_picker(b):
+        # The picker opens just above the message box. The same text elsewhere (the DM list shows the bot's
+        # status, "/fish") is not a second picker row.
+        height = max(1, b['bottom'] - b['top'])
+        return (composer[1] - 40 * height <= b['top'] < composer[1] - height
+                and abs(_center(b)[0] - composer[0]) <= 15 * height)
+
     found = [b for b in boxes if command_text(b['text']) == command.casefold()
-             and (composer is None or b['bottom'] < composer[1] - (b['bottom'] - b['top']))]
+             and (composer is None or in_picker(b))]
     if len(found) != 1:
         return None
     target = found[0]
     height = max(1, target['bottom'] - target['top'])
-    if composer is not None and not (composer[1] - 40 * height <= target['top'] < composer[1] - height
-                                     and abs(_center(target)[0] - composer[0]) <= 15 * height):
-        return None
     labels = [b for b in boxes if b is not target
               and command_text(b['text']) != command.casefold()
               and abs(_center(b)[1] - _center(target)[1]) <= 2 * height
