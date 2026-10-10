@@ -690,7 +690,8 @@ class AutomationController:
                          'retry_in': max(0, self.config.retry_unread_trips - self.unread_trips.get(kind, 0))}
                          for kind, fields in self.unread.items()},
                      charms=charm_summary(stats['finds']['all'], parse_charms(self.synced['charms']),
-                                          summarize_finds(self.charm_tallies)['charms']))
+                                          summarize_finds(self.charm_tallies)['charms'],
+                                          prestige=stats['profile'].get('prestige')))
         return stats
 
     def _uncertain(self, action_id, reason):

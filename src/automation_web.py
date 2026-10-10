@@ -236,9 +236,11 @@ def _finds_box(finds, charms=None):
             f'<div>{group("Charms", "charms", levels=True)}</div></div>')
     note = 'Charms are a prestige requirement.'
     if charms:
-        note = (f'Charms toward prestige: {charms["total"]:,} of {charms["goal"]:,} ({charms["types"]} of '
-                f'{charms["type_count"]} kinds found, each up to level 14). Each level needs as many charms as its '
-                'number. ' + ('From /charms, plus any found since it was read.' if charms.get('from_reply') else
+        goal = (f'{charms["total"]:,} of {charms["goal"]:,}' if charms.get('goal') else
+                f'{charms["total"]:,} (the goal shows once /charms or your prestige is read)')
+        cap = f', each up to level {charms["max_level"]}' if charms.get('max_level') else ''
+        note = (f'Charms toward prestige: {goal} ({charms["types"]} of {charms["type_count"]} kinds found{cap}). '
+                'Each level needs as many charms as its number. ' +('From /charms, plus any found since it was read.' if charms.get('from_reply') else
                               '/charms not read yet: counted from the charms logged here; "≥" means the game '
                               'reported a higher level.'))
     return _box('Finds', body, wide=True, note=note)

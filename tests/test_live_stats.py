@@ -146,22 +146,28 @@ class UnreadFieldTests(unittest.TestCase):
 
 
 class CharmTests(unittest.TestCase):
-    def test_eight_charms_at_level_fourteen_is_840(self):
-        from src.live_stats import CHARM_GOAL, charms_for_level
+    def test_max_level_and_goal_follow_prestige(self):
+        # Buff calculator vB1.13.4: max charm level is 10 + prestige below P100, then 2 x prestige - 88.
+        # Matches the P0 guide (440 charms) and this account at P4 (14 levels, 840).
+        from src.live_stats import charm_goal, charm_max_level, charms_for_level
         self.assertEqual(charms_for_level(14), 105)
-        self.assertEqual(CHARM_GOAL, 840)
+        self.assertEqual([charm_max_level(p) for p in (0, 4, 5, 99, 100, 110)], [10, 14, 15, 109, 112, 132])
+        self.assertEqual([charm_goal(p) for p in (0, 4, 5)], [440, 840, 960])
+        self.assertIsNone(charm_max_level(None))
 
     def test_level_and_progress_from_charms_found(self):
         from src.live_stats import charm_progress
         # The first charm reaches level 1; level 2 needs 2 more, level 3 needs 3 more.
-        self.assertEqual(charm_progress(0), {'found': 0, 'counted': 0, 'level': 0, 'into': 0, 'needed': 1,
-                                             'at_least': False})
-        self.assertEqual(charm_progress(1)['level'], 1)
-        self.assertEqual(charm_progress(3), {'found': 3, 'counted': 3, 'level': 2, 'into': 0, 'needed': 3,
-                                             'at_least': False})
-        self.assertEqual(charm_progress(5)['into'], 2)
-        maxed = charm_progress(200)
+        self.assertEqual(charm_progress(0, max_level=14), {'found': 0, 'counted': 0, 'level': 0, 'into': 0,
+                                                           'needed': 1, 'at_least': False})
+        self.assertEqual(charm_progress(1, max_level=14)['level'], 1)
+        self.assertEqual(charm_progress(3, max_level=14), {'found': 3, 'counted': 3, 'level': 2, 'into': 0,
+                                                           'needed': 3, 'at_least': False})
+        self.assertEqual(charm_progress(5, max_level=14)['into'], 2)
+        maxed = charm_progress(200, max_level=14)
         self.assertEqual((maxed['level'], maxed['counted'], maxed['needed']), (14, 105, None))
+        uncapped = charm_progress(200)
+        self.assertEqual((uncapped['counted'], uncapped['level']), (200, 19), 'no cap known: none applied')
 
     def test_a_reported_level_above_the_count_raises_it(self):
         # Charms found before tracking began: the game's "now level 4" means at least 10 were found.
@@ -179,9 +185,20 @@ class CharmTests(unittest.TestCase):
                                  {'finds': {'Quality Charm': 1}, 'charm_levels': {'Charm': 2}},
                                  {'finds': {'Haste Charm': 1}, 'charm_levels': {'Haste Charm': 1}}])
         self.assertEqual(finds['charm_levels'], {'Quality Charm': 2, 'Haste Charm': 1})
-        summary = charm_summary(finds)
-        self.assertEqual((summary['total'], summary['goal'], summary['types']), (4, 840, 2))
+        summary = charm_summary(finds, prestige=4)
+        self.assertEqual((summary['total'], summary['goal'], summary['max_level'], summary['types']),
+                         (4, 840, 14, 2))
         self.assertEqual(summary['charms']['Quality Charm']['level'], 2)
+        unknown = charm_summary(finds)
+        self.assertEqual((unknown['goal'], unknown['max_level']), (None, None), 'never assumed')
+
+    def test_the_charms_reply_states_the_cap_and_goal(self):
+        # Its "x/14" lines and "11/840" total win over the prestige formula.
+        from src.live_stats import charm_summary, parse_charms
+        parsed = parse_charms(CHARMS.replace('/14 -', '/15 -').replace('11/840', '11/960'))
+        self.assertEqual((parsed['max_level'], parsed['goal']), (15, 960))
+        summary = charm_summary({}, parsed, prestige=4)
+        self.assertEqual((summary['max_level'], summary['goal']), (15, 960))
 
 
 class FindNameTests(unittest.TestCase):
