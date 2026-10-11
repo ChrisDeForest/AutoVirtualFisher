@@ -82,8 +82,31 @@ class SetupTests(unittest.TestCase):
 
     def test_bait_none(self):
         parsed = PARSERS['bait'](sample.BAIT)
-        self.assertEqual(parsed['values'], {'current': None, 'other_lines': []})
+        self.assertEqual(parsed['values'], {'current': None, 'owned': {}, 'other_lines': []})
         self.assertEqual(parsed['unread'], [])
+
+    def test_bait_owned_counts(self):
+        parsed = PARSERS['bait'](sample.BAIT_OWNED)
+        self.assertEqual(parsed['values']['current'], 'Support Bait')
+        self.assertEqual(parsed['values']['owned'], {
+            'Worms': 68, 'Leeches': 1006, 'Magnet': 212, 'Wise Bait': 1479, 'Fish': 909, 'Artifact Magnet': 1727,
+            'Magic Bait': 1485, 'Support Bait': 982})
+        self.assertEqual(parsed['values']['other_lines'], [])
+
+    def test_bait_owned_counts_with_ocr_noise(self):
+        # Icons read as stray letters or symbols, the dash as an en dash or tilde, the comma as a period.
+        text = '\n'.join(('Current bait: Magic Bait', 'J Worms - 68', '% Leeches – 1.006', '@ Artifact Magnet ~ 1,727',
+                          'Magnet - 212', 'Magic Bait—1 485', 'Fishy line'))
+        parsed = PARSERS['bait'](text)
+        self.assertEqual(parsed['values']['owned'], {'Worms': 68, 'Leeches': 1006, 'Artifact Magnet': 1727,
+                                                     'Magnet': 212, 'Magic Bait': 1485})
+        self.assertEqual(parsed['values']['other_lines'], ['Fishy line'])
+        self.assertEqual(parsed['unread'], [])
+
+    def test_bait_owned_unknown_without_the_current_line(self):
+        parsed = PARSERS['bait']('Worms - 68')
+        self.assertIsNone(parsed['values']['owned'])                  # not a whole reply: keep the earlier read
+        self.assertEqual(parsed['unread'], ['Bait in use'])
 
     def test_rod_and_bait_with_the_slash_misread(self):
         # Live OCR: the leading slash read as I or [, and a rod icon as J.
@@ -94,7 +117,7 @@ class SetupTests(unittest.TestCase):
         self.assertEqual((_kind(rod[0]), _kind(bait[0])), ('rod', 'bait'))
         self.assertEqual(PARSERS['rod']('\n'.join(rod))['values']['owned'],
                          ['Supporter Rod', 'Plastic Rod', 'Steel Rod', 'Fiberglass Rod'])
-        self.assertEqual(PARSERS['bait']('\n'.join(bait))['values'], {'current': None, 'other_lines': []})
+        self.assertEqual(PARSERS['bait']('\n'.join(bait))['values'], {'current': None, 'owned': {}, 'other_lines': []})
 
     def test_biome(self):
         parsed = PARSERS['biome'](sample.BIOME)

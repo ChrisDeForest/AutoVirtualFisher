@@ -43,6 +43,10 @@ RODS_PAGE_2 = '\n'.join((
 ROD = '\n'.join(('/rod <rod name>', 'Currently using: Fiberglass Rod', 'Supporter Rod', 'Plastic Rod', 'Steel Rod',
                  'Fiberglass Rod'))
 BAIT = '\n'.join(('/bait <bait type> to use bait.', '/bait none is valid.', 'Current bait: NONE'))
+# The miraheze wiki's /bait screenshot (an account owning every bait); each line starts with the bait's icon.
+BAIT_OWNED = '\n'.join(('/bait <bait type> to use bait.', '/bait none is valid.', 'Current bait: Support Bait',
+                        'Worms - 68', 'Leeches - 1,006', 'Magnet - 212', 'Wise Bait - 1,479', 'Fish - 909',
+                        'Artifact Magnet - 1,727', 'Magic Bait - 1,485', 'Support Bait - 982'))
 BIOME = '\n'.join(('Current Biome: River', 'Your unlocked biomes:', 'River', 'Next Biome: Volcanic',
                    'UNLOCKED AT LEVEL 50!'))
 BOATS = '\n'.join((

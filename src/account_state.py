@@ -12,6 +12,8 @@ from .player_snapshots import write_json_atomically
 
 # Shops whose items are all known: complete only when each one has been read.
 COMPLETE_ITEMS = {'shop_upgrades': UPGRADES, 'shop_league': LEAGUE}
+# Replies shown whole on one page: a whole one replaces the section (the bait in use and every bait owned).
+WHOLE_REPLIES = {'bait'}
 
 
 def empty_state() -> dict:
@@ -58,6 +60,8 @@ def apply_read(state: dict, kind: str, parsed: dict, observed_at: str) -> dict:
     sections = dict(state.get('sections', {}))
     old = sections.get(kind, {'values': {}, 'pages': {}})
     values = _merge(old.get('values', {}), parsed['values'])
+    if kind in WHOLE_REPLIES and not parsed.get('unread'):
+        values = dict(parsed['values'])   # a whole reply's None is a reading ("Current bait: NONE"), not a gap
     page, _ = parsed.get('page') or (None, None)
     pages = dict(old.get('pages', {}))
     pages[str(page or 1)] = observed_at

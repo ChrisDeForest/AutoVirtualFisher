@@ -161,9 +161,23 @@ def make_plan(state, ctx, plan_data, limits=(3000, 2.0), clock=time.monotonic):
     bait_step = {'bait': object()}                     # the last bait step, finished when the bait changes
 
     def close_bait():
-        if bait_step.get('step') is not None:
-            used = math.ceil(trips - bait_step['from'])
-            bait_step['step']['why'] += f'; about {used:,} bait (${math.ceil(used * bait_step["price"]):,}) '                                         'until the next bait change'
+        """Finish the last bait step: the bait used until this change, the part of it that came from the bait on hand
+        (already paid for, so its cost goes back to the money) and what had to be bought."""
+        step = bait_step.get('step')
+        if step is None:
+            return
+        name, price = bait_step['bait'], bait_step['price']
+        used = math.ceil(trips - bait_step['from'])
+        on_hand = min(used, state.bait_stock.get(name, 0))
+        if on_hand:
+            state.cash += on_hand * price
+            state.bait_stock[name] -= on_hand
+        bought = used - on_hand
+        if bait_step['stock'] and not bought:
+            step.update(action=f'Use the {bait_step["stock"]:,} {name} on hand', cost=0)
+        step['why'] += (f'; about {used:,} bait until the next bait change'
+                        + (f', {on_hand:,} from the bait on hand' if on_hand else '')
+                        + (f', {bought:,} bought (${math.ceil(bought * price):,})' if bought else ''))
 
     while True:
         if len(steps) >= limits[0] or clock() - started > limits[1]:
@@ -193,9 +207,12 @@ def make_plan(state, ctx, plan_data, limits=(3000, 2.0), clock=time.monotonic):
             bait_step.update(bait=setup.bait, step=None)
             if setup.bait:
                 price, batch = bait_price(state, setup.bait), bait_batch(route, setup.biome)
-                add('bait', f'Buy {setup.bait}, {batch} at a time', math.ceil(price * batch),
+                stock = state.bait_stock.get(setup.bait, 0)
+                buy = f'buy {setup.bait}, {batch} at a time'
+                add('bait', f'Use the {stock:,} {setup.bait} on hand, then {buy}' if stock else 'B' + buy[1:],
+                    math.ceil(price * batch),
                     why=f'${price:,.2f} a bait, paid from the money each trip makes; never run out')
-                bait_step.update(step=steps[-1], price=price, **{'from': trips})
+                bait_step.update(step=steps[-1], price=price, stock=stock, **{'from': trips})
         state.setup = setup
         all_boosts = current in route['boosts']['always_from']
         cache = {}

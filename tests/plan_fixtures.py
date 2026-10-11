@@ -37,7 +37,7 @@ def account_state():
             'Super Crates': {'level': 2, 'max': 5, 'price': 150}, 'Worker Crates': {'level': 2, 'max': 5, 'price': 150},
             'Fishing Frenzy': {'level': 0, 'max': 5, 'price': 50},
             'Duplicator 2.0': {'level': 0, 'max': 10, 'price': None}}, 'hooks': 11}},
-        'bait': {'values': {'current': None}},
+        'bait': {'values': {'current': None, 'owned': {}}},
     }}
 
 

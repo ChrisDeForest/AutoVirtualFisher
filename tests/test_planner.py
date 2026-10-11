@@ -85,12 +85,32 @@ class PlannerTests(unittest.TestCase):
         for step in baits:
             self.assertRegex(step['action'], r'^Buy .+, (200|500) at a time$')
             self.assertGreater(step['cost'], 0)
-            self.assertRegex(step['why'], r'about [\d,]+ bait \(\$[\d,]+\) until the next bait change')
+            self.assertRegex(step['why'], r'about [\d,]+ bait until the next bait change(, [\d,]+ from the bait on '
+                                          r'hand)?(, [\d,]+ bought \(\$[\d,]+\))?$')
         names = [s['action'].split(',')[0][4:] for s in baits]
         self.assertTrue(all(a != b for a, b in zip(names, names[1:])))     # one step per change, not per restock
         switched = [s for s in plan['steps'] if s['kind'] == 'switch' and 'bait ' in s['action']
                     and 'bait none' not in s['action']]
         self.assertGreaterEqual(len(baits), len(switched))
+
+    def test_bait_on_hand_is_used_first(self):
+        bare = make_plan(state(), ModelContext(DATA), PLAN)
+        first = next(s for s in bare['steps'] if s['kind'] == 'bait')
+        bait = first['action'].split(',')[0][4:]
+        stocked = state()
+        stocked.bait_stock = {bait: 100}
+        plan = make_plan(stocked, ModelContext(DATA), PLAN)
+        step = next(s for s in plan['steps'] if s['kind'] == 'bait')
+        self.assertIn(f'100 {bait} on hand', step['action'])
+        self.assertRegex(step['why'], r'100 from the bait on hand')
+        plenty = state()
+        plenty.bait_stock = {bait: 10 ** 7}
+        plan = make_plan(plenty, ModelContext(DATA), PLAN)
+        step = next(s for s in plan['steps'] if s['kind'] == 'bait')
+        self.assertEqual(step['action'], f'Use the 10,000,000 {bait} on hand')
+        self.assertEqual(step['cost'], 0)
+        # bait on hand is already paid for, so the route is no slower
+        self.assertLessEqual(plan['prestige']['seconds'], bare['prestige']['seconds'])
 
     def test_magic_bait_once_it_pays(self):
         plan = make_plan(state(), ModelContext(DATA), PLAN)

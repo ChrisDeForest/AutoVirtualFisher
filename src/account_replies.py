@@ -15,6 +15,8 @@ LEAGUE = ('Pet Helper', 'Bait Helper', 'Super Crates', 'Worker Crates', 'Fishing
 BOATS = ('Rowboat', 'Fishing Boat', 'Speedboat', 'Pontoon', 'Sailboat', 'Yacht', 'Luxury Yacht', 'Cruise Ship',
          'Goldboat', 'Sky Cruiser', 'Satellite', 'Space Shuttle', 'Cruiser', 'Alien Raft', 'Alien Submarine')
 BIOMES = ('River', 'Volcanic', 'Ocean', 'Sky', 'Space', 'Alien')
+# Longest first: an owned-bait line is matched by its ending, and "Artifact Magnet" ends in "Magnet".
+BAITS = ('Artifact Magnet', 'Support Bait', 'Magic Bait', 'Wise Bait', 'Leeches', 'Magnet', 'Worms', 'Fish')
 # Button labels and the shop's own wording: never items, never unread.
 BUTTONS = {'back', 'return', 'select', 'selected', 'deselect', 'maxed'}
 
@@ -164,20 +166,40 @@ def parse_rod(text):
     return _result({'current': current, 'owned': owned}, [] if current else ['Rod in use'], lines)
 
 
+def _owned_bait(line):
+    """(bait, count) from an owned-bait line ("<icon> Magic Bait - 1,485"), else None. The icon may read as a stray
+    letter or symbol, the dash as an en/em dash or tilde, and the thousands comma as a period or a space."""
+    match = re.match(r'^(.*?[A-Za-z])\s*[-–—~]\s*(\d[\d,. ]*)$', line)
+    if not match:
+        return None
+    name = match[1].strip()
+    for bait in BAITS:   # longest first, so "Artifact Magnet" is not read as "Magnet"
+        if name.lower().endswith(bait.lower()):
+            prefix = name[:len(name) - len(bait)].strip()
+            if len(prefix) <= 2 and not re.search(r'[a-z]{2}', prefix, re.I):
+                return bait, int(re.sub(r'\D', '', match[2]))
+    return None
+
+
 def parse_bait(text):
+    """The bait in use and how many of each bait are owned ("Worms - 68" lines; a bait with none is not listed, so
+    a whole reply with no lines means none owned). `owned` is None when the reply was not whole."""
     lines = _lines(text)
     current = None
     found = False
-    other = []
+    owned, other = {}, []
     for line in lines:
         match = re.match(r'Current bait:\s*(.+)$', line, re.I)
+        counted = _owned_bait(line)
         if match:
             found = True
             current = None if match[1].strip().upper() == 'NONE' else match[1].strip()
+        elif counted:
+            owned[counted[0]] = counted[1]
         elif not re.match(SLASH + r'?\s*bait\b', line, re.I):
-            # The format of owned bait has not been seen yet; kept as read.
             other.append(line)
-    return _result({'current': current, 'other_lines': other}, [] if found else ['Bait in use'], lines)
+    return _result({'current': current, 'owned': owned if found else None, 'other_lines': other},
+                   [] if found else ['Bait in use'], lines)
 
 
 def parse_biome(text):

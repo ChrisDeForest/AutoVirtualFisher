@@ -51,6 +51,16 @@ class PlanStateTests(unittest.TestCase):
         self.assertIn('Duplicator 2.0', s.league_prices)
         self.assertIsNone(s.league_prices['Duplicator 2.0'])
 
+    def test_bait_on_hand_from_the_bait_read(self):
+        self.assertEqual(state().bait_stock, {})                      # read, none owned
+        reads = account_state()
+        reads['sections']['bait']['values'] = {'current': 'Fish', 'owned': {'Fish': 909, 'Magic Bait': 1485}}
+        built = from_run(reads, synced(), CHARMS)
+        self.assertEqual(built.bait_stock, {'Fish': 909, 'Magic Bait': 1485})
+        t = built.copy()
+        t.bait_stock['Fish'] = 0
+        self.assertEqual(built.bait_stock['Fish'], 909)
+
     def test_missing_balance_is_not_planned(self):
         reads = synced()
         reads['profile']['balance'] = None

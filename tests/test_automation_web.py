@@ -359,12 +359,27 @@ class AutomationWebTests(unittest.TestCase):
         panel = unescape(render_panel(status))
         self.assertIn('<h2>Account</h2>', panel)
         for text in ('Better Fish 7/21', 'Better Chests 0/5', 'Fiberglass Rod (in use)', 'Rowboat',
-                     'Fishing Boat next, $25,000', 'Dolphin 52 (current)', 'Super Crates 2/5', 'None',
+                     'Fishing Boat next, $25,000', 'Dolphin 52 (current)', 'Super Crates 2/5', 'None in use; none owned',
                      'River', 'Hooks: 11'):
             self.assertIn(text, panel)
         self.assertIn('Not read: Worker Crates, Fishing Frenzy, Duplicator 2.0', panel, 'league page 2 missing')
         self.assertIn('Prestige shop', panel)
         self.assertIn('Not read yet', panel)
+
+    def test_account_box_lists_bait_owned(self):
+        from src import account_samples as sample
+        from src.account_replies import PARSERS
+        from src.account_state import apply_read, empty_state
+        account = apply_read(empty_state(), 'bait', PARSERS['bait'](sample.BAIT_OWNED), '2026-10-10T00:00:00+00:00')
+        status = {'running': False, 'reason': 'done', 'phase': 'STOPPED', 'trips': 0, 'config': {'max_trips': 0},
+                  'dashboard': {}, 'account': account}
+        panel = unescape(render_panel(status))
+        self.assertIn('Support Bait in use; Worms 68, Leeches 1,006, Magnet 212, Wise Bait 1,479, Fish 909, '
+                      'Artifact Magnet 1,727, Magic Bait 1,485, Support Bait 982', panel)
+        # A later whole reply showing no bait lines means none are left.
+        account = apply_read(account, 'bait', PARSERS['bait'](sample.BAIT), '2026-10-11T00:00:00+00:00')
+        panel = unescape(render_panel(dict(status, account=account)))
+        self.assertIn('None in use; none owned', panel)
 
     def test_all_eight_charms_are_listed_without_scrolling(self):
         from src.automation_web import _finds_box

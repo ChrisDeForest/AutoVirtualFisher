@@ -99,6 +99,15 @@ class ChooseSetupTests(unittest.TestCase):
                                                     'Volcanic'))
         self.assertNotIn('Wise Bait', options)              # money still matters before the Infinity Rod
 
+    def test_bait_on_hand_is_allowed_without_money(self):
+        s = state(level=90)
+        s.cash, s.fish_value = 0, 0
+        s.bait_stock = {'Magic Bait': 300, 'Wise Bait': 50, 'Magnet': 99}
+        options = bait_options(s, {'money': 1}, PLAN['route'], PLAN['prices'], 'Ocean')
+        self.assertIn('Magic Bait', options)
+        self.assertNotIn('Wise Bait', options)               # the guide's rules still apply to bait on hand
+        self.assertNotIn('Magnet', options)
+
     def test_bait_must_be_affordable_by_the_batch(self):
         s = state(level=90)
         s.cash, s.fish_value = 0, 0

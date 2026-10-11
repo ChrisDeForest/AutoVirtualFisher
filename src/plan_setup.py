@@ -106,8 +106,9 @@ def bait_batch(route, biome):
 
 def bait_options(state, needs, route, prices, biome, affordable=True):
     """The baits the model may choose from: none, and every bait unlocked at this level whose batch for the biome
-    (the guide: 200 at a time in River, 500 elsewhere) the money on hand can pay for. The bait in use stays allowed:
-    it is restocked from what each trip makes, so a purchase that empties the wallet does not take it away. The
+    (the guide: 200 at a time in River, 500 elsewhere) the money on hand can pay for. Bait on hand is allowed, and so
+    is the bait in use: it is restocked from what each trip makes, so a purchase that empties the wallet does not take
+    it away. The
     guide's exclusions stay: never Magnet or Support Bait, and Wise Bait only for an XP goal once the Infinity Rod is
     owned (until then money still matters). With `affordable` False the money on hand is not checked."""
     rules = route['bait']
@@ -118,7 +119,7 @@ def bait_options(state, needs, route, prices, biome, affordable=True):
             continue
         if name == rules['xp'] and not (set(needs) == {'xp'} and rules['xp_after_rod'] in state.rods):
             continue
-        if not affordable or name == state.setup.bait or bait_price(state, name) * batch <= money:
+        if not affordable or name == state.setup.bait or state.bait_stock.get(name, 0) > 0                 or bait_price(state, name) * batch <= money:
             options.append(name)
     return options
 

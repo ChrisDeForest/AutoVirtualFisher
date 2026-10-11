@@ -317,7 +317,12 @@ def _account_rows(sections):
         text = (', '.join(owned) or 'none') + (f'; {min(priced)[1]} next, ${min(priced)[0]:,}' if priced else '')
     rows.append(('Boats', text if values else None, unread))
     values, unread = section('bait')
-    rows.append(('Bait', (values['current'] or 'None') if values else None, unread))
+    if values:
+        owned = values.get('owned')
+        text = f'{values["current"] or "None"} in use; ' + (
+            'owned not read yet' if owned is None
+            else ', '.join(f'{name} {count:,}' for name, count in owned.items()) or 'none owned')
+    rows.append(('Bait', text if values else None, unread))
     values, unread = section('biome')
     rows.append(('Biome', ', '.join(values['unlocked'] or [values['current'] or '?']) if values else None, unread))
     values, unread = section('pet')
