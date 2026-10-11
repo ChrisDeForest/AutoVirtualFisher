@@ -7,7 +7,7 @@ from .game_model import max_charm_level
 from .plan_economy import charms_for_level, prestige_requirements, xp_to_level
 from .plan_forward import fish_forward
 from .plan_rules import apply, candidates, charm_exit, phase, rod_band, select_next
-from .plan_setup import choose_setup, metrics
+from .plan_setup import bait_batch, bait_options, bait_price, choose_setup, metrics
 
 
 def _needs(state, phase_name, route, action=None):
@@ -73,15 +73,19 @@ def _league(state, route, add):
         return
 
 
-def _until(current, action, charm_target, route):
-    """Trips still to fish before the next decision: until the purchase is covered, the charm grind's exit is reached
-    or the phase changes, whichever comes first. A hair is added so float sums cross the line."""
+def _until(current, action, charm_target, route, bait_wait=None):
+    """Trips still to fish before the next decision: until the purchase is covered, the charm grind's exit is reached,
+    a better bait's batch can be paid for (`bait_wait`) or the phase changes, whichever comes first. A hair is added
+    so float sums cross the line."""
     def until(st, r):
         if phase(st, route) != current:
             return 0
         parts = []
         if action is not None:
             short = action.price - st.money()
+            parts.append(0 if short <= 0 else short / max(r['money'], 1e-9) * (1 + 1e-9) + 1e-9)
+        if bait_wait is not None:
+            short = bait_wait - st.money()
             parts.append(0 if short <= 0 else short / max(r['money'], 1e-9) * (1 + 1e-9) + 1e-9)
         if charm_target is not None:
             short = charm_target - st.charm_total()
@@ -109,15 +113,18 @@ def _charm_target(state, phase_name, route):
 
 def _cached_chooser():
     """choose_setup with its results kept for one plan. With one need its amount cannot change the choice (every
-    setup is judged by the same rate), so only the need's name is part of the key."""
+    setup is judged by the same rate), so only the need's name is part of the key; the money on hand only through
+    which baits it can pay a batch of."""
     cache = {}
 
     def choose(state, needs, phase_name, ctx, route, prices):
         positive = sorted(name for name, amount in needs.items() if amount > 0)
         amounts = tuple(sorted(needs.items())) if len(positive) > 1 else None
         account = state.account
+        baits = tuple(tuple(bait_options(state, needs, route, prices, biome)) for biome in ('River', None))
         key = (phase_name, tuple(sorted(needs)), tuple(positive), amounts, account.level, account.boats,
-               frozenset(state.rods), tuple(sorted(account.upgrades.items())), tuple(sorted(account.charms.items())))
+               frozenset(state.rods), tuple(sorted(account.upgrades.items())), tuple(sorted(account.charms.items())),
+               baits)
         if key not in cache:
             cache[key] = choose_setup(state, needs, phase_name, ctx, route, prices)
         return cache[key]
@@ -151,6 +158,12 @@ def make_plan(state, ctx, plan_data, limits=(3000, 2.0), clock=time.monotonic):
                       'seconds': seconds, 'why': why})
 
     _league(state, route, add)
+    bait_step = {'bait': object()}                     # the last bait step, finished when the bait changes
+
+    def close_bait():
+        if bait_step.get('step') is not None:
+            used = math.ceil(trips - bait_step['from'])
+            bait_step['step']['why'] += f'; about {used:,} bait (${math.ceil(used * bait_step["price"]):,}) '                                         'until the next bait change'
 
     while True:
         if len(steps) >= limits[0] or clock() - started > limits[1]:
@@ -175,6 +188,14 @@ def make_plan(state, ctx, plan_data, limits=(3000, 2.0), clock=time.monotonic):
         switch = _switch_text(state.setup, setup)
         if switch:
             add('switch', switch, why='best setup for ' + ', '.join(sorted(needs)))
+        if setup.bait != bait_step['bait']:
+            close_bait()
+            bait_step.update(bait=setup.bait, step=None)
+            if setup.bait:
+                price, batch = bait_price(state, setup.bait), bait_batch(route, setup.biome)
+                add('bait', f'Buy {setup.bait}, {batch} at a time', math.ceil(price * batch),
+                    why=f'${price:,.2f} a bait, paid from the money each trip makes; never run out')
+                bait_step.update(step=steps[-1], price=price, **{'from': trips})
         state.setup = setup
         all_boosts = current in route['boosts']['always_from']
         cache = {}
@@ -185,7 +206,7 @@ def make_plan(state, ctx, plan_data, limits=(3000, 2.0), clock=time.monotonic):
                 cache[key] = metrics(st, st.setup, ctx, route, prices, all_boosts) or {**m, 'money': 0, 'xp': 0}
             return cache[key]
 
-        until = _until(current, action, _charm_target(state, current, route), route)
+        until = _until(current, action, _charm_target(state, current, route), route, m.get('bait_wait'))
         result = fish_forward(state, rates, until, stop_levels, route=route, prices=prices)
         trips += result['trips']
         seconds += result['seconds']
@@ -210,6 +231,7 @@ def make_plan(state, ctx, plan_data, limits=(3000, 2.0), clock=time.monotonic):
         if action.for_rod and action.for_rod in route.get('salesman_estimates', {}):
             plan['assumptions'].add(route['salesman_estimates'][action.for_rod])
         state = apply(state, action, ctx.data)
+    close_bait()
     if not plan['prestige']['reached']:
         level, money, charms = requirement
         missing = []

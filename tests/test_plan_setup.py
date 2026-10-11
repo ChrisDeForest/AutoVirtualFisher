@@ -6,7 +6,7 @@ from tests.plan_fixtures import state
 from src.game_model import trip
 from src.game_model_data import load_game_data
 from src.plan_data import load_plan_data
-from src.plan_setup import ModelContext, choose_setup, metrics, score
+from src.plan_setup import ModelContext, bait_options, choose_setup, metrics, score
 
 DATA, PLAN = load_game_data(), load_plan_data()
 
@@ -64,13 +64,54 @@ class ScoreTests(unittest.TestCase):
 
 
 class ChooseSetupTests(unittest.TestCase):
-    def test_money_goal_picks_an_owned_rod_and_a_level_bait(self):
+    def test_money_goal_picks_an_owned_rod_and_an_unlocked_bait(self):
         s = state()
         setup, m = choose_setup(s, {'money': 1e6}, 'xp_grind_1', ctx(), PLAN['route'], PLAN['prices'])
         self.assertIn(setup.rod, s.rods)
-        self.assertEqual(setup.bait, 'Fish')            # level 52: Fish bait (40-79)
+        self.assertIn(setup.bait, bait_options(s, {'money': 1e6}, PLAN['route'], PLAN['prices'], setup.biome))
         self.assertIn(setup.biome, ('River', 'Volcanic'))
         self.assertIn(setup.pet, s.account.pets)
+
+    def test_bait_is_the_models_best_net_of_its_cost(self):
+        for level, needs, phase in ((52, {'money': 1e6}, 'xp_grind_1'), (90, {'money': 1e7}, 'xp_grind_1'),
+                                    (120, {'charms': 100}, 'charm_grind_1')):
+            s = state(level=level)
+            s.rods.add('Golden Rod')
+            s.cash = 1e9
+            setup, m = choose_setup(s, needs, phase, ctx(), PLAN['route'], PLAN['prices'])
+            options = bait_options(s, needs, PLAN['route'], PLAN['prices'], setup.biome)
+            scores = {bait: score(metrics(s, replace(setup, bait=bait), ctx(), PLAN['route'], PLAN['prices'],
+                                          m['fish_share'] == 1.0 and m['treasure_share'] == 1.0), needs)
+                      for bait in options}
+            self.assertEqual(setup.bait, max(scores, key=scores.get), (level, needs, scores))
+            self.assertEqual(m['setup'].bait, setup.bait)
+
+    def test_bait_options_follow_unlocks_and_the_guide(self):
+        s = state(level=90)
+        s.cash = 1e9
+        options = bait_options(s, {'money': 1}, PLAN['route'], PLAN['prices'], 'Ocean')
+        self.assertIn(None, options)
+        self.assertIn('Magic Bait', options)
+        self.assertIn('Artifact Magnet', options)
+        self.assertNotIn('Magnet', options)                 # the guide: never Magnet
+        self.assertNotIn('Support Bait', options)           # locked at 90, and only for workers from P15
+        self.assertNotIn('Magic Bait', bait_options(state(level=79), {'money': 1}, PLAN['route'], PLAN['prices'],
+                                                    'Volcanic'))
+        self.assertNotIn('Wise Bait', options)              # money still matters before the Infinity Rod
+
+    def test_bait_must_be_affordable_by_the_batch(self):
+        s = state(level=90)
+        s.cash, s.fish_value = 0, 0
+        self.assertEqual(bait_options(s, {'money': 1}, PLAN['route'], PLAN['prices'], 'Ocean'), [None])
+        s.cash = 500 * 250 * (1 - 0.05 * s.account.upgrades.get('Bait Efficiency', 0))   # 500 Magic Bait
+        self.assertIn('Magic Bait', bait_options(s, {'money': 1}, PLAN['route'], PLAN['prices'], 'Ocean'))
+        river = bait_options(s, {'money': 1}, PLAN['route'], PLAN['prices'], 'River')
+        self.assertIn('Magic Bait', river)                  # River batches are 200
+        s.cash -= 1
+        self.assertNotIn('Magic Bait', bait_options(s, {'money': 1}, PLAN['route'], PLAN['prices'], 'Ocean'))
+        setup, _ = choose_setup(state(level=90, balance=0, fish_value=0), {'money': 1e6}, 'xp_grind_1', ctx(),
+                                PLAN['route'], PLAN['prices'])
+        self.assertIsNone(setup.bait)
 
     def test_pet_judged_by_stat_bonus_not_level(self):
         for needs, phase in (({'xp': 1e6}, 'xp_grind_2'), ({'money': 1e6}, 'xp_grind_1'),

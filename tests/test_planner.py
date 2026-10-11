@@ -78,6 +78,26 @@ class PlannerTests(unittest.TestCase):
         last = max(charms for current, charms in stretches if current == 'charm_grind_1')
         self.assertLess(last, 190 + 5)                   # 190 charms or Haste 6: no long overshoot
 
+    def test_every_bait_change_lists_a_bait_purchase_with_amounts(self):
+        plan = make_plan(state(), ModelContext(DATA), PLAN)
+        baits = [s for s in plan['steps'] if s['kind'] == 'bait']
+        self.assertTrue(baits)
+        for step in baits:
+            self.assertRegex(step['action'], r'^Buy .+, (200|500) at a time$')
+            self.assertGreater(step['cost'], 0)
+            self.assertRegex(step['why'], r'about [\d,]+ bait \(\$[\d,]+\) until the next bait change')
+        names = [s['action'].split(',')[0][4:] for s in baits]
+        self.assertTrue(all(a != b for a, b in zip(names, names[1:])))     # one step per change, not per restock
+        switched = [s for s in plan['steps'] if s['kind'] == 'switch' and 'bait ' in s['action']
+                    and 'bait none' not in s['action']]
+        self.assertGreaterEqual(len(baits), len(switched))
+
+    def test_magic_bait_once_it_pays(self):
+        plan = make_plan(state(), ModelContext(DATA), PLAN)
+        used = {s['action'].split(',')[0][4:] for s in plan['steps'] if s['kind'] == 'bait'}
+        self.assertIn('Magic Bait', used)
+        self.assertIn('Artifact Magnet', used)                 # the charm grinds
+
     def test_route_estimates_in_use_are_listed(self):
         plan = make_plan(state(), ModelContext(DATA), PLAN)
         self.assertIn(PLAN['route']['special_estimates'][0], plan['assumptions'])   # Bait Lover 4 is bought

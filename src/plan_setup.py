@@ -64,9 +64,7 @@ def metrics(state, setup, ctx, route, prices, all_boosts):
         b = _value(base, key)
         return b + fish_share * (_value(fished, key) - b) + treasure_share * (_value(treasured, key) - b)
 
-    bait_cost = 0.0
-    if setup.bait:
-        bait_cost = BAIT_COST.get(setup.bait, 0) * (1 - 0.05 * state.account.upgrades.get('Bait Efficiency', 0))
+    bait_cost = bait_price(state, setup.bait)
     boost_use = (fish_share + treasure_share) * rules['per_hour'] * seconds / 3600
     result = {
         'money': blend('money_fish') * factor('money_fish') + blend('money_chests') * factor('chest_chance') - bait_cost,
@@ -94,6 +92,61 @@ def score(m, needs):
     return -worst
 
 
+def bait_price(state, bait):
+    """What one bait costs, less Bait Efficiency (no bait costs nothing)."""
+    if not bait:
+        return 0.0
+    return BAIT_COST.get(bait, 0) * (1 - 0.05 * state.account.upgrades.get('Bait Efficiency', 0))
+
+
+def bait_batch(route, biome):
+    batches = route['bait']['batch']
+    return batches.get(biome, batches['default'])
+
+
+def bait_options(state, needs, route, prices, biome, affordable=True):
+    """The baits the model may choose from: none, and every bait unlocked at this level whose batch for the biome
+    (the guide: 200 at a time in River, 500 elsewhere) the money on hand can pay for. The bait in use stays allowed:
+    it is restocked from what each trip makes, so a purchase that empties the wallet does not take it away. The
+    guide's exclusions stay: never Magnet or Support Bait, and Wise Bait only for an XP goal once the Infinity Rod is
+    owned (until then money still matters). With `affordable` False the money on hand is not checked."""
+    rules = route['bait']
+    batch, money = bait_batch(route, biome), state.money()
+    options = [None]
+    for name, level in sorted(prices['bait_unlock'].items(), key=lambda item: item[1]):
+        if level > state.level or name in rules['never'] or name not in BAIT_COST:
+            continue
+        if name == rules['xp'] and not (set(needs) == {'xp'} and rules['xp_after_rod'] in state.rods):
+            continue
+        if not affordable or name == state.setup.bait or bait_price(state, name) * batch <= money:
+            options.append(name)
+    return options
+
+
+def _with_bait(state, best, needs, ctx, route, prices, all_boosts):
+    """The bait that meets `needs` soonest on this setup, its cost per trip taken off the money it makes. When a
+    better bait is unlocked but its batch cannot be paid for yet, `bait_wait` is the money at which it can: the plan
+    fishes until then and chooses again."""
+    biome = best['setup'].biome
+    allowed = bait_options(state, needs, route, prices, biome)
+    top = best
+    for bait in bait_options(state, needs, route, prices, biome, affordable=False):
+        if bait == best['setup'].bait:
+            continue
+        m = metrics(state, replace(best['setup'], bait=bait), ctx, route, prices, all_boosts)
+        if m is None:
+            continue
+        if bait in allowed and score(m, needs) > score(best, needs):
+            best = m
+        if score(m, needs) > score(top, needs):
+            top = m
+    best = dict(best)
+    best['bait_wait'] = None
+    if top['setup'].bait not in allowed:
+        best['bait_wait'] = bait_price(state, top['setup'].bait) * bait_batch(route, biome)
+    return best
+
+
 def _bait(state, needs, phase, route, prices):
     level, rules = state.level, route['bait']
     allowed = lambda name: prices['bait_unlock'].get(name, 10 ** 9) <= level
@@ -109,10 +162,11 @@ def _bait(state, needs, phase, route, prices):
 
 
 def choose_setup(state, needs, phase, ctx, route, prices):
-    """The setup that meets `needs` soonest: rod and biome by the model, bait by the rules, pet by its stat bonus
-    with all pets at one level (the phase's pet order breaks ties)."""
+    """The setup that meets `needs` soonest: rod and biome by the model (tried with the guide's bait for the level and
+    goal), then the bait by the model among those unlocked and affordable, net of its cost, then the pet by its stat
+    bonus with all pets at one level (the phase's pet order breaks ties), then the bait once more for that pet."""
     all_boosts = phase in route['boosts']['always_from']
-    bait = _bait(state, needs, phase, route, prices)
+    guide_bait = _bait(state, needs, phase, route, prices)
     biomes = [b for b, level in prices['biome_unlock'].items() if level <= state.level and b in ctx.data['biomes']]
     rods = sorted(state.rods)
     if phase.startswith('charm_grind') and route['charm_grind']['rod'] in state.rods:
@@ -122,13 +176,16 @@ def choose_setup(state, needs, phase, ctx, route, prices):
         for rod in rods:
             if biome not in ctx.data['rods'].get(rod, {}).get('biomes', ()):
                 continue
+            bait = guide_bait if guide_bait in bait_options(state, needs, route, prices, biome) else None
             setup = replace(state.setup, rod=rod, biome=biome, bait=bait, fish_boost=False, treasure_boost=False)
             m = metrics(state, setup, ctx, route, prices, all_boosts)
             if m is not None and (best is None or score(m, needs) > score(best, needs)):
                 best = m
     if best is None:
         return None, 'no owned rod is modelled in an unlocked biome'
+    best = _with_bait(state, best, needs, ctx, route, prices, all_boosts)
     best = _with_pet(state, best, needs, ctx, route, prices, all_boosts)
+    best = _with_bait(state, best, needs, ctx, route, prices, all_boosts)
     return best['setup'], best
 
 
