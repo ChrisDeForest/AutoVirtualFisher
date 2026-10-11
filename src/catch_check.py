@@ -18,6 +18,11 @@ def load_fish_reference(path: Path = FISH_REFERENCE_PATH) -> dict | None:
         return None
 
 
+def xp_from_fish(trip: dict) -> int | None:
+    """The trip's XP from its catch: its XP line includes chest XP, which does not scale with the catch."""
+    return trip['xp'] - trip.get('chest_xp', 0) if trip.get('xp') is not None else None
+
+
 def check_batch(trip_details: list[dict], reference: dict | None, biome: str | None = None) -> dict | None:
     """Return per-trip XP ratios against wiki base XP, with flags; None without a reference table."""
     if reference is None:
@@ -35,8 +40,7 @@ def check_batch(trip_details: list[dict], reference: dict | None, biome: str | N
             base_value += row['base_sell'] * count
             if biome and biome not in row['biomes']:
                 off_biome.append(name)
-        # The trip's XP line includes chest XP, which does not scale with the catch.
-        xp = trip['xp'] - trip.get('chest_xp', 0) if trip.get('xp') is not None else None
+        xp = xp_from_fish(trip)
         ratio = xp / base_xp if xp and base_xp and not unknown else None
         jump = bool(ratio and previous and abs(ratio - previous['ratio']) >
                     1 / base_xp + 1 / previous['base_xp'] + JUMP_ALLOWANCE)

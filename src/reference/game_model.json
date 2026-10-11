@@ -1,0 +1,139 @@
+{
+  "source": "The miraheze wiki (docs/guides/miraheze/*.wikitext, edited May-Sep 2026) wins wherever it has a value; then docs/progression-model.md; then the buff calculator vB1.13.4 (docs/guides/Copy of Buff Calculator.xlsx) and crate_rewards.png. Fish tiers come from src/reference/fish.json. Each table's own source is under 'sources'.",
+  "sources": {
+    "level_sell_multiplier": "buff calculator K7 (not on the miraheze wiki).",
+    "biomes": "fish_multiplier and cooldown_add: miraheze Biome page (same values as before). supporter_multiplier: miraheze Rod page, Supporter row (same). fish_boost_fish, lava_drop, diamond_drop: buff calculator (not on the wiki). Abyss (miraheze Biome: +5 s, 1%, Supporter x4.6) is not modelled: fish.json has no Abyss fish.",
+    "example_shares": "buff calculator J22:J26 (the calculator's example rod; the same as the miraheze Plastic Rod row).",
+    "rods": "miraheze Rod page (2026-08-13): cost, mean catch, base treasure chance, treasure quality bonus (+30% is 1.3), usable biomes and the fish quality tables, matched to fish.json by fish name (N/A is 0). unlock_level: the biome the rod comes with (miraheze Biome page: Abyss rods 2500; others unchanged). Abyss shares are kept as the wiki names them but not loaded: Abyss is not modelled.",
+    "baits": "miraheze Bait page (2026-08-12).",
+    "pets": "miraheze Pet page (2026-08-12): k from the level formulas (Puffer 10 + 0.75x is k 1); the same values as before.",
+    "chest_order": "buff calculator K39:K44.",
+    "chests": "buff calculator M46:P51 and crate_rewards.png; legendary diamond 20% from docs/progression-model.md. Charm rates match the miraheze Charm page. The wiki has no chest drop table.",
+    "hidden_effects": "docs/progression-model.md."
+  },
+  "level_sell_multiplier": [[1, 1.0], [5, 1.1], [15, 1.2], [25, 1.3], [35, 1.4], [50, 1.5], [75, 1.6], [100, 1.7],
+                            [150, 1.8], [200, 1.9], [250, 2.0]],
+  "biomes": {
+    "River":    {"index": 1, "fish_multiplier": 1,     "cooldown_add": 0,   "fish_boost_fish": 0.3, "supporter_multiplier": 1.0, "lava_drop": 0,   "diamond_drop": 0},
+    "Volcanic": {"index": 2, "fish_multiplier": 0.6,   "cooldown_add": 0.5, "fish_boost_fish": 0.3, "supporter_multiplier": 1.2, "lava_drop": 1.5, "diamond_drop": 0},
+    "Ocean":    {"index": 3, "fish_multiplier": 0.3,   "cooldown_add": 1,   "fish_boost_fish": 0.3, "supporter_multiplier": 1.4, "lava_drop": 1,   "diamond_drop": 0.5},
+    "Sky":      {"index": 4, "fish_multiplier": 0.12,  "cooldown_add": 2,   "fish_boost_fish": 0.9, "supporter_multiplier": 2.0, "lava_drop": 1,   "diamond_drop": 0.5},
+    "Space":    {"index": 5, "fish_multiplier": 0.065, "cooldown_add": 3,   "fish_boost_fish": 0.7, "supporter_multiplier": 3.2, "lava_drop": 1,   "diamond_drop": 0.5},
+    "Alien":    {"index": 6, "fish_multiplier": 0.03,  "cooldown_add": 4,   "fish_boost_fish": 0.5, "supporter_multiplier": 4.0, "lava_drop": 1,   "diamond_drop": 0.5}
+  },
+  "example_shares": [84, 13.5, 2.5, 0, 0],
+  "rods": {
+    "Plastic Rod":          {"mean_catch": 7, "treasure_chance": 0.05, "treasure_quality": 1.0, "unlock_level": 1, "price": 0, "biomes": ["River"],
+      "shares": {
+        "River": {"Fish": 84, "Salmon": 13.5, "Cod": 2.5, "Tropical fish": 0, "Pufferfish": 0}}},
+    "Improved Rod":         {"mean_catch": 7.5, "treasure_chance": 0.05, "treasure_quality": 1.0, "unlock_level": 1, "price": 500, "biomes": ["River"],
+      "shares": {
+        "River": {"Fish": 56, "Salmon": 30, "Cod": 14, "Tropical fish": 0, "Pufferfish": 0}}},
+    "Steel Rod":            {"mean_catch": 6.5, "treasure_chance": 0.05, "treasure_quality": 1.0, "unlock_level": 1, "price": 8000, "biomes": ["River"],
+      "shares": {
+        "River": {"Fish": 20, "Salmon": 35, "Cod": 45, "Tropical fish": 0, "Pufferfish": 0}}},
+    "Fiberglass Rod":       {"mean_catch": 8.5, "treasure_chance": 0.05, "treasure_quality": 1.0, "unlock_level": 1, "price": 50000, "biomes": ["River"],
+      "shares": {
+        "River": {"Fish": 15, "Salmon": 30, "Cod": 50, "Tropical fish": 5, "Pufferfish": 0}}},
+    "Heavy Rod":            {"mean_catch": 7.5, "treasure_chance": 0.085, "treasure_quality": 1.05, "unlock_level": 1, "price": 100000, "biomes": ["River"],
+      "shares": {
+        "River": {"Fish": 15, "Salmon": 30, "Cod": 45, "Tropical fish": 10, "Pufferfish": 0}}},
+    "Alloy Rod":            {"mean_catch": 8.5, "treasure_chance": 0.05, "treasure_quality": 1.0, "unlock_level": 1, "price": 250000, "biomes": ["River"],
+      "shares": {
+        "River": {"Fish": 15, "Salmon": 30, "Cod": 42, "Tropical fish": 10, "Pufferfish": 3}}},
+    "Lava Rod":             {"mean_catch": 9, "treasure_chance": 0.05, "treasure_quality": 1.0, "unlock_level": 1, "price": 1000000, "biomes": ["River", "Volcanic", "Ocean"],
+      "shares": {
+        "Volcanic": {"Salmon": 15, "Cod": 25, "Tropical fish": 37, "Fiery puffer": 19, "Hot cod": 4}}},
+    "Magma Rod":            {"mean_catch": 11.5, "treasure_chance": 0.05, "treasure_quality": 1.0, "unlock_level": 1, "price": 10000000, "biomes": ["River", "Volcanic", "Ocean"],
+      "shares": {
+        "Volcanic": {"Salmon": 10, "Cod": 20, "Tropical fish": 35, "Fiery puffer": 27, "Hot cod": 8},
+        "Ocean": {"Tropical fish": 35, "Pufferfish": 54, "Squid": 9, "Turtle": 2, "Dolphin": 0}}},
+    "Oceanium Rod":         {"mean_catch": 12.5, "treasure_chance": 0.05, "treasure_quality": 1.0, "unlock_level": 100, "price": 75000000, "biomes": ["River", "Ocean"],
+      "shares": {
+        "Ocean": {"Tropical fish": 35, "Pufferfish": 40, "Squid": 18, "Turtle": 7, "Dolphin": 0.1}}},
+    "Golden Rod":           {"mean_catch": 5, "treasure_chance": 0.13, "treasure_quality": 1.0, "unlock_level": 100, "price": 120000000, "biomes": ["River", "Volcanic", "Ocean", "Sky"],
+      "shares": {
+        "Ocean": {"Tropical fish": 45, "Pufferfish": 40, "Squid": 10, "Turtle": 5, "Dolphin": 0}}},
+    "Superium Rod":         {"mean_catch": 13, "treasure_chance": 0.055, "treasure_quality": 1.0, "unlock_level": 100, "price": 250000000, "biomes": ["River", "Volcanic", "Ocean", "Sky"],
+      "shares": {
+        "Ocean": {"Tropical fish": 3, "Pufferfish": 30, "Squid": 40, "Turtle": 25, "Dolphin": 2}}},
+    "Infinity Rod":         {"mean_catch": 16.5, "treasure_chance": 0.06, "treasure_quality": 1.0, "unlock_level": 100, "price": 1000000000, "biomes": ["River", "Volcanic", "Ocean", "Sky"],
+      "shares": {
+        "Ocean": {"Tropical fish": 0, "Pufferfish": 15, "Squid": 35, "Turtle": 45, "Dolphin": 5},
+        "Sky": {"Fiery puffer": 60, "Squid": 24, "Guardian": 9.7, "Emerald squid": 5.5, "Rainbow fish": 0.8}}},
+    "Floating Rod":         {"mean_catch": 22.5, "treasure_chance": 0.065, "treasure_quality": 1.0, "unlock_level": 250, "price": 50000000000, "biomes": ["River", "Volcanic", "Ocean", "Sky", "Space"],
+      "shares": {
+        "Sky": {"Fiery puffer": 40, "Squid": 40, "Guardian": 10, "Emerald squid": 8, "Rainbow fish": 2}}},
+    "Sky Rod":              {"mean_catch": 32, "treasure_chance": 0.067, "treasure_quality": 1.0, "unlock_level": 250, "price": 250000000000, "biomes": ["River", "Volcanic", "Ocean", "Sky", "Space"],
+      "shares": {
+        "Sky": {"Fiery puffer": 20, "Squid": 40, "Guardian": 26, "Emerald squid": 10, "Rainbow fish": 4},
+        "Space": {"Fish": 50, "Salmon": 33, "Rainbow fish": 12.4, "Space fish": 4.4, "Galactic crab": 0.2}}},
+    "Meteor Rod":           {"mean_catch": 22, "treasure_chance": 0.15, "treasure_quality": 1.3, "unlock_level": 500, "price": 500000000000, "biomes": ["Space", "Alien"],
+      "shares": {
+        "Space": {"Fish": 40, "Salmon": 32.3, "Rainbow fish": 20, "Space fish": 7.5, "Galactic crab": 0.2},
+        "Alien": {"Emerald squid": 30, "Rainbow fish": 40, "Space fish": 27.5, "Shark": 2, "Alien fish": 0.5}}},
+    "Space Rod":            {"mean_catch": 35, "treasure_chance": 0.068, "treasure_quality": 1.0, "unlock_level": 500, "price": 1000000000000, "biomes": ["River", "Volcanic", "Ocean", "Sky", "Space", "Alien"],
+      "shares": {
+        "Space": {"Fish": 40, "Salmon": 25, "Rainbow fish": 20, "Space fish": 14.5, "Galactic crab": 0.5},
+        "Alien": {"Emerald squid": 30, "Rainbow fish": 40, "Space fish": 25, "Shark": 4, "Alien fish": 1}}},
+    "Alien Rod":            {"mean_catch": 39.5, "treasure_chance": 0.07, "treasure_quality": 1.05, "unlock_level": 1000, "price": 5000000000000, "biomes": ["River", "Volcanic", "Ocean", "Sky", "Space", "Alien", "Abyss"],
+      "shares": {
+        "Alien": {"Emerald squid": 20, "Rainbow fish": 30, "Space fish": 45, "Shark": 7, "Alien fish": 1.5},
+        "Abyss": {"Galactic Crab": 64, "Shark": 25, "Artifact Fish": 10, "Dark Puffer": 1, "Dark Tuna": 0}}},
+    "Ultimate Depths Rod":  {"mean_catch": 43.5, "treasure_chance": 0.07, "treasure_quality": 1.05, "unlock_level": 2500, "price": 50000000000000, "biomes": ["River", "Volcanic", "Ocean", "Sky", "Space", "Alien", "Abyss"],
+      "shares": {
+        "Alien": {"Emerald squid": 10, "Rainbow fish": 35, "Space fish": 45, "Shark": 8.1, "Alien fish": 1.9},
+        "Abyss": {"Galactic Crab": 42, "Shark": 42, "Artifact Fish": 15.7, "Dark Puffer": 2, "Dark Tuna": 0.01}}},
+    "Abyssal Supermagnet":  {"mean_catch": 25, "treasure_chance": 0.05, "treasure_quality": 1.5, "unlock_level": 2500, "price": 250000000000000, "biomes": ["Abyss"],
+      "shares": {
+        "Abyss": {"Galactic Crab": 42, "Shark": 42, "Artifact Fish": 14, "Dark Puffer": 2, "Dark Tuna": 0.01}}},
+    "Dark Rod":             {"mean_catch": 46, "treasure_chance": 0.07, "treasure_quality": 1.1, "unlock_level": 2500, "price": 1000000000000000, "biomes": ["River", "Volcanic", "Ocean", "Sky", "Space", "Alien", "Abyss"],
+      "shares": {
+        "Alien": {"Emerald squid": 15, "Rainbow fish": 25, "Space fish": 46, "Shark": 11, "Alien fish": 3},
+        "Abyss": {"Galactic Crab": 40, "Shark": 40, "Artifact Fish": 17, "Dark Puffer": 2.7, "Dark Tuna": 0.3}}},
+    "Supporter Rod":        {"mean_catch": 8.5, "treasure_chance": 0.065, "treasure_quality": 1.1, "unlock_level": 1, "price": 0, "biomes": ["River", "Volcanic", "Ocean", "Sky", "Space", "Alien", "Abyss"], "scales_with_biome": true,
+      "shares": {
+        "River": {"Fish": 14, "Salmon": 32, "Cod": 47, "Tropical fish": 6.3, "Pufferfish": 0.7},
+        "Volcanic": {"Salmon": 10, "Cod": 24, "Tropical fish": 42, "Fiery puffer": 20, "Hot cod": 4},
+        "Ocean": {"Tropical fish": 30, "Pufferfish": 40, "Squid": 23, "Turtle": 6.8, "Dolphin": 0.2},
+        "Sky": {"Fiery puffer": 39.8, "Squid": 39.8, "Guardian": 12.7, "Emerald squid": 6.7, "Rainbow fish": 1},
+        "Space": {"Fish": 40, "Salmon": 32.7, "Rainbow fish": 20, "Space fish": 7.05, "Galactic crab": 0.25},
+        "Alien": {"Emerald squid": 30, "Rainbow fish": 30, "Space fish": 36, "Shark": 5, "Alien fish": 1},
+        "Abyss": {"Galactic Crab": 60, "Shark": 26.4, "Artifact Fish": 12.303, "Dark Puffer": 1.29, "Dark Tuna": 0.007}}}
+  },
+  "baits": {
+    "Worms":           {"xp": -0.1, "bonus_fish": 3},
+    "Leeches":         {"fish_catch": 0.2, "fish_quality": 0.2, "xp": -0.2, "bonus_fish": 3},
+    "Magnet":          {"fish_catch": -0.1, "fish_quality": -0.1, "treasure_chance": 0.4, "xp": 0.2},
+    "Wise Bait":       {"xp": 1.5},
+    "Fish":            {"fish_catch": 0.5, "fish_quality": 1.0, "xp": -0.3, "bonus_fish": 1},
+    "Artifact Magnet": {"fish_catch": -0.3, "fish_quality": -0.3, "treasure_chance": 0.4, "treasure_quality": 0.5, "xp": 0.3},
+    "Magic Bait":      {"fish_catch": 1.0, "fish_quality": 0.5, "treasure_chance": 0.15, "treasure_quality": 0.15, "xp": -0.2, "bonus_fish": 2},
+    "Support Bait":    {"fish_catch": 0.3, "fish_quality": 0.2, "bonus_fish": 5, "pet_effectiveness": 0.35}
+  },
+  "pets": {
+    "Puffer":    {"fish_catch": 1.0},
+    "Dolphin":   {"treasure_chance": 0.75, "xp": 0.75},
+    "Zebrafish": {"fish_catch": 0.25, "fish_quality": 1.0},
+    "Axolotl":   {"treasure_chance": 0.25, "treasure_quality": 1.0},
+    "Tuna":      {"fish_catch": 0.3, "fish_quality": 0.3, "treasure_chance": 0.3, "treasure_quality": 0.3, "xp": 0.3}
+  },
+  "chest_order": ["artifact", "legendary", "epic", "rare", "uncommon", "common"],
+  "chests": {
+    "common":    {"share_per_quality": 0.45,  "a": 1.5,  "gold": 0.15, "emerald": 0.02, "lava": 0.01,  "diamond": 0,    "charm": 0,    "multiplier": 1.0, "event": "Found common chest"},
+    "uncommon":  {"share_per_quality": 0.3,   "a": 1.5,  "gold": 0.25, "emerald": 0.05, "lava": 0.019, "diamond": 0.01, "charm": 0,    "multiplier": 1.0, "event": "Found uncommon chest"},
+    "rare":      {"share_per_quality": 0.17,  "a": 2.1,  "gold": 0.38, "emerald": 0.15, "lava": 0.065, "diamond": 0.06, "charm": 0.02, "multiplier": 1.4, "event": "Found rare chest"},
+    "epic":      {"share_per_quality": 0.055, "a": 2.55, "gold": 0.25, "emerald": 0.25, "lava": 0.1,   "diamond": 0.15, "charm": 0.25, "multiplier": 1.7, "event": "Found epic crate"},
+    "legendary": {"share_per_quality": 0.02,  "a": 3.3,  "gold": 0.15, "emerald": 0.1,  "lava": 0.15,  "diamond": 0.2,  "charm": 0.4,  "multiplier": 2.2, "event": "Found legendary crate"},
+    "artifact":  {"share_per_quality": 0.005, "a": 4.5,  "gold": 0.05, "emerald": 0.05, "lava": 0.05,  "diamond": 0.1,  "charm": 0.75, "multiplier": 3.0, "event": "Found artifact box"}
+  },
+  "hidden_effects": [
+    {"buff": "fish_catch", "factor": 1.05, "name": "the official server bonus"},
+    {"buff": "fish_catch", "factor": 1.1, "name": "a max clan"},
+    {"buff": "fish_catch", "factor": 1.155, "name": "the official server bonus and a max clan"},
+    {"buff": "fish_catch", "factor": 1.5, "name": "a fish and treasure event"},
+    {"buff": "sell_price", "factor": 1.2, "name": "a max clan"},
+    {"buff": "xp_multiplier", "factor": 1.15, "name": "a max clan"},
+    {"buff": "treasure_quality", "factor": 1.5, "name": "a max clan or a fish and treasure event"}
+  ]
+}

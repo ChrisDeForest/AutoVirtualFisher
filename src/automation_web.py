@@ -4,6 +4,7 @@ The page holds the start form; /automation/panel renders the live part (status, 
 run, inventory and recent-trip boxes), which the page swaps in every two seconds."""
 from html import escape
 from .fishing_log import CHARM_NAMES
+from .game_model import round_half_up
 
 MAX_TRIPS, MAX_MINUTES = 1000, 600
 DEFAULT_CHANNEL = 'Virtual Fisher'
@@ -70,6 +71,11 @@ STYLE = """<style>
 .mini th, .mini td { padding:6px 0; border-bottom:1px solid #263d4a; text-align:right; font-weight:400; }
 .mini th[scope=row], .mini thead th:first-child { text-align:left; padding-right:12px; }
 .mini thead th { color:var(--muted); font-size:13px; } .mini td + td, .mini th + th { padding-left:14px; }
+.tabs { display:flex; gap:4px; margin:0 0 22px; border-bottom:1px solid var(--line); }
+.tabs a { padding:8px 14px; color:var(--muted); text-decoration:none; border-bottom:2px solid transparent; }
+.tabs a.current { color:var(--ink); border-bottom-color:var(--sea); }
+.model td.bad { color:#ffda8b; } .model td.good { color:var(--sea); }
+.model .why { display:block; color:var(--muted); font-size:13px; }
 .visually-hidden { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
 @media(max-width:900px) { .finds { grid-template-columns:minmax(0,1fr); } }
 @media(max-width:900px) { .boxes, .rewards-row { grid-template-columns:minmax(0,1fr); } .box.wide { grid-column:auto; }
@@ -80,10 +86,24 @@ SCRIPT = """<script nonce="{nonce}">
 (function () {
   var panel = document.getElementById('panel');
   if (!panel) return;
+  function showTab() {
+    var wanted = (location.hash || '#run').slice(1);
+    var tabs = panel.querySelectorAll('section.tab');
+    var found = false;
+    tabs.forEach(function (tab) { if (tab.getAttribute('data-tab') === wanted) found = true; });
+    if (!found) wanted = 'run';
+    tabs.forEach(function (tab) { tab.hidden = tab.getAttribute('data-tab') !== wanted; });
+    panel.querySelectorAll('nav.tabs a').forEach(function (link) {
+      link.className = link.getAttribute('href') === '#' + wanted ? 'current' : '';
+    });
+  }
+  window.addEventListener('hashchange', showTab);
+  showTab();
   setInterval(function () {
     fetch('/automation/panel', {cache: 'no-store'}).then(function (r) { return r.text(); }).then(function (html) {
       var was = panel.getAttribute('data-running');
       panel.innerHTML = html;
+      showTab();
       var now = panel.querySelector('[data-running]');
       if (now && now.getAttribute('data-running') !== was) { location.reload(); }
     }).catch(function () {});
@@ -331,6 +351,70 @@ def _account_box(account):
                 note='As Virtual Fisher last showed it; read at startup and every re-read.')
 
 
+def _fmt(value, digits=2):
+    if value is None:
+        return '—'
+    return f'{value:,.{digits}f}' if abs(value) < 1000 else f'{value:,.0f}'
+
+
+def render_model_tab(model) -> str:
+    """The Model tab: setup, /buffs model vs game, per trip and hour, fish mix, estimates (progression part 2)."""
+    if not model:
+        return '<p class="empty">No model yet: it appears once the run has read your profile.</p>'
+    if model.get('error'):
+        return f'<p class="empty">{escape(model["error"])}</p>'
+    setup = model['setup']
+    boosts = ', '.join(setup['boosts']) or 'no boosts'
+    read = f' · account read {escape(setup["read_at"][:16].replace("T", " "))} UTC' if setup.get('read_at') else ''
+    head = (f'<p class="note">{escape(setup["rod"])} · {escape(setup["biome"])} · bait {escape(setup["bait"])} · '
+            f'pet {escape(setup["pet"])} · {escape(boosts)}{read}</p>')
+    buff_rows = ''
+    for row in model['buffs']:
+        mark = '' if row['ok'] is None else ('✓' if row['ok'] else '✗')
+        tone = '' if row['ok'] is None else ('good' if row['ok'] else 'bad')
+        note = ''
+        if row['effect']:
+            note = f'<span class="why">×{row["correction"]:.3f}: probably {escape(row["effect"])}</span>'
+        elif row['ok'] is False:
+            note = f'<span class="why">×{row["correction"]:.3f} applied to what-ifs</span>'
+        note += ''.join(f'<span class="why">{escape(reason)}</span>' for reason in row['why'])
+        buff_rows += (f'<tr><th scope="row">{escape(row["label"])}{note}</th><td>{_fmt(row["game"])}</td>'
+                      f'<td>{_fmt(row["model"], 4)}</td><td class="{tone}">{mark}</td></tr>')
+    buffs_box = _box('Buffs', '<table class="mini model"><thead><tr><th>Buff</th><th>Game</th><th>Model</th>'
+                     f'<th></th></tr></thead><tbody>{buff_rows}</tbody></table>',
+                     note='Not compared until /buffs has been read this run.' if all(
+                         row['ok'] is None for row in model['buffs']) else '')
+    trip_rows = ''
+    for row in model['trip']:
+        off = f' ⚠ {round_half_up(abs(row["factor"] - 1) * 100)}% off' if row['flag'] and row['factor'] else ''
+        status = escape(row['status']) + off
+        trip_rows += (f'<tr><th scope="row">{escape(row["label"])}</th><td>{_fmt(row["predicted"], 3)}</td>'
+                      f'<td>{_fmt(row["measured"], 3)}</td><td>{_fmt(row["factor"], 3)}</td>'
+                      f'<td>{_fmt(row["per_hour"])}</td><td>{status}</td></tr>')
+    trip_box = _box('Per trip and per hour', '<table class="mini model"><thead><tr><th></th><th>Predicted</th>'
+                    '<th>Measured</th><th>Factor</th><th>Per hour</th><th>Status</th></tr></thead>'
+                    f'<tbody>{trip_rows}</tbody></table>', wide=True,
+                    note='Per hour is the prediction × its factor. Measured is the mean over this setup\'s trips.')
+    mix_rows = ''.join(f'<tr><th scope="row">{escape(row["fish"])}</th><td>{_fmt(row["predicted"] * 100, 1)}%</td>'
+                       f'<td>{"—" if row["measured"] is None else _fmt(row["measured"] * 100, 1) + "%"}</td></tr>'
+                       for row in model['mix']['rows'])
+    mix_box = _box('Fish mix', '<table class="mini model"><thead><tr><th>Fish</th><th>Predicted</th>'
+                   f'<th>Measured</th></tr></thead><tbody>{mix_rows}</tbody></table>',
+                   note=model['mix']['source'])
+    estimates = ''.join(f'<li>{escape(item)}</li>' for item in model['estimates'])
+    estimates_box = _box('Estimates in use', f'<ul>{estimates}</ul>' if estimates else
+                         '<p class="empty">None: every number comes from a formula or a measurement.</p>')
+    return f'{head}<div class="boxes">{buffs_box}{mix_box}{trip_box}{estimates_box}</div>'
+
+
+def _model_tab(model) -> str:
+    """The Model tab, or a short error in its place: the Run tab never breaks over it."""
+    try:
+        return render_model_tab(model)
+    except Exception as error:  # an unexpected value in the view
+        return f'<p class="empty">The Model tab could not be shown: {escape(repr(error))}</p>'
+
+
 def render_panel(status, mode=None) -> str:
     """The live part of the page: run status, level line, and the stat boxes."""
     if not status:
@@ -415,11 +499,15 @@ def render_panel(status, mode=None) -> str:
     trips_box = _box('Recent trips', _scroll('Recent trips', f'<ul class="trips-list">{items}</ul>')
                      if recent else '<p class="empty">No trips yet.</p>')
 
-    return (f'<div data-running="{1 if running else 0}">{strip}{_level_line(profile, dashboard)}'
-            f'<div class="boxes">{profile_box}{buffs_box}{run_box}'
-            # Rewards takes a narrow share of its row so the finds tables (charms most of all) fit without scrolling.
-            f'<div class="rewards-row">{rewards_box}{_finds_box(dashboard.get("finds") or {}, dashboard.get("charms"))}'
-            f'</div>{inventory_box}{trips_box}{_account_box(status.get("account"))}</div></div>')
+    run_tab = (f'{_level_line(profile, dashboard)}'
+               f'<div class="boxes">{profile_box}{buffs_box}{run_box}'
+               # Rewards takes a narrow share of its row so the finds tables (charms most of all) fit without scrolling.
+               f'<div class="rewards-row">{rewards_box}{_finds_box(dashboard.get("finds") or {}, dashboard.get("charms"))}'
+               f'</div>{inventory_box}{trips_box}{_account_box(status.get("account"))}</div>')
+    return (f'<div data-running="{1 if running else 0}">{strip}'
+            '<nav class="tabs"><a href="#run">Run</a><a href="#model">Model</a></nav>'
+            f'<section class="tab" data-tab="run">{run_tab}</section>'
+            f'<section class="tab" data-tab="model" hidden>{_model_tab(status.get("model"))}</section></div>')
 
 
 def _field(name, label, value, hint=''):

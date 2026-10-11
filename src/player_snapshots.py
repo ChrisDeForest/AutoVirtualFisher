@@ -144,10 +144,11 @@ def new_record_id() -> tuple[str, str]:
 
 
 def write_json_atomically(folder: Path, record_id: str, document: dict) -> None:
-    """Publish an immutable JSON document as <folder>/<record_id>.json via a flushed temporary file."""
+    """Publish an immutable JSON document as <folder>/<record_id>.json via a flushed temporary file. Each write has
+    its own temporary name, so a file left by a hard kill (or another writer's) never blocks or is touched."""
     folder.mkdir(parents=True, exist_ok=True)
     destination = folder / f'{record_id}.json'
-    temporary = folder / f'.{record_id}.tmp'
+    temporary = folder / f'.{record_id}.{token_hex(4)}.tmp'
     try:
         with temporary.open('x', encoding='utf-8', newline='\n') as handle:
             json.dump(document, handle, ensure_ascii=False, indent=2)
@@ -158,6 +159,23 @@ def write_json_atomically(folder: Path, record_id: str, document: dict) -> None:
     finally:
         if temporary.exists():
             temporary.unlink()
+    _remove_stale_temporaries(folder, record_id)
+
+
+STALE_TEMPORARY_SECONDS = 60
+
+
+def _remove_stale_temporaries(folder: Path, record_id: str) -> None:
+    """Remove this record's temporary files left by a hard kill: only `.<id>.tmp` (the old name) or
+    `.<id>.<8 hex>.tmp`, and only older than a minute, so another writer's file in progress is never touched."""
+    own = re.compile(rf'\.{re.escape(record_id)}(?:\.[0-9a-f]{{8}})?\.tmp')
+    cutoff = datetime.now(timezone.utc).timestamp() - STALE_TEMPORARY_SECONDS
+    for path in folder.glob(f'.{record_id}*.tmp'):
+        try:
+            if own.fullmatch(path.name) and path.stat().st_mtime < cutoff:
+                path.unlink()
+        except OSError:
+            pass  # gone already, or still in use: left for a later write
 
 
 def save_snapshot(state: dict, root: Path = DEFAULT_SNAPSHOT_ROOT, mode: str = 'automatic',

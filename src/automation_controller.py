@@ -26,6 +26,9 @@ from .automation_policy import next_action
 from .automation_state import AutomationState, apply_observation
 from .catch_check import load_fish_reference
 from .fishing_sessions import load_sessions
+from .game_model_data import GameDataError, load_game_data
+from .game_model_inputs import build_inputs
+from .model_check import ModelTracker, corrected_trip, model_view, trip_boosted
 from .live_stats import (add_unlisted_finds, carry_forward, charm_summary, parse_charms, project, summarize_finds,
                          synced_stats, unread_fields)
 from .player_planner import load_level_increments
@@ -78,6 +81,17 @@ class AutomationController:
         # The account as its replies last showed it, saved so it outlives the run (see account_state).
         self.state_path = Path(state_path) if state_path else None
         self.account = load_state(self.state_path) if self.state_path else empty_state()
+        # The game model (part 2): checked per trip, shown on the Model tab. Never stops the run.
+        try:
+            self.model_data, self.model_problem = load_game_data(), None
+        except GameDataError as error:
+            self.model_data, self.model_problem = None, str(error)
+        try:  # a bad model_check.json starts fresh with a note (ModelTracker); anything else never stops a run
+            self.model = ModelTracker(self.state_path.parent / 'model_check.json' if self.state_path else None)
+        except Exception as error:
+            self.model = ModelTracker()
+            self.model.problem = f'model_check.json could not be read ({error}): the model started fresh.'
+        self.model_boosted = None  # whether the latest trip was under a global boost (None: no trip yet)
         self.roots = {'fishing': Path(fishing_root), 'review': Path(review_root)}
         self.monotonic = monotonic
         self.utc = utc or (lambda: datetime.now(timezone.utc))
@@ -239,6 +253,7 @@ class AutomationController:
 
     def status(self) -> dict:
         with self.lock:
+            dashboard = self._dashboard()
             pending = self.state.pending
             return {'running': self.running, 'paused': self.paused,
                     'pending_kind': pending.kind if pending else None,
@@ -250,7 +265,7 @@ class AutomationController:
                     'context_ok': self.state.context_ok, 'config': {
                         'account': self.config.account, 'context_id': self.config.context_id,
                         'max_trips': self.config.max_trips, 'max_seconds': self.config.max_seconds},
-                    'dashboard': self._dashboard(), 'account': self.account,
+                    'dashboard': dashboard, 'account': self.account, 'model': self._model_status(dashboard),
                     'startup': {'failures': dict(self.startup_failures),
                                 'problems': dict(self.startup_problems),
                                 'confirmed_fields': dict(self.state.startup_observed_at)}}
@@ -637,6 +652,48 @@ class AutomationController:
                     if kind in self.config.capabilities))
             self._count_retries()
             self._project(action_id, tally)
+            self._model_observe(tally)
+
+    def _model_observe(self, tally):
+        """Let the model watch one new trip with the setup it was fished with."""
+        if self.model_data is None:
+            return
+        try:
+            synced = self._synced()
+            built = build_inputs(self.account, synced['profile'], self.synced['charms'])
+            if isinstance(built, str):
+                return
+            account, setup = built
+            # A global boost is counted from the trip's own "Global boost by" line, not the last /boosts read.
+            self.model_boosted = trip_boosted(tally)
+            setup = replace(setup, global_booster=self.model_boosted)
+            # Predicted with the corrections from the latest /buffs comparison (1 until /buffs is compared). Measured
+            # money stays on the game's sell price, so the money factor no longer carries the sell price ratio.
+            rows, predicted = corrected_trip(account, setup, synced['buffs'], self.model_data,
+                                             self.model.learned_mix(), self.model.chest_scales())
+            # The comparison's game values are already converted ("+91%" is 1.91x).
+            shown = {row['name']: row['game'] for row in rows if row['game'] is not None}
+            if self.model.observe(tally, setup, predicted, self.model_data,
+                                  shown.get('sell_price') or predicted['buffs']['sell_price'].value, shown):
+                self.model.save()
+                self.model_problem = None  # only once a trip was actually used
+        except Exception as error:  # the model never stops a run
+            self.model_problem = f'The model could not use a trip: {error}'
+
+    def _model_status(self, dashboard):
+        empty = {'error': None, 'setup': None, 'buffs': [], 'trip': [], 'mix': {'source': '', 'rows': []},
+                 'estimates': []}
+        if self.model_data is None:
+            return dict(empty, error=self.model_problem or 'The game data is not loaded.')
+        try:
+            synced = self._synced()
+            view = model_view(self.account, synced['profile'], synced['buffs'], self.synced['charms'], self.model,
+                              self.model_data, (dashboard.get('per_hour') or {}).get('trips'), self.model_boosted)
+        except Exception as error:  # the model never breaks the page
+            return dict(empty, error=f'The model failed: {error}')
+        if self.model_problem and not view['error']:
+            view['estimates'] = [self.model_problem, *view['estimates']]
+        return view
 
     def _project(self, action_id, tally):
         """Copy an acknowledged trip into the logbook. Idempotent: the session is keyed by the action id."""

@@ -1,5 +1,6 @@
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
+import json
 from pathlib import Path
 import tempfile
 import threading
@@ -335,6 +336,100 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual({kind: section['unread'] for kind, section in sections.items() if section['unread']}, {})
         self.assertEqual(sections['shop_upgrades']['values']['items']['Better Chests']['price'], 100000)
         self.assertEqual(self.controller.status()['account']['sections']['pet']['values']['current'], 'Dolphin')
+
+    def test_status_carries_the_model_view_and_saves_what_it_measures(self):
+        path = self.journal_root.parent / 'account_state.json'
+        self.make(config=replace(CONFIG, max_trips=3, capabilities=READS_CONFIG), state_path=path).start()
+        self.run_for(150)
+        model = self.controller.status()['model']
+        self.assertIsNone(model['error'], model['error'])
+        self.assertEqual(model['setup']['rod'], 'Steel Rod')
+        self.assertEqual([row['name'] for row in model['buffs']][0], 'sell_price')
+        fish = {row['name']: row for row in model['trip']}['fish']
+        self.assertEqual(fish['status'], 'measuring 3/50 trips')
+        self.assertTrue((self.journal_root.parent / 'model_check.json').exists())
+        # A model failure never breaks status.
+        self.controller.model_data = None
+        self.assertIn('not loaded', self.controller.status()['model']['error'])
+
+    def test_a_model_failure_on_a_trip_never_stops_fishing_and_clears_once_a_trip_is_used(self):
+        path = self.journal_root.parent / 'account_state.json'
+        self.make(config=replace(CONFIG, max_trips=6, capabilities=READS_CONFIG), state_path=path).start()
+        observe, seen = self.controller.model.observe, []
+
+        def broken(*args):
+            raise RuntimeError('boom')
+        self.controller.model.observe = broken
+        while self.controller.status()['trips'] < 3 and self.controller.status()['running']:
+            self.run_for(STEP)
+        self.assertEqual(self.controller.model_problem, 'The model could not use a trip: boom')
+        self.assertIn('The model could not use a trip: boom', self.controller.status()['model']['estimates'])
+
+        def watching(tally, setup, predicted, *rest):
+            seen.append(predicted)
+            return observe(tally, setup, predicted, *rest)
+        self.controller.model.observe = watching
+        self.run_for(150)
+        self.assertEqual(self.controller.status()['trips'], 6, 'fishing went on')
+        self.assertIsNone(self.controller.model_problem)
+        self.assertNotIn('The model could not use a trip: boom', self.controller.status()['model']['estimates'])
+        # The /buffs comparison's corrections reach the prediction: the simulation shows fish catch 1.00x, 3.5 s.
+        self.assertAlmostEqual(seen[-1]['buffs']['fish_catch'].value, 1.0, places=9)
+        self.assertAlmostEqual(seen[-1]['buffs']['fishing_cooldown'].value, 3.5, places=9)
+
+    def test_a_corrupt_model_file_never_stops_the_run(self):
+        path = self.journal_root.parent / 'account_state.json'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        (path.parent / 'model_check.json').write_text(json.dumps({'window': {'key': 'k', 'trips': 7},
+                                                                  'mix': 'oops'}), encoding='utf-8')
+        self.make(config=replace(CONFIG, max_trips=3, capabilities=READS_CONFIG), state_path=path).start()
+        self.run_for(150)
+        self.assertEqual(self.controller.status()['trips'], 3)
+        model = self.controller.status()['model']
+        self.assertIsNone(model['error'], model['error'])
+        self.assertTrue(any('model_check.json' in item for item in model['estimates']), model['estimates'])
+        self.assertEqual({row['name']: row for row in model['trip']}['fish']['status'], 'measuring 3/50 trips')
+
+    def test_each_trip_is_predicted_with_its_own_boost_and_the_buffs_sell_price(self):
+        path = self.journal_root.parent / 'account_state.json'
+        self.make(config=replace(CONFIG, max_trips=2, capabilities=READS_CONFIG), state_path=path).start()
+        self.run_for(150)
+        seen = []
+        observe = self.controller.model.observe
+
+        def watching(tally, setup, predicted, data, sell, shown=None):
+            seen.append((setup.global_booster, predicted['fish'].value, sell, shown))
+            return observe(tally, setup, predicted, data, sell, shown)
+        self.controller.model.observe = watching
+        synced = self.controller._synced
+
+        def percent_sell_price():  # "/buffs" showing "Sell price: +91%"
+            found = synced()
+            found['buffs'] = dict(found['buffs'], sell_price={'value': 91.0, 'unit': 'percent'})
+            return found
+        self.controller._synced = percent_sell_price
+
+        def logged(boosted, fish='Cod'):
+            return {'trips': 1, 'catches': {fish: 3}, 'fishing_xp': 30, 'chest_xp': 0,
+                    'boosted_trips': int(boosted),
+                    'trip_details': [{'catches': {fish: 3}, 'xp': 30, 'chest_xp': 0, 'boosted': boosted,
+                                      'events': []}]}
+        self.controller._model_observe(logged(True))
+        self.assertIn('global booster', self.controller.status()['model']['setup']['boosts'])
+        self.controller._model_observe(logged(False))
+        self.assertNotIn('global booster', self.controller.status()['model']['setup']['boosts'])
+        (boosted, boosted_fish, sell, shown), (plain, plain_fish, _, _) = seen
+        self.assertEqual((boosted, plain), (True, False), 'from the trip itself, not the /boosts read')
+        self.assertAlmostEqual(boosted_fish, plain_fish * 1.5, places=9)
+        self.assertAlmostEqual(sell, 1.91, places=9, msg='+91% is 1.91x')
+        self.assertAlmostEqual(shown['sell_price'], 1.91, places=9)
+        self.assertAlmostEqual(shown['fishing_cooldown'], 3.5, places=9)
+        # Only a trip actually used clears a problem.
+        self.controller.model_problem = 'The model could not use a trip: boom'
+        self.controller._model_observe(logged(False, fish='Banana'))
+        self.assertEqual(self.controller.model_problem, 'The model could not use a trip: boom')
+        self.controller._model_observe(logged(False))
+        self.assertIsNone(self.controller.model_problem)
 
     def test_page_two_that_cannot_be_clicked_never_stops_fishing(self):
         # Send 3 (counting from 0) is /shop upgrades page 2, after profile, buffs and page 1.

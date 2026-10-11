@@ -201,6 +201,64 @@ class AutomationWebTests(unittest.TestCase):
         self.post(action='resume')
         self.assertFalse(self.handler.automation.status()['paused'])
 
+    def test_panel_has_run_and_model_tabs(self):
+        from src.automation_web import render_panel
+        status = {'running': True, 'phase': 'READY', 'reason': 'Fishing.', 'trips': 3, 'paused': False,
+                  'config': {'max_trips': None}, 'dashboard': {}, 'account': None,
+                  'model': {'error': None, 'setup': {'rod': 'Fiberglass Rod', 'biome': 'River', 'bait': 'none',
+                                                     'pet': 'Dolphin', 'boosts': []},
+                            'buffs': [{'name': 'sell_price', 'label': 'Sell price', 'game': 2.91, 'model': 2.9106,
+                                       'ok': True, 'correction': 1.0, 'effect': None, 'source': 'formula', 'why': []},
+                                      {'name': 'fish_catch', 'label': 'Fish catch', 'game': 1.41, 'model': 1.3389,
+                                       'ok': False, 'correction': 1.0531, 'effect': 'the official server bonus',
+                                       'source': 'formula', 'why': []}],
+                            'trip': [{'name': 'fish', 'label': 'Fish', 'predicted': 11.2, 'corrected': 11.2,
+                                      'measured': None, 'factor': 1.0, 'status': 'measuring 3/50 trips',
+                                      'flag': False, 'per_hour': 10080.0, 'source': 'formula'}],
+                            'mix': {'source': 'fish mix of Fiberglass Rod in River estimated from the calculator '
+                                              'example',
+                                    'rows': [{'fish': 'Fish', 'predicted': 0.84, 'measured': None}]},
+                            'estimates': ['trips per hour: cooldown + 0.5 s until this run has a rate']}}
+        html = render_panel(status, 'live')
+        self.assertIn('<nav class="tabs"><a href="#run">Run</a><a href="#model">Model</a></nav>', html)
+        self.assertIn('data-tab="run"', html)
+        self.assertIn('<section class="tab" data-tab="model" hidden>', html)
+        self.assertIn('probably the official server bonus', html)
+        self.assertIn('measuring 3/50 trips', html)
+        self.assertIn('estimated from the calculator example', html)
+        self.assertLess(html.index('class="strip'), html.index('class="tabs"'), 'Pause and Stop stay above the tabs')
+
+    def test_model_tab_shows_a_problem(self):
+        from src.automation_web import render_model_tab
+        self.assertIn('Not modelled: unknown rod Banana Rod.',
+                      render_model_tab({'error': 'Not modelled: unknown rod Banana Rod.'}))
+        self.assertIn('No model yet', render_model_tab(None))
+        self.assertIn('&lt;b&gt;', render_model_tab({'error': '<b>'}))
+
+    def test_a_broken_model_view_never_breaks_the_run_tab(self):
+        from src.automation_web import render_panel
+        status = {'running': True, 'phase': 'READY', 'reason': 'Fishing.', 'trips': 3, 'paused': False,
+                  'config': {'max_trips': None}, 'dashboard': {}, 'account': None,
+                  'model': {'error': None, 'setup': None}}
+        html = render_panel(status, 'live')
+        self.assertIn('data-tab="run"', html)
+        self.assertIn('The Model tab could not be shown', html)
+
+    def test_a_flagged_factor_shows_how_far_off_it_is(self):
+        from src.automation_web import render_model_tab
+        model = {'error': None, 'setup': {'rod': 'Steel Rod', 'biome': 'River', 'bait': 'none', 'pet': 'none',
+                                          'boosts': []}, 'buffs': [],
+                 'trip': [{'name': 'fish', 'label': 'Fish', 'predicted': 10.0, 'corrected': 11.4, 'measured': 11.4,
+                           'factor': 1.125, 'status': 'applied', 'flag': True, 'per_hour': 10260.0,
+                           'source': 'formula'}],
+                 'mix': {'source': '', 'rows': []}, 'estimates': []}
+        self.assertIn('applied ⚠ 13% off', render_model_tab(model))
+
+    def test_tab_script_keeps_the_hash_across_refreshes(self):
+        from src.automation_web import SCRIPT
+        self.assertIn('location.hash', SCRIPT)
+        self.assertIn('showTab()', SCRIPT)
+
     def test_waiting_for_discord_is_its_own_state(self):
         from src.automation_web import state_label
         status = {'running': True, 'phase': 'WAITING_FOCUS', 'trips': 3, 'paused': False}

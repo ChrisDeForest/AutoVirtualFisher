@@ -1,4 +1,6 @@
 import json
+import os
+import time
 from copy import deepcopy
 from pathlib import Path
 import tempfile
@@ -7,7 +9,7 @@ import unittest
 from src.player_state import parse_responses
 from src.player_snapshots import (account_key, compare_latest, growth_series, latest_full_snapshots,
                                   list_accounts, load_history, save_snapshot,
-                                  validate_full_state)
+                                  validate_full_state, write_json_atomically)
 
 
 def parsed_state(name='BugParticle', balance=100, level=2):
@@ -65,6 +67,35 @@ class SnapshotStoreTests(unittest.TestCase):
         self.assertEqual(stored['state']['profile']['balance'], 100)
         self.assertTrue(stored['snapshot_id'])
         self.assertTrue(stored['captured_at'].endswith('Z'))
+
+    def test_a_stale_temporary_file_never_blocks_a_write(self):
+        # A hard kill mid-write leaves the temporary file behind; the next write must still succeed, atomically.
+        folder = self.root / 'account'
+        folder.mkdir()
+        (folder / '.model_check.tmp').write_text('{"half": ', encoding='utf-8')
+        write_json_atomically(folder, 'model_check', {'n': 1})
+        self.assertEqual(json.loads((folder / 'model_check.json').read_text(encoding='utf-8')), {'n': 1})
+        write_json_atomically(folder, 'model_check', {'n': 2})
+        self.assertEqual(json.loads((folder / 'model_check.json').read_text(encoding='utf-8')), {'n': 2})
+        self.assertEqual(sorted(path.name for path in folder.iterdir()), ['.model_check.tmp', 'model_check.json'],
+                         'the stale file is left alone; no temporary file of its own is left behind')
+
+    def test_old_temporary_files_of_the_same_record_are_cleaned_up(self):
+        folder = self.root / 'account'
+        folder.mkdir()
+        old = time.time() - 120
+        names = {'old_own': '.model_check.0123abcd.tmp', 'old_legacy': '.model_check.tmp',
+                 'fresh_own': '.model_check.89abcdef.tmp', 'old_other': '.account_state.0123abcd.tmp',
+                 'old_longer_id': '.model_check.extra.0123abcd.tmp'}
+        for key, name in names.items():
+            (folder / name).write_text('{"half": ', encoding='utf-8')
+            if key.startswith('old'):
+                os.utime(folder / name, (old, old))
+        write_json_atomically(folder, 'model_check', {'n': 1})
+        left = sorted(path.name for path in folder.iterdir())
+        self.assertEqual(left, sorted([names['fresh_own'], names['old_other'], names['old_longer_id'],
+                                       'model_check.json']),
+                         'only this record\'s temporary files older than a minute go')
 
     def test_automatic_save_deduplicates_warning_order(self):
         first = parsed_state()
