@@ -44,6 +44,21 @@ def _name(value):
     return re.sub(r'^[^\w]+', '', value).strip().removesuffix('.')
 
 
+# Longest first: a bait is matched by its ending, and "Artifact Magnet" ends in "Magnet".
+BAIT_NAMES = ('Artifact Magnet', 'Support Bait', 'Magic Bait', 'Wise Bait', 'Leeches', 'Magnet', 'Worms', 'Fish')
+
+
+def known_bait(name):
+    """The bait a read name stands for, its icon misread as up to two stray characters ("r' Fish" is Fish);
+    a name that is no known bait is returned unchanged."""
+    for bait in BAIT_NAMES:
+        if name.casefold().endswith(bait.casefold()):
+            prefix = name[:len(name) - len(bait)].strip()
+            if len(prefix) <= 2 and not re.search(r'[a-z]{2}', prefix, re.I):
+                return bait
+    return name
+
+
 def _pet_reference():
     try:
         return json.loads(PET_REFERENCE_PATH.read_text(encoding='utf-8'))
@@ -218,6 +233,7 @@ def parse_responses(profile='', buffs='', prestige_shop='', pet='', quests=''):
                             if stock:
                                 value = stock[1]
                                 assign(section, 'bait_quantity', _number(stock[2]))
+                            value = known_bait(value)
                 else:
                     match = re.fullmatch(rf'({NUMBER})\s*(%|x|s|seconds?)', value, re.I)
                     prefix = re.fullmatch(rf'x\s*({NUMBER})', value, re.I)

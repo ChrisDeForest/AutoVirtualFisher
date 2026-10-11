@@ -7,7 +7,7 @@ did not read cleanly, so the read is tried again. Paged shops are judged complet
 import re
 
 from .paste_detect import SLASH
-from .player_state import _clean, parse_responses
+from .player_state import BAIT_NAMES, _clean, known_bait, parse_responses
 
 UPGRADES = ('Better Fish', 'Salesman', 'Bait Efficiency', 'More Chests', 'Worker Motivation', 'Artifact Specialist',
             'Experienced', 'Better Chests', 'Better Dailies')
@@ -15,8 +15,6 @@ LEAGUE = ('Pet Helper', 'Bait Helper', 'Super Crates', 'Worker Crates', 'Fishing
 BOATS = ('Rowboat', 'Fishing Boat', 'Speedboat', 'Pontoon', 'Sailboat', 'Yacht', 'Luxury Yacht', 'Cruise Ship',
          'Goldboat', 'Sky Cruiser', 'Satellite', 'Space Shuttle', 'Cruiser', 'Alien Raft', 'Alien Submarine')
 BIOMES = ('River', 'Volcanic', 'Ocean', 'Sky', 'Space', 'Alien')
-# Longest first: an owned-bait line is matched by its ending, and "Artifact Magnet" ends in "Magnet".
-BAITS = ('Artifact Magnet', 'Support Bait', 'Magic Bait', 'Wise Bait', 'Leeches', 'Magnet', 'Worms', 'Fish')
 # Button labels and the shop's own wording: never items, never unread.
 BUTTONS = {'back', 'return', 'select', 'selected', 'deselect', 'maxed'}
 
@@ -173,13 +171,8 @@ def _owned_bait(line):
     match = re.match(r'^(.*?[A-Za-z])\s*[-–—~]\s*(\d[\d,. ]*)$', line)
     if not match:
         return None
-    name = match[1].strip()
-    for bait in BAITS:   # longest first, so "Artifact Magnet" is not read as "Magnet"
-        if name.lower().endswith(bait.lower()):
-            prefix = name[:len(name) - len(bait)].strip()
-            if len(prefix) <= 2 and not re.search(r'[a-z]{2}', prefix, re.I):
-                return bait, int(re.sub(r'\D', '', match[2]))
-    return None
+    bait = known_bait(match[1].strip())
+    return (bait, int(re.sub(r'\D', '', match[2]))) if bait in BAIT_NAMES else None
 
 
 def parse_bait(text):
@@ -194,7 +187,7 @@ def parse_bait(text):
         counted = _owned_bait(line)
         if match:
             found = True
-            current = None if match[1].strip().upper() == 'NONE' else match[1].strip()
+            current = None if match[1].strip().upper() == 'NONE' else known_bait(match[1].strip())
         elif counted:
             owned[counted[0]] = counted[1]
         elif not re.match(SLASH + r'?\s*bait\b', line, re.I):

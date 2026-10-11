@@ -115,7 +115,8 @@ SCRIPT = """<script nonce="{nonce}">
       });
       window.scrollTo(x, y);
       var now = panel.querySelector('[data-running]');
-      if (now && now.getAttribute('data-running') !== was) { location.reload(); }
+      // Load the page afresh, never reload: reloading a page a button press answered sends the press again.
+      if (now && now.getAttribute('data-running') !== was) { location.replace('/automation' + location.hash); }
     }).catch(function () {});
   }, 2000);
 })();

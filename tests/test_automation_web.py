@@ -365,6 +365,10 @@ class AutomationWebTests(unittest.TestCase):
         # the 2-second refresh keeps each scrolling list's and the page's position
         self.assertIn('el.scrollTop = at[0]', SCRIPT)
         self.assertIn('window.scrollTo(x, y)', SCRIPT)
+        # A run starting or stopping loads the page afresh: reloading a page a press answered would resend it (a
+        # tab left on an old Stop page stopped the next run a second after it started).
+        self.assertNotIn('location.reload', SCRIPT)
+        self.assertIn("location.replace('/automation' + location.hash)", SCRIPT)
 
     def test_waiting_for_discord_is_its_own_state(self):
         from src.automation_web import state_label

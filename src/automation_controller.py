@@ -150,6 +150,8 @@ class PlanRunner:
             with self.lock:
                 if error:
                     self.error = error
+                    if not _good_plan(self.plan):
+                        self.plan = None    # a plan that could not be made never stays up beside a newer failure
                 else:
                     self.plan, self.error = plan, None
                     self.made_at = datetime.now(timezone.utc).isoformat(timespec='seconds')

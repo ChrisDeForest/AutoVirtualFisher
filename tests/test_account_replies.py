@@ -110,6 +110,16 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(parsed['values']['other_lines'], ['Fishy line'])
         self.assertEqual(parsed['unread'], [])
 
+    def test_bait_in_use_with_its_icon_misread(self):
+        # Live: the Fish icon read as "r'", and the model stopped on an unknown bait "r' Fish".
+        parsed = PARSERS['bait']("Current bait: r' Fish\nr' Fish - 120")
+        self.assertEqual(parsed['values']['current'], 'Fish')
+        self.assertEqual(parsed['values']['owned'], {'Fish': 120})
+        from src.player_state import parse_responses
+        profile = parse_responses(profile="Bait: r' Fish (120)")['profile']
+        self.assertEqual((profile['bait'], profile['bait_quantity']), ('Fish', 120))
+        self.assertEqual(parse_responses(profile='Bait: Goldfish')['profile']['bait'], 'Goldfish')   # not a bait
+
     def test_bait_owned_unknown_without_the_current_line(self):
         parsed = PARSERS['bait']('Worms - 68')
         self.assertIsNone(parsed['values']['owned'])                  # not a whole reply: keep the earlier read

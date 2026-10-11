@@ -894,6 +894,26 @@ class ControllerTests(unittest.TestCase):
             self.assertEqual(view['error'], message)
             self.assertEqual(view['made_at'], made)
 
+    def test_a_failure_replaces_a_plan_that_could_not_be_made(self):
+        # Live: the run's first plan (before /profile) said the level was not read; the next one failed on a misread
+        # bait, and the tab kept showing the stale level message.
+        from src.automation_controller import PlanRunner
+        now = [0.0]
+        results = [{'error': 'not planned: The level is not read yet (/profile).'}, ZeroDivisionError('boom')]
+
+        def compute(inputs):
+            result = results.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        runner = PlanRunner(compute, spawn=lambda work: work(), clock=lambda: now[0])
+        runner.request(1)
+        now[0] += 30
+        runner.request(2)
+        self.assertIsNone(runner.view()['plan'])
+        self.assertEqual(runner.view()['error'], 'The planner failed: boom')
+
     def test_plan_requests_are_spaced_30_seconds_apart(self):
         from src.automation_controller import PlanRunner
         now, computed = [0.0], []
