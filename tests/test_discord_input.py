@@ -96,7 +96,7 @@ class NativeDispatchTests(unittest.TestCase):
         driver = self.driver([
             {'boxes': [box('Message @Virtual Fisher', 800)]},
             {'boxes': [box('/fish', 600), box('Virtual Fisher', 620)]},
-            {'boxes': [box('/fish', 800)]},
+            {'boxes': [box('Message @Virtual Fisher', 800)]},   # sent: the box is empty again
         ])
         driver.dispatch('/fish', lambda: False)
         self.assertEqual([event[0] for event in driver.events], ['click', 'text', 'key', 'key'])
@@ -142,6 +142,75 @@ class NativeDispatchTests(unittest.TestCase):
         driver._frame = changed
         with self.assertRaises(NotDispatched): driver.dispatch('/fish', lambda: False)
         self.assertEqual(driver.events, [])
+
+    EMPTY = {'boxes': [box('Message @Virtual Fisher', 800)]}
+    PICKER = {'boxes': [box('/shop boats', 600), box('Virtual Fisher', 620)]}
+    DRAFT = {'boxes': [box('/shop category boats', 800)]}
+
+    def keys(self, driver):
+        return [event for event in driver.events if event[0] == 'key']
+
+    @patch('src.discord_input.time.sleep')
+    def test_box_emptied_after_two_enters_needs_no_more(self, sleep):
+        driver = self.driver([self.EMPTY, self.PICKER, self.EMPTY])
+        driver.dispatch('/shop boats', lambda: False)
+        self.assertEqual(self.keys(driver), [('key', 13)] * 2)
+        self.assertIsNone(driver.draft_composer)
+
+    @patch('src.discord_input.time.sleep')
+    def test_draft_left_in_the_box_gets_another_enter(self, sleep):
+        # Live: commands with options sat in the box after the two Enters until Enter was pressed by hand.
+        driver = self.driver([self.EMPTY, self.PICKER, self.DRAFT, self.EMPTY])
+        driver.dispatch('/shop boats', lambda: False)
+        self.assertEqual(self.keys(driver), [('key', 13)] * 3)
+        self.assertIsNone(driver.draft_composer)
+
+    @patch('src.discord_input.time.sleep')
+    def test_enters_are_spaced_for_the_option_boxes(self, sleep):
+        driver = self.driver([self.EMPTY, self.PICKER, self.EMPTY])
+        order = []
+        driver._key = lambda key, cancelled: order.append('key')
+        sleep.side_effect = lambda seconds: order.append(seconds)
+        driver.dispatch('/shop boats', lambda: False)
+        first = order.index('key')
+        self.assertGreaterEqual(order[first + 1], 0.4)      # the option boxes open before the sending Enter
+
+    @patch('src.discord_input.time.sleep')
+    def test_fish_keeps_the_short_gap_and_no_check(self, sleep):
+        fish = {'boxes': [box('/fish', 600), box('Virtual Fisher', 620)]}
+        driver = self.driver([self.EMPTY, fish, {'boxes': [box('/fish', 800)]}])
+        order = []
+        driver._key = lambda key, cancelled: order.append('key')
+        sleep.side_effect = lambda seconds: order.append(seconds)
+        reads = []
+        frame = driver._frame
+        driver._frame = lambda cancelled: reads.append(1) or frame(cancelled)
+        driver.dispatch('/fish', lambda: False)
+        self.assertEqual(order.count('key'), 2)              # no extra Enter though the read shows a draft
+        self.assertEqual(order[order.index('key') + 1], 0.2)
+        self.assertEqual(order[-1], 'key')                    # nothing after the sending Enter
+        self.assertEqual(len(reads), 2)                       # the placeholder and picker reads only
+        self.assertIsNone(driver.draft_composer)
+
+    @patch('src.discord_input.time.sleep')
+    def test_a_draft_that_never_leaves_is_left_for_the_next_attempt_to_clear(self, sleep):
+        driver = self.driver([self.EMPTY, self.PICKER, self.DRAFT])
+        driver.dispatch('/shop boats', lambda: False)          # it may have been sent: reported as dispatched
+        self.assertEqual(self.keys(driver), [('key', 13)] * 4)
+        self.assertIsNotNone(driver.draft_composer)            # the next dispatch clears what is left
+
+    @patch('src.discord_input.time.sleep')
+    def test_trouble_while_checking_after_sending_is_not_a_failure(self, sleep):
+        driver = self.driver([self.EMPTY, self.PICKER])
+        reads = iter([self.EMPTY, self.PICKER])
+        def frame(cancelled):
+            try:
+                return next(reads)
+            except StopIteration:
+                raise TransportError('capture failed') from None
+        driver._frame = frame
+        driver.dispatch('/shop boats', lambda: False)          # sent already: no NotDispatched
+        self.assertEqual(self.keys(driver), [('key', 13)] * 2)
 
     @patch('src.discord_input.time.sleep')
     def test_cancellation_between_enters_prevents_second_key(self, sleep):

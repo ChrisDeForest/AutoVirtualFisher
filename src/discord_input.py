@@ -8,6 +8,16 @@ from .automation_discord import CHALLENGE, _center, composer_click, composer_tar
 from .live_capture import channel_matches, make_capture
 from .window_capture import window_process
 
+# Seconds between the selecting and sending Enters (a command with options opens its option boxes in between), and
+# between the checks that the message box emptied. Live, 0.2 s left commands with options sitting in the box.
+ENTER_GAP = 0.4
+# Enters pressed again while the sent command's draft is still in the box.
+EXTRA_ENTERS = 2
+# Commands with no options: the regular short gap between the Enters and no check afterwards (the user's choice:
+# /fish keeps its pace).
+NO_OPTIONS = {'/fish'}
+NO_OPTIONS_GAP = 0.2
+
 
 class WindowsDiscordDriver:
     def __init__(self, window, channel):
@@ -198,8 +208,9 @@ class WindowsDiscordDriver:
                 raise NotDispatched(f'VF slash-command picker could not be verified; command not submitted ({note}).')
             # Keyboard selection followed by submission, as Discord's slash-command flow requires. Never click the
             # picker command. The final Enter's key-down is the point of sending: before it, nothing was sent.
+            # A command with options opens its option boxes on the first Enter; the sending Enter waits for them.
             self._key(0x0D, cancelled)
-            time.sleep(0.2)
+            time.sleep(NO_OPTIONS_GAP if command in NO_OPTIONS else ENTER_GAP)
             self._key(0x0D, cancelled)
         except NotDispatched:
             raise
@@ -209,7 +220,25 @@ class WindowsDiscordDriver:
         except TransportError as error:
             self.box_focused = False
             raise NotDispatched(f'{error} {command} was not sent.') from error
-        self.draft_composer = None
+        if command in NO_OPTIONS or self._left_the_box(cancelled):
+            self.draft_composer = None
+
+    def _left_the_box(self, cancelled):
+        """After the sending Enter: check the message box is empty again (its placeholder shows) and press Enter
+        again while the draft is still there. An Enter on an empty box sends nothing, so this never sends twice.
+        Returns False when the draft never left: it may still have been sent, so the command counts as dispatched
+        and the next dispatch clears whatever is left. Trouble while checking stops the check, never the command."""
+        try:
+            for attempt in range(EXTRA_ENTERS + 1):
+                time.sleep(ENTER_GAP)
+                frame = self._frame(cancelled)
+                if composer_target(frame.get('original_boxes', frame.get('boxes', [])), self.channel) is not None:
+                    return True
+                if attempt < EXTRA_ENTERS:
+                    self._key(0x0D, cancelled)
+        except TransportError:
+            return True
+        return False
 
     def _clear_draft(self, cancelled):
         """Go back a step: clear what an interrupted command left in the message box, at the spot it was typed,
