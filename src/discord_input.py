@@ -13,10 +13,9 @@ from .window_capture import window_process
 ENTER_GAP = 0.4
 # Enters pressed again while the sent command's draft is still in the box.
 EXTRA_ENTERS = 2
-# Commands with no options: the regular short gap between the Enters and no check afterwards (the user's choice:
-# /fish keeps its pace).
-NO_OPTIONS = {'/fish'}
-NO_OPTIONS_GAP = 0.2
+# /fish has no options and keeps its pace (the user's choice): shorter gaps and one Enter more at most.
+FISH_GAP = 0.3
+FISH_EXTRA_ENTERS = 1
 
 
 class WindowsDiscordDriver:
@@ -210,7 +209,7 @@ class WindowsDiscordDriver:
             # picker command. The final Enter's key-down is the point of sending: before it, nothing was sent.
             # A command with options opens its option boxes on the first Enter; the sending Enter waits for them.
             self._key(0x0D, cancelled)
-            time.sleep(NO_OPTIONS_GAP if command in NO_OPTIONS else ENTER_GAP)
+            time.sleep(self._gap(command))
             self._key(0x0D, cancelled)
         except NotDispatched:
             raise
@@ -220,21 +219,26 @@ class WindowsDiscordDriver:
         except TransportError as error:
             self.box_focused = False
             raise NotDispatched(f'{error} {command} was not sent.') from error
-        if command in NO_OPTIONS or self._left_the_box(cancelled):
+        if self._left_the_box(command, cancelled):
             self.draft_composer = None
 
-    def _left_the_box(self, cancelled):
+    @staticmethod
+    def _gap(command):
+        return FISH_GAP if command == '/fish' else ENTER_GAP
+
+    def _left_the_box(self, command, cancelled):
         """After the sending Enter: check the message box is empty again (its placeholder shows) and press Enter
         again while the draft is still there. An Enter on an empty box sends nothing, so this never sends twice.
         Returns False when the draft never left: it may still have been sent, so the command counts as dispatched
         and the next dispatch clears whatever is left. Trouble while checking stops the check, never the command."""
         try:
-            for attempt in range(EXTRA_ENTERS + 1):
-                time.sleep(ENTER_GAP)
+            extra = FISH_EXTRA_ENTERS if command == '/fish' else EXTRA_ENTERS
+            for attempt in range(extra + 1):
+                time.sleep(self._gap(command))
                 frame = self._frame(cancelled)
                 if composer_target(frame.get('original_boxes', frame.get('boxes', [])), self.channel) is not None:
                     return True
-                if attempt < EXTRA_ENTERS:
+                if attempt < extra:
                     self._key(0x0D, cancelled)
         except TransportError:
             return True

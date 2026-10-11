@@ -223,6 +223,7 @@ class AutomationController:
         self.unknown_streak = 0
         self.refused_until, self.refused_reason = float('-inf'), ''
         self.paused = False            # paused by the person: nothing new is sent until resumed
+        self.pause_id = 0              # counts pauses; Resume names the pause it ends, so a stale one cannot
         self.captcha = None            # the captcha message that paused the run, until resumed
         self.captchas_seen = set()     # observation ids of captcha messages already acted on
         self.jitter = 0.0              # the random extra wait before the next fish
@@ -327,18 +328,23 @@ class AutomationController:
         with self.lock:
             if self.running and not self.paused:
                 self.paused = True
+                self.pause_id += 1
                 self._safe_event('paused', None)
                 self.phase, self.reason = 'PAUSED_BY_YOU', 'Paused. Resume to carry on fishing.'
 
-    def resume(self):
+    def resume(self, pause_id=None):
+        """End the pause. `pause_id`, from the Resume button, must name the current pause: a resume sent again
+        later (a reload, a restored tab) belongs to an earlier one and is ignored. None: resumed from code."""
         with self.lock:
-            if self.paused:
-                self.paused, self.captcha = False, None
-                self._safe_event('resumed', None)
-                self.phase, self.reason = 'READY', 'Resuming.'
-                refocus = getattr(self.transport, 'refocus', None)
-                if refocus is not None:
-                    refocus()   # the message box is clicked again before the next command
+            if not (self.paused and (pause_id is None or pause_id == self.pause_id)):
+                return False
+            self.paused, self.captcha = False, None
+            self._safe_event('resumed', None)
+            self.phase, self.reason = 'READY', 'Resuming.'
+            refocus = getattr(self.transport, 'refocus', None)
+            if refocus is not None:
+                refocus()   # the message box is clicked again before the next command
+            return True
 
     def resolve(self, action_id: str, outcome: str) -> bool:
         """A person settles an uncertain command: 'happened' (the game acted; any trip is entered by hand from
@@ -359,7 +365,7 @@ class AutomationController:
             self._poll_plan()
             dashboard = self._dashboard()
             pending = self.state.pending
-            return {'running': self.running, 'paused': self.paused,
+            return {'running': self.running, 'paused': self.paused, 'pause_id': self.pause_id,
                     'pending_kind': pending.kind if pending else None,
                     'mode': self.config.mode, 'phase': self.phase, 'reason': self.reason,
                     'run_id': self.state.run_id, 'trips': self.state.trips, 'total_trips': self.total_trips,
@@ -629,6 +635,7 @@ class AutomationController:
                  identity_status=observation.identity_status, observation_id=observation.observation_id,
                  blocks_actions=False)
         self.paused, self.captcha = True, observation.text
+        self.pause_id += 1
         self.phase, self.reason = 'CAPTCHA', CAPTCHA_REASON
         if self.alert:
             try:

@@ -44,7 +44,7 @@ class AutomationConfig:
     reply_timeout: float = 20.0    # seconds without a correlated reply before the action becomes uncertain
     cooldown_margin: float = 0.0   # seconds added to the verified cooldown (the random jitter is added too)
     # A random extra wait before each fish: (share of fish, from, to, step) in seconds, ends included.
-    jitter_bands: tuple = ((0.75, 0.0, 0.5, 0.05), (0.175, 0.5, 1.0, 0.1), (0.075, 1.0, 1.5, 0.1))
+    jitter_bands: tuple = ((0.75, 0.0, 0.25, 0.025), (0.175, 0.25, 0.5, 0.05), (0.075, 0.5, 0.75, 0.05))
     mode: str = 'simulation'       # the separate native CLI explicitly selects 'live'
     capabilities: tuple = field(default=('refresh_profile', 'refresh_buffs', 'refresh_charms', *ALL_READS, 'fish'))
     resync_trips: int | None = 100   # /profile, /buffs and /charms are read again after this many trips

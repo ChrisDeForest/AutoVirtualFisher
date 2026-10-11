@@ -57,13 +57,20 @@ class ShopTests(unittest.TestCase):
         self.assertEqual(second['items']['Magma Rod']['price'], 10000000)
         self.assertEqual(second['more_at_level'], 100)
 
-    def test_rod_without_price_or_selected_is_owned(self):
-        # Live: OCR cleanup drops lines that are only a button word, so the owned rods' Select never arrives.
+    def test_rod_without_price_or_select_is_not_known_to_be_owned(self):
+        # Live: OCR cleanup drops lines that are only a button word, so the owned rods' Select never arrives; and a
+        # rod the player cannot afford has its price on a dimmed button OCR misses (Lava and Magma Rod were read as
+        # owned). Neither row says which it is: /rod lists the rods owned.
         text = '\n'.join(line for line in sample.RODS_PAGE_1.splitlines() if line != 'Select')
         items = PARSERS['shop_rods'](text)['values']['items']
         for name in ('Supporter Rod', 'Plastic Rod', 'Steel Rod'):
-            self.assertEqual(items[name], {'owned': True, 'selected': False, 'price': None})
+            self.assertEqual(items[name], {'owned': None, 'selected': False, 'price': None})
         self.assertEqual(items['Improved Rod'], {'owned': False, 'selected': False, 'price': 500})
+        self.assertEqual(items['Fiberglass Rod'], {'owned': True, 'selected': True, 'price': None})   # Selected
+        dimmed = '\n'.join(line for line in sample.RODS_PAGE_2.splitlines() if line not in ('$1,000,000', '$10,000,000'))
+        items = PARSERS['shop_rods'](dimmed)['values']['items']
+        self.assertIsNone(items['Lava Rod']['owned'])
+        self.assertIsNone(items['Magma Rod']['owned'])
 
     def test_boat_shop(self):
         parsed = PARSERS['shop_boats'](sample.BOATS)

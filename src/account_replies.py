@@ -148,10 +148,11 @@ def parse_shop_rods(text):
             item['price'] = value
     _attach(items, order, set_status)
     for item in items.values():
-        # Every rod shows a price, Select or Selected. OCR cleanup drops a line that is only a button word, so a
-        # rod with neither a price nor Selected shows Select: it is owned.
-        if not item.pop('_priced', None) or item['price'] is None:
-            item['owned'] = True
+        # Every rod shows a price, Select or Selected. A rod with neither read is not known to be owned: OCR cleanup
+        # drops a line that is only a button word (Select), and a rod the player cannot afford has its price on a
+        # dimmed button OCR misses (Lava and Magma Rod were once read as owned). /rod lists the rods owned.
+        if (not item.pop('_priced', None) or item['price'] is None) and not item['owned']:
+            item['owned'] = None
     more =next((int(m[1]) for m in (re.search(r'More rods unlocked at level (\d+)', l, re.I) for l in lines) if m),
                 None)
     return _result({'items': items, 'balance': _balance(lines, 'Your balance'), 'more_at_level': more}, (), lines)

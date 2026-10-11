@@ -549,7 +549,7 @@ class ControllerTests(unittest.TestCase):
         self.run_for(120)
         fish = self.fish_sends()
         gaps = [later - earlier - 3.5 - CONFIG.cooldown_margin for earlier, later in zip(fish, fish[1:])]
-        self.assertTrue(all(-STEP <= gap <= 1.5 + 2 * STEP for gap in gaps), gaps)
+        self.assertTrue(all(-STEP <= gap <= 0.75 + 2 * STEP for gap in gaps), gaps)
         self.assertGreater(len({round(gap, 1) for gap in gaps}), 1, 'the extra wait varies')
 
     def test_extra_wait_bands_and_their_shares(self):
@@ -561,14 +561,14 @@ class ControllerTests(unittest.TestCase):
         extras = self.controller.jitters
         def on_grid(extra, step):
             return abs(extra / step - round(extra / step)) < 1e-9
-        low = [e for e in extras if e <= 0.5 and on_grid(e, 0.05)]
-        middle = [e for e in extras if 0.5 < e <= 1.0 and on_grid(e, 0.1)]
-        high = [e for e in extras if 1.0 < e <= 1.5 and on_grid(e, 0.1)]
+        low = [e for e in extras if e <= 0.25 and on_grid(e, 0.025)]
+        middle = [e for e in extras if 0.25 < e <= 0.5 and on_grid(e, 0.05)]
+        high = [e for e in extras if 0.5 < e <= 0.75 and on_grid(e, 0.05)]
         self.assertEqual(len(low) + len(middle) + len(high), len(extras), 'every extra is in a band, on its steps')
-        # 75% / 17.5% / 7.5%; a band's shared endpoint (0.5, 1.0) counts toward the lower band here.
+        # 75% / 17.5% / 7.5%; a band's shared endpoint (0.25, 0.5) counts toward the lower band here.
         self.assertAlmostEqual(len(low) / len(extras), 0.75 + 0.175 / 6, delta=0.015)
         self.assertAlmostEqual(len(high) / len(extras), 0.075 * 5 / 6, delta=0.01)
-        self.assertEqual({round(e, 2) for e in high}, {1.1, 1.2, 1.3, 1.4, 1.5})
+        self.assertEqual({round(e, 2) for e in high}, {0.55, 0.6, 0.65, 0.7, 0.75})
 
     def test_dashboard_carries_synced_stats_forward(self):
         self.make(config=replace(CONFIG, max_trips=2)).start()

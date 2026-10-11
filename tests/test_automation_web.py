@@ -2,6 +2,7 @@ from html import unescape
 from http.server import ThreadingHTTPServer
 from datetime import datetime, timezone
 from pathlib import Path
+import re
 import shutil
 import tempfile
 import threading
@@ -83,6 +84,8 @@ class AutomationWebTests(unittest.TestCase):
     def tearDown(self):
         if self.handler.automation:
             self.handler.automation.stop()
+        # A run stopped mid-command leaves its reply in the simulated game: the next test gets a fresh one.
+        self.handler.automation_game = None
 
     def get(self, path='/automation'):
         with urlopen(self.url + path) as response:
@@ -198,8 +201,41 @@ class AutomationWebTests(unittest.TestCase):
         html = self.get('/automation/panel')
         self.assertIn('<span class="phase">Paused</span>', html)
         self.assertIn('value="resume"', html)
-        self.post(action='resume')
+        token = re.search(r'name="pause_id" value="(\d+)"', html)[1]
+        self.post(action='resume', pause_id=token)
         self.assertFalse(self.handler.automation.status()['paused'])
+
+    def test_a_stale_resume_never_ends_a_newer_pause(self):
+        # A resume sent again later (a reload, a restored tab) belongs to an earlier pause: the run stays paused.
+        self.post(action='start', mode='simulation', max_trips='1000', max_minutes='5')
+        self.post(action='pause')
+        old = re.search(r'name="pause_id" value="(\d+)"', self.get('/automation/panel'))[1]
+        self.post(action='resume', pause_id=old)
+        self.post(action='pause')
+        self.post(action='resume', pause_id=old)
+        self.assertTrue(self.handler.automation.status()['paused'])
+        self.post(action='resume')                                   # no token: not from the Resume button
+        self.assertTrue(self.handler.automation.status()['paused'])
+
+    def test_button_presses_redirect_so_a_reload_cannot_send_them_again(self):
+        import http.client
+        from urllib.parse import urlsplit
+        self.post(action='start', mode='simulation', max_trips='1000', max_minutes='5')
+        parts = urlsplit(self.url)
+        connection = http.client.HTTPConnection(parts.hostname, parts.port, timeout=5)
+        connection.request('POST', '/automation', body='action=pause',
+                           headers={'Content-Type': 'application/x-www-form-urlencoded'})
+        response = connection.getresponse()
+        self.assertEqual(response.status, 303)
+        self.assertEqual(response.getheader('Location'), '/automation')
+        connection.close()
+        self.assertTrue(self.handler.automation.status()['paused'])
+
+    def test_a_notice_survives_the_redirect_once(self):
+        self.post(action='start', mode='simulation', max_trips='1000', max_minutes='5')
+        page = self.post(action='start', mode='simulation', max_trips='1000', max_minutes='5')
+        self.assertIn('A run is already running; stop it first.', page)
+        self.assertNotIn('A run is already running; stop it first.', unescape(self.get('/automation')))
 
     def test_panel_has_run_and_model_tabs(self):
         from src.automation_web import render_panel
@@ -326,6 +362,9 @@ class AutomationWebTests(unittest.TestCase):
         from src.automation_web import SCRIPT
         self.assertIn('location.hash', SCRIPT)
         self.assertIn('showTab()', SCRIPT)
+        # the 2-second refresh keeps each scrolling list's and the page's position
+        self.assertIn('el.scrollTop = at[0]', SCRIPT)
+        self.assertIn('window.scrollTo(x, y)', SCRIPT)
 
     def test_waiting_for_discord_is_its_own_state(self):
         from src.automation_web import state_label

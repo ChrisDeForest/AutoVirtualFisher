@@ -176,20 +176,21 @@ class NativeDispatchTests(unittest.TestCase):
         self.assertGreaterEqual(order[first + 1], 0.4)      # the option boxes open before the sending Enter
 
     @patch('src.discord_input.time.sleep')
-    def test_fish_keeps_the_short_gap_and_no_check(self, sleep):
+    def test_fish_gets_one_more_enter_with_short_gaps(self, sleep):
         fish = {'boxes': [box('/fish', 600), box('Virtual Fisher', 620)]}
-        driver = self.driver([self.EMPTY, fish, {'boxes': [box('/fish', 800)]}])
+        draft = {'boxes': [box('/fish', 800)]}
+        driver = self.driver([self.EMPTY, fish, draft])
         order = []
         driver._key = lambda key, cancelled: order.append('key')
         sleep.side_effect = lambda seconds: order.append(seconds)
-        reads = []
-        frame = driver._frame
-        driver._frame = lambda cancelled: reads.append(1) or frame(cancelled)
         driver.dispatch('/fish', lambda: False)
-        self.assertEqual(order.count('key'), 2)              # no extra Enter though the read shows a draft
-        self.assertEqual(order[order.index('key') + 1], 0.2)
-        self.assertEqual(order[-1], 'key')                    # nothing after the sending Enter
-        self.assertEqual(len(reads), 2)                       # the placeholder and picker reads only
+        self.assertEqual(order.count('key'), 3)              # a third Enter while the draft stays, and no more
+        first = order.index('key')
+        self.assertEqual([x for x in order[first:] if x != 'key'], [0.3] * 3)   # Enter gap, two checks
+        self.assertIsNotNone(driver.draft_composer)           # left for the next attempt to clear
+        driver = self.driver([self.EMPTY, fish, self.EMPTY])
+        driver.dispatch('/fish', lambda: False)
+        self.assertEqual(self.keys(driver), [('key', 13)] * 2)
         self.assertIsNone(driver.draft_composer)
 
     @patch('src.discord_input.time.sleep')

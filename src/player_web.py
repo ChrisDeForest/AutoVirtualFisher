@@ -284,6 +284,7 @@ class Handler(BaseHTTPRequestHandler):
     automation_tick = 0.2
     # The current run's mode ('live' or 'simulation') and, for live runs, its Discord transport.
     automation_mode = None
+    automation_notice = ''   # a button press's notice, shown once on the page it redirects to
     automation_transport = None
     # Live runs keep their journal, trips, review items, diagnostics and last settings here.
     automation_live_root = DEFAULT_LIVE_ROOT
@@ -466,12 +467,21 @@ class Handler(BaseHTTPRequestHandler):
             elif action == 'pause' and current:
                 current.pause()
             elif action == 'resume' and current:
-                current.resume()
+                # Only the Resume button's own pause ends it: a resume sent again later is ignored.
+                token = fields.get('pause_id', [''])[0]
+                if (not token.isdigit() or not current.resume(int(token))) and current.status()['paused']:
+                    notice = 'That Resume belonged to an earlier pause; the run is still paused.'
             elif action == 'resolve' and current:
                 outcome = fields.get('outcome', [''])[0]
                 if outcome not in ('happened', 'not_sent') or not current.resolve(fields.get('id', [''])[0], outcome):
                     notice = 'That command was already resolved.'
-        self.automation_page(notice)
+        # Post/redirect/get: the press answers with a redirect, so reloading or restoring the page never sends
+        # it again (a resent Resume once ended a pause).
+        type(self).automation_notice = notice
+        self.send_response(303)
+        self.send_header('Location', '/automation')
+        self.send_header('Content-Length', '0')
+        self.end_headers()
 
     def start_live(self, fields, trips, minutes):
         """Start a live run; returns a problem to show, or '' once it is running (paused until Discord is in
@@ -509,7 +519,8 @@ class Handler(BaseHTTPRequestHandler):
             self.live_page()
             return
         if url.path == '/automation':
-            self.automation_page()
+            notice, type(self).automation_notice = type(self).automation_notice, ''
+            self.automation_page(notice)
             return
         if url.path == '/automation/panel':
             cls = type(self)

@@ -102,8 +102,18 @@ SCRIPT = """<script nonce="{nonce}">
   setInterval(function () {
     fetch('/automation/panel', {cache: 'no-store'}).then(function (r) { return r.text(); }).then(function (html) {
       var was = panel.getAttribute('data-running');
+      // Keep where each scrolling list and the page were scrolled: the refresh replaces them all.
+      var kept = {}, x = window.scrollX, y = window.scrollY;
+      panel.querySelectorAll('.scroll').forEach(function (el, i) {
+        kept[(el.getAttribute('aria-label') || '') + '#' + i] = [el.scrollTop, el.scrollLeft];
+      });
       panel.innerHTML = html;
       showTab();
+      panel.querySelectorAll('.scroll').forEach(function (el, i) {
+        var at = kept[(el.getAttribute('aria-label') || '') + '#' + i];
+        if (at) { el.scrollTop = at[0]; el.scrollLeft = at[1]; }
+      });
+      window.scrollTo(x, y);
       var now = panel.querySelector('[data-running]');
       if (now && now.getAttribute('data-running') !== was) { location.reload(); }
     }).catch(function () {});
@@ -217,10 +227,12 @@ def state_label(status) -> str:
     return 'Fishing'
 
 
-def _button(action, label, secondary=False):
+def _button(action, label, secondary=False, extra=None):
     style = ' class="secondary"' if secondary else ''
+    hidden = ''.join(f'<input type="hidden" name="{escape(name)}" value="{escape(str(value))}">'
+                     for name, value in (extra or {}).items())
     return (f'<form method="post" action="/automation"><input type="hidden" name="action" value="{action}">'
-            f'<button type="submit"{style}>{escape(label)}</button></form>')
+            f'{hidden}<button type="submit"{style}>{escape(label)}</button></form>')
 
 
 def _scroll(label, inner):
@@ -305,8 +317,12 @@ def _account_rows(sections):
     rows.append(('Upgrades', _levels(values['items']) if values else None, unread))
     values, unread = section('shop_rods')
     if values:
-        owned = [name + (' (in use)' if item['selected'] else '') for name, item in values['items'].items()
-                 if item['owned']]
+        # /rod lists the rods owned; the shop only shows which one is in use (other owned rows may not read)
+        in_use = ((sections.get('rod') or {}).get('values') or {}).get('current') \
+            or next((name for name, item in values['items'].items() if item['selected']), None)
+        names = ((sections.get('rod') or {}).get('values') or {}).get('owned') \
+            or [name for name, item in values['items'].items() if item['owned']]
+        owned = [name + (' (in use)' if name == in_use else '') for name in names]
         priced = [(item['price'], name) for name, item in values['items'].items() if item['price']]
         text = ', '.join(owned) + (f'; next {min(priced)[1]}, ${min(priced)[0]:,}' if priced else '')
     rows.append(('Rods', text if values else None, unread))
@@ -509,7 +525,8 @@ def render_panel(status, mode=None) -> str:
     label = state_label(status)
     buttons = ''
     if running:
-        toggle = _button('resume', 'Resume') if status.get('paused') else _button('pause', 'Pause', secondary=True)
+        toggle = (_button('resume', 'Resume', extra={'pause_id': status.get('pause_id', 0)}) if status.get('paused')
+                  else _button('pause', 'Pause', secondary=True))
         buttons = f'<div class="actions">{toggle}{_button("stop", "Stop now")}</div>'
     active = label in ('Fishing', 'Refreshing stats') or label.startswith('Reading ')
     tone = 'on' if active else ('halted' if running else '')
