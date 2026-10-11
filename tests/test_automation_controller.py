@@ -12,6 +12,7 @@ from src.automation_models import AutomationConfig, ContextStatus
 from src.automation_transport import SimulationTransport
 from src.fishing_sessions import load_sessions
 from src.review_queue import list_items
+from tests.plan_fixtures import CHARMS, account_state, synced
 
 # /charms is left out of most tests so their command sequences stay short; its own tests add it.
 CONFIG = AutomationConfig(account='sim', username='sim0001', context_id='sim:dm',
@@ -79,10 +80,11 @@ class ControllerTests(unittest.TestCase):
     def tearDown(self):
         self.temporary.cleanup()
 
-    def make(self, journal=None, config=CONFIG, state_path=None):
+    def make(self, journal=None, config=CONFIG, state_path=None, plan_spawn=lambda work: None):
+        # Plans are skipped unless a test asks: a plan's background thread would slow the simulated run.
         self.controller = AutomationController(self.sim, config, journal or AutomationJournal(self.journal_root),
                                                self.fishing, self.review, monotonic=self.clock.monotonic,
-                                               utc=self.clock.utc, state_path=state_path)
+                                               utc=self.clock.utc, state_path=state_path, plan_spawn=plan_spawn)
         return self.controller
 
     def run_for(self, seconds, controller=None):
@@ -820,6 +822,138 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(self.saved_trips(), 100)
         self.assertEqual(self.sim.totals['trips'], 100)
         self.assertEqual(len(self.fish_sends()), 100)
+
+    def test_status_has_a_plan_section(self):
+        started = []
+        self.make(config=replace(CONFIG, capabilities=READS_CONFIG), plan_spawn=started.append).start()
+        self.run_for(30)
+        plan = self.controller.status()['plan']
+        self.assertEqual(set(plan), {'plan', 'made_at', 'updating', 'error'})
+        self.assertEqual(len(started), 1)            # one plan at a time: the rest wait for it
+        self.assertEqual((plan['plan'], plan['made_at'], plan['updating']), (None, None, True))
+        started[0]()                                 # the thread runs: a plan, not an error
+        plan = self.controller.status()['plan']
+        self.assertIsNone(plan['error'])
+        self.assertIsNotNone(plan['plan'])
+        self.assertIsNotNone(plan['made_at'])
+
+    def test_a_plan_is_worked_out_from_the_runs_reads(self):
+        path = Path(self.temporary.name) / 'account_state.json'
+        self.make(config=replace(CONFIG, max_trips=3, capabilities=READS_CONFIG), state_path=path,
+                  plan_spawn=lambda work: work()).start()
+        self.run_for(60)
+        self.clock.now += 30                         # past the planner's spacing: a request left waiting starts
+        view = self.controller.status()['plan']
+        self.assertFalse(view['updating'])
+        self.assertIsNone(view['error'])
+        self.assertEqual(set(view['plan']), {'error', 'next', 'steps', 'prestige', 'assumptions', 'cut_short'})
+        self.assertIsNotNone(view['made_at'])
+
+    def test_a_plan_that_cannot_be_requested_never_stops_the_run(self):
+        self.make(config=replace(CONFIG, max_trips=3, capabilities=READS_CONFIG))
+        self.controller._plan_inputs = lambda dashboard=None: 1 / 0
+        self.controller.start()
+        self.run_for(60)
+        self.assertEqual(self.sim.totals['trips'], 3)
+        self.assertIn('could not be requested', self.controller.status()['plan']['error'])
+
+    def test_plan_runner_keeps_the_newest_request_and_never_raises(self):
+        from src.automation_controller import PlanRunner
+        started = []
+        runner = PlanRunner(lambda inputs: {'steps': [inputs]}, spawn=lambda work: started.append(work))
+        runner.request(1)
+        runner.request(2)
+        self.assertEqual(len(started), 1)
+        self.assertTrue(runner.view()['updating'])
+        started[0]()
+        self.assertEqual(runner.view()['plan'], {'steps': [2]})
+        self.assertFalse(runner.view()['updating'])
+        failing = PlanRunner(lambda inputs: 1 / 0, spawn=lambda work: work())
+        failing.request(1)
+        self.assertIn('division', failing.view()['error'])
+
+    def test_a_later_planner_error_keeps_the_last_good_plan(self):
+        from src.automation_controller import PlanRunner
+        now = [0.0]
+        results = [{'error': None, 'steps': ['good']}, ZeroDivisionError('boom'), {'error': 'not planned: x'}]
+
+        def compute(inputs):
+            result = results.pop(0)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        runner = PlanRunner(compute, spawn=lambda work: work(), clock=lambda: now[0])
+        runner.request(1)
+        made = runner.view()['made_at']
+        for message in ('The planner failed: boom', 'not planned: x'):
+            now[0] += 30
+            runner.request(2)
+            view = runner.view()
+            self.assertEqual(view['plan'], {'error': None, 'steps': ['good']})
+            self.assertEqual(view['error'], message)
+            self.assertEqual(view['made_at'], made)
+
+    def test_plan_requests_are_spaced_30_seconds_apart(self):
+        from src.automation_controller import PlanRunner
+        now, computed = [0.0], []
+        runner = PlanRunner(lambda inputs: computed.append(inputs) or {'error': None}, spawn=lambda work: work(),
+                            clock=lambda: now[0])
+        runner.request('first')
+        self.assertEqual(computed, ['first'])        # the first at once
+        for moment, inputs in ((5, 'a'), (12, 'b'), (29, 'c')):
+            now[0] = moment
+            runner.request(inputs)
+            runner.poll()
+        self.assertEqual(computed, ['first'])        # inside the window: waiting, never blocking the caller
+        self.assertTrue(runner.view()['updating'])
+        now[0] = 30
+        runner.poll()
+        self.assertEqual(computed, ['first', 'c'])   # folded into one plan with the newest inputs
+        runner.poll()
+        now[0] = 45
+        runner.request('d')
+        self.assertEqual(computed, ['first', 'c'])
+        now[0] = 60
+        runner.poll()
+        self.assertEqual(computed, ['first', 'c', 'd'])
+        self.assertFalse(runner.view()['updating'])
+
+    def test_the_run_starts_a_waiting_plan_when_the_window_ends(self):
+        computed = []
+        self.make(config=replace(CONFIG, capabilities=READS_CONFIG), plan_spawn=lambda work: work())
+        self.controller._compute_plan = lambda inputs: computed.append(self.clock.now) or {'error': None}
+        self.controller.planner.compute = self.controller._compute_plan
+        self.controller.start()
+        self.run_for(70)
+        self.assertGreaterEqual(len(computed), 2)
+        self.assertTrue(all(b - a >= 30 for a, b in zip(computed, computed[1:])), computed)
+
+    def test_trip_spacing_from_the_logbook(self):
+        from src.automation_controller import trip_spacing
+        stamp = lambda seconds: {'captured_at': f'2026-10-07T13:{seconds // 60:02d}:{seconds % 60:02d}.000000Z',
+                                 'tally': {'trips': 1}}
+        moments = [i * 7 for i in range(30)] + [30 * 7 + 600 + i * 9 for i in range(3)]   # a break, then 9 s gaps
+        sessions = [stamp(m) for m in moments]
+        self.assertEqual(trip_spacing(sessions), 7)
+        self.assertIsNone(trip_spacing(sessions[:10]))   # too few trips to tell
+
+    def test_a_plan_before_any_rate_uses_the_logbook_spacing(self):
+        self.make(config=replace(CONFIG, capabilities=READS_CONFIG), plan_spawn=lambda work: work())
+        self.controller.start()
+        self.run_for(20)
+        inputs = self.controller._plan_inputs(self.controller._dashboard())
+        inputs['trips_per_hour'] = None
+        inputs['logbook_spacing'] = 9.0
+        inputs['account'], inputs['synced'], inputs['charms'] = account_state(), synced(), CHARMS
+        plan = self.controller._compute_plan(inputs)
+        self.assertTrue(any("logbook's recent trip spacing (median 9.0 s)" in note for note in plan['assumptions']),
+                        plan['assumptions'])
+
+    def test_plan_inputs_carry_the_charms_found_since_the_read(self):
+        self.make(config=replace(CONFIG, capabilities=READS_CONFIG))
+        self.controller.charm_tallies = [{'finds': {'Haste Charm': 2}, 'chest_contents': {}, 'charm_levels': {}}]
+        self.assertEqual(self.controller._plan_inputs()['charms_since'], {'Haste Charm': 2})
 
 
 if __name__ == '__main__':

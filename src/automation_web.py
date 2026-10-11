@@ -415,6 +415,86 @@ def _model_tab(model) -> str:
         return f'<p class="empty">The Model tab could not be shown: {escape(repr(error))}</p>'
 
 
+def _duration(seconds) -> str:
+    seconds = max(0, float(seconds or 0))
+    if seconds < 3600:
+        return f'{max(1, round_half_up(seconds / 60)):,} min'
+    if seconds < 172800:
+        return f'{seconds / 3600:.1f} h'
+    return f'{seconds / 86400:.1f} days'
+
+
+def _when(seconds) -> str:
+    """When a step comes: "now" for one due at once, else its fishing time from now."""
+    return 'now' if float(seconds or 0) < 1 else _duration(seconds)
+
+
+def _trips(count) -> str:
+    count = float(count or 0)
+    return '' if count < 0.5 else f'{round_half_up(count):,}'
+
+
+def _cost(step) -> str:
+    if not step.get('cost'):
+        return ''
+    return f'${step["cost"]:,.0f}' if step.get('currency') == '$' else f'{step["cost"]:,.0f} {step["currency"]}'
+
+
+def render_plan_tab(view) -> str:
+    """The Plan tab: next action, the route by phase, prestige, assumptions (progression part 3)."""
+    view = view or {}
+    plan = view.get('plan')
+    if plan is None:
+        text = view.get('error') or ('Working out the plan…' if view.get('updating') else 'No plan yet.')
+        return f'<p class="empty">{escape(text)}</p>'
+    if plan.get('error'):
+        return f'<p class="empty">{escape(plan["error"])}</p>'
+    failed = ''
+    if view.get('error'):
+        # the plan below is the last one that worked: say so, and when it was made
+        failed = (f'<p class="empty">{escape(str(view["error"]).rstrip("."))}. Showing the last good plan, made '
+                  f'{escape(view.get("made_at") or "earlier")}.</p>')
+    made = f'Made {view.get("made_at") or ""}' + (' · updating' if view.get('updating') else '')
+    step = plan.get('next')
+    when = lambda item: 'now' if _when(item['seconds']) == 'now' else f'in about {_duration(item["seconds"])}'
+    next_box = _box('Next', '<p class="next">' + (escape(
+        (f'Sell ${step["sell"]:,.0f} of fish, then ' if step.get('sell') else '') + step['action']
+        + (f' ({_cost(step)})' if _cost(step) else '') + f' — {when(step)}')
+        if step else 'Nothing to do.') + '</p>', note=made + (f' · {step["why"]}' if step and step.get('why') else ''))
+    rows, last = [], None
+    for item in plan.get('steps', []):
+        if item['phase_label'] != last:
+            rows.append(f'<tr><th colspan="5">{escape(item["phase_label"])}</th></tr>')
+            last = item['phase_label']
+        sell = f' · sell ${item["sell"]:,.0f}' if item.get('sell') else ''
+        rows.append(f'<tr><td>{escape(item["action"])}</td><td>{escape(_cost(item) + sell)}</td>'
+                    f'<td>{escape(_trips(item.get("trips")))}</td><td>{escape(_when(item["seconds"]))}</td>'
+                    f'<td>{escape(item.get("why") or "")}</td></tr>')
+    route_box = _box('Route', _scroll('Route', '<table class="mini model"><thead><tr><th>Step</th><th>Cost</th>'
+                                      '<th>Trips</th><th>In</th><th>Why</th></tr></thead>'
+                                      f'<tbody>{"".join(rows)}</tbody></table>'), wide=True,
+                     note='Plan cut short.' if plan.get('cut_short') else
+                     'Trips: fished before the step. In: fishing time from now.')
+    prestige = plan.get('prestige') or {}
+    if prestige.get('reached'):
+        text = f'Prestige in about {_duration(prestige["seconds"])}.'
+        if prestige.get('shop'):
+            text += ' Then buy ' + ', '.join(prestige['shop']) + '.'
+    else:
+        text = 'Not reached in this plan. Missing: ' + ', '.join(prestige.get('missing') or ['?']) + '.'
+    prestige_box = _box('Prestige', f'<p>{escape(text)}</p>')
+    notes = ''.join(f'<li>{escape(line)}</li>' for line in plan.get('assumptions', []))
+    notes_box = _box('Assumptions and estimates', f'<ul>{notes}</ul>' if notes else '<p class="empty">None.</p>')
+    return f'{failed}<div class="boxes">{next_box}{route_box}{prestige_box}{notes_box}</div>'
+
+
+def _plan_tab(view) -> str:
+    try:
+        return render_plan_tab(view)
+    except Exception as error:
+        return f'<p class="empty">The Plan tab could not be shown: {escape(repr(error))}</p>'
+
+
 def render_panel(status, mode=None) -> str:
     """The live part of the page: run status, level line, and the stat boxes."""
     if not status:
@@ -505,9 +585,10 @@ def render_panel(status, mode=None) -> str:
                f'<div class="rewards-row">{rewards_box}{_finds_box(dashboard.get("finds") or {}, dashboard.get("charms"))}'
                f'</div>{inventory_box}{trips_box}{_account_box(status.get("account"))}</div>')
     return (f'<div data-running="{1 if running else 0}">{strip}'
-            '<nav class="tabs"><a href="#run">Run</a><a href="#model">Model</a></nav>'
+            '<nav class="tabs"><a href="#run">Run</a><a href="#model">Model</a><a href="#plan">Plan</a></nav>'
             f'<section class="tab" data-tab="run">{run_tab}</section>'
-            f'<section class="tab" data-tab="model" hidden>{_model_tab(status.get("model"))}</section></div>')
+            f'<section class="tab" data-tab="model" hidden>{_model_tab(status.get("model"))}</section>'
+            f'<section class="tab" data-tab="plan" hidden>{_plan_tab(status.get("plan"))}</section></div>')
 
 
 def _field(name, label, value, hint=''):

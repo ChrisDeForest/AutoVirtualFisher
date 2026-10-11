@@ -1,0 +1,36 @@
+{
+  "source": "docs/progression-model.md section 5 (guide price table, wiki), miraheze Biome page for unlock levels",
+  "upgrades": {
+    "Better Fish": [500, 1500, 2500, 5000, 7500, 10000, 15000, 25000, 35000, 50000, 100000, 150000, 250000, 400000, 600000, 750000, 1000000, 1500000, 2000000, 3000000, 5000000],
+    "Salesman": [250, 750, 1500, 2500, 5000, 8000, 15000, 25000, 50000, 100000, 150000, 250000, 300000, 350000, 450000, 600000, 750000, 1000000, 5000000, 25000000],
+    "Bait Efficiency": [1000, 2000, 2500, 5000, 10000, 20000, 30000, 50000, 100000],
+    "More Chests": [2000, 5000, 10000, 20000, 50000, 250000, 500000, 750000, 1000000, 1500000, 2000000],
+    "Worker Motivation": [10000, 50000, 100000, 200000, 350000, 600000, 1000000, 5000000, 20000000, 50000000, 200000000, 500000000],
+    "Artifact Specialist": [1500, 5000, 10000, 25000, 80000, 150000, 250000],
+    "Experienced": [50000, 500000, 5000000, 50000000, 500000000],
+    "Better Chests": [100000, 1000000, 5000000, 25000000, 100000000],
+    "Better Dailies": [5000, 10000, 25000, 50000, 100000, 200000, 350000, 500000, 750000, 1000000]
+  },
+  "boats": [
+    ["Rowboat", 5000, 1], ["Fishing Boat", 25000, 1], ["Speedboat", 100000, 1], ["Pontoon", 250000, 1],
+    ["Sailboat", 1000000, 1], ["Yacht", 20000000, 1], ["Luxury Yacht", 100000000, 50], ["Cruise Ship", 500000000, 100],
+    ["Goldboat", 2500000000, 250], ["Sky Cruiser", 10000000000, 250], ["Satellite", 50000000000, 500],
+    ["Space Shuttle", 250000000000, 500], ["Cruiser", 1000000000000, 500], ["Alien Raft", 2500000000000, 1000],
+    ["Alien Submarine", 5000000000000, 1000]
+  ],
+  "special": {
+    "Fish Ovens": {"currency": "Lava", "unlock": 50, "prices": [10, 25, 50, 75, 100, 110, 120, 130, 140, 150, 160, 170, 180, 190, 200, 225, 250, 275, 300, 500]},
+    "Bait Lover": {"currency": "Diamond", "unlock": 100, "prices": [10, 25, 100, 250]},
+    "Aquatic Expert": {"currency": "Diamond", "unlock": 100, "prices": [10, 25, 100, 250]},
+    "Worker Extender": {"currency": "Diamond", "unlock": 100, "prices": [10, 25, 100, 250]},
+    "Ultimate Salesman": {"currency": "Diamond", "unlock": 100, "prices": [10, 25, 100, 250]},
+    "Highly Experienced": {"currency": "Diamond", "unlock": 100, "prices": [10, 25, 100, 250]},
+    "Boost Booster": {"currency": "Diamond", "unlock": 100, "prices": [10, 25, 100, 250]},
+    "Statistician": {"currency": "Gold", "unlock": 250, "prices": [100, 200, 300, 400, 500, 500, 500, 500, 500, 500]},
+    "Duplicator": {"currency": "Emerald", "unlock": 500, "prices": [100, 175, 250, 325, 400, 475, 550, 625, 700, 800]},
+    "Charmer": {"currency": "Lava", "unlock": 500, "prices": [100, 150, 200, 250, 300, 350, 400, 450, 500, 500]}
+  },
+  "boosts": {"fish": {"currency": "Emerald", "cost": 6, "minutes": 20}, "treasure": {"currency": "Emerald", "cost": 6, "minutes": 20}},
+  "bait_unlock": {"Worms": 1, "Leeches": 10, "Magnet": 20, "Wise Bait": 30, "Fish": 40, "Artifact Magnet": 60, "Magic Bait": 80, "Support Bait": 150},
+  "biome_unlock": {"River": 1, "Volcanic": 50, "Ocean": 100, "Sky": 250, "Space": 500, "Alien": 1000}
+}

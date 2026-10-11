@@ -11,6 +11,7 @@ that fail OCR are retried up to three attempts, with a delay, unless a retry rea
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
+import copy
 import random
 import re
 import threading
@@ -26,11 +27,16 @@ from .automation_policy import next_action
 from .automation_state import AutomationState, apply_observation
 from .catch_check import load_fish_reference
 from .fishing_sessions import load_sessions
+from .game_model import cooldown
 from .game_model_data import GameDataError, load_game_data
 from .game_model_inputs import build_inputs
-from .model_check import ModelTracker, corrected_trip, model_view, trip_boosted
+from .model_check import ModelTracker, buff_corrections, corrected_trip, model_view, trip_boosted
 from .live_stats import (add_unlisted_finds, carry_forward, charm_summary, parse_charms, project, summarize_finds,
                          synced_stats, unread_fields)
+from .plan_data import PlanDataError, load_plan_data
+from .plan_setup import ModelContext
+from .plan_state import from_run
+from .planner import make_plan
 from .player_planner import load_level_increments
 from .startup_fields import apply_startup, reply_problems, startup_problems
 from .fishing_log import parse_fishing
@@ -69,14 +75,99 @@ def _read_anything(parsed: dict) -> bool:
     return not parsed['unread'] or any(value not in (None, {}, [], '') for value in parsed['values'].values())
 
 
+def trip_spacing(sessions, recent=300, longest=60.0, fewest=20):
+    """The median seconds between consecutive logged trips: the newest `recent` gaps under `longest` seconds
+    (longer ones are breaks), from one-trip sessions (each saved as its trip happened). None with under `fewest`."""
+    times = []
+    for session in sessions:
+        if (session.get('tally') or {}).get('trips') != 1:
+            continue
+        try:
+            times.append(datetime.fromisoformat(session['captured_at'].replace('Z', '+00:00')).timestamp())
+        except (KeyError, AttributeError, TypeError, ValueError):
+            continue
+    times.sort(reverse=True)
+    gaps = [a - b for a, b in zip(times, times[1:]) if 0 < a - b < longest][:recent]
+    if len(gaps) < fewest:
+        return None
+    gaps.sort()
+    middle = len(gaps) // 2
+    return gaps[middle] if len(gaps) % 2 else (gaps[middle - 1] + gaps[middle]) / 2
+
+
 def _iso(moment: datetime) -> str:
     return moment.isoformat()
+
+
+class PlanRunner:
+    """Works out plans in a background thread: never in the run's loop. Only the newest request is kept, one plan
+    is worked out at a time, and a new one starts at most every `spacing` seconds (the first at once): a request
+    inside that window waits, folded with any later ones, until `poll` finds the window over."""
+
+    def __init__(self, compute, spawn=None, clock=time.monotonic, spacing=30.0):
+        self.compute = compute
+        self.spawn = spawn or (lambda work: threading.Thread(target=work, daemon=True).start())
+        self.clock, self.spacing = clock, spacing
+        self.lock = threading.Lock()
+        self.pending, self.busy, self.started = None, False, None
+        self.plan, self.made_at, self.error = None, None, None
+
+    def request(self, inputs):
+        with self.lock:
+            self.pending = inputs
+        self.poll()
+
+    def poll(self):
+        """Start the waiting request if nothing is being worked out and the window is over. Never blocks."""
+        with self.lock:
+            if self.busy or self.pending is None or not self._window_over():
+                return
+            self.busy = True
+        try:
+            self.spawn(self._work)
+        except Exception as failure:  # a thread that cannot start never stops a run
+            with self.lock:
+                self.busy, self.pending = False, None
+                self.error = f'The planner could not start: {failure}'
+
+    def _window_over(self):
+        return self.started is None or self.clock() - self.started >= self.spacing
+
+    def _work(self):
+        while True:
+            with self.lock:
+                if self.pending is None or not self._window_over():
+                    self.busy = False   # a request left waiting is started by a later poll
+                    return
+                inputs, self.pending = self.pending, None
+                self.started = self.clock()
+            try:
+                plan, error = self.compute(inputs), None
+            except Exception as failure:  # the planner never stops a run
+                plan, error = None, f'The planner failed: {failure}'
+            if error is None and isinstance(plan, dict) and plan.get('error') and _good_plan(self.plan):
+                error = plan['error']       # a plan that could not be made keeps the last good one on the tab
+            with self.lock:
+                if error:
+                    self.error = error
+                else:
+                    self.plan, self.error = plan, None
+                    self.made_at = datetime.now(timezone.utc).isoformat(timespec='seconds')
+
+    def view(self):
+        with self.lock:
+            return {'plan': self.plan, 'made_at': self.made_at, 'error': self.error,
+                    'updating': self.busy or self.pending is not None}
+
+
+def _good_plan(plan):
+    return isinstance(plan, dict) and not plan.get('error')
 
 
 class AutomationController:
     def __init__(self, transport, config: AutomationConfig, journal: AutomationJournal, fishing_root: Path,
                  review_root: Path, monotonic=time.monotonic, utc=None, policy=next_action, interval=0.2,
-                 rng=None, alert=None, state_path=None):
+                 rng=None, alert=None, state_path=None, plan_spawn=None):
         self.transport, self.config, self.journal, self.policy = transport, config, journal, policy
         # The account as its replies last showed it, saved so it outlives the run (see account_state).
         self.state_path = Path(state_path) if state_path else None
@@ -91,6 +182,13 @@ class AutomationController:
         except Exception as error:
             self.model = ModelTracker()
             self.model.problem = f'model_check.json could not be read ({error}): the model started fresh.'
+        # The planner (part 3): worked out in a background thread whenever the account changes. Never stops a run.
+        try:
+            self.plan_data, plan_problem = load_plan_data(), None
+        except PlanDataError as error:
+            self.plan_data, plan_problem = None, str(error)
+        self.planner = PlanRunner(self._compute_plan, plan_spawn, clock=monotonic)  # plan_spawn: tests only
+        self.planner.error = plan_problem
         self.model_boosted = None  # whether the latest trip was under a global boost (None: no trip yet)
         self.roots = {'fishing': Path(fishing_root), 'review': Path(review_root)}
         self.monotonic = monotonic
@@ -146,6 +244,7 @@ class AutomationController:
         self.unread = {}               # refresh -> fields its last reply did not show; read again until complete
         self.unread_trips = {}         # refresh -> trips since that reply
         self.finds_before = None       # finds from earlier automation trips, loaded once per run
+        self.logbook_spacing = False   # the logbook's recent trip spacing for the plan (False: not read yet)
 
     # --- run control ---
 
@@ -204,6 +303,7 @@ class AutomationController:
                          blocks_actions=False)
             self.phase, self.reason = ('NEEDS_REVIEW', self._unresolved_text()) if self.unresolved else (
                 'BOOTSTRAPPING', 'Starting.')
+            self._request_plan()
             generation, stop_event = self.generation, self.stop_event
         if thread:
             self.thread = threading.Thread(target=self._loop, args=(generation, stop_event), daemon=True)
@@ -256,6 +356,7 @@ class AutomationController:
 
     def status(self) -> dict:
         with self.lock:
+            self._poll_plan()
             dashboard = self._dashboard()
             pending = self.state.pending
             return {'running': self.running, 'paused': self.paused,
@@ -269,6 +370,7 @@ class AutomationController:
                         'account': self.config.account, 'context_id': self.config.context_id,
                         'max_trips': self.config.max_trips, 'max_seconds': self.config.max_seconds},
                     'dashboard': dashboard, 'account': self.account, 'model': self._model_status(dashboard),
+                    'plan': self.planner.view(),
                     'startup': {'failures': dict(self.startup_failures),
                                 'problems': dict(self.startup_problems),
                                 'confirmed_fields': dict(self.state.startup_observed_at)}}
@@ -286,6 +388,7 @@ class AutomationController:
         with self.lock:
             if not self.running or (generation is not None and generation != self.generation):
                 return
+            self._poll_plan()
             generation = self.generation
             if self.in_flight is not None:
                 # Another step is handing a command over right now; nothing else may be chosen or sent.
@@ -615,6 +718,7 @@ class AutomationController:
                 self.sync_tallies = []
             if observation.kind == 'charms':
                 self.charm_tallies = []
+            self._request_plan()
             # OCR can lose one field while the rest reads; that reply is read again soon, until nothing is missing.
             unread = unread_fields(observation.kind, observation.text)
             if unread:
@@ -698,6 +802,69 @@ class AutomationController:
             view['estimates'] = [self.model_problem, *view['estimates']]
         return view
 
+    # --- the planner (part 3): inputs snapshotted here, the plan worked out in PlanRunner's thread ---
+
+    def _plan_inputs(self, dashboard=None):
+        """A snapshot of what the plan needs, taken under the lock; the plan itself is worked out elsewhere."""
+        synced = self._synced()
+        tracker = self.model
+        trips_per_hour = ((dashboard or {}).get('per_hour') or {}).get('trips')
+        return {'account': copy.deepcopy(self.account), 'synced': copy.deepcopy(synced),
+                'charms': self.synced['charms'], 'factors': {k: v['value'] for k, v in tracker.factors().items()},
+                'learned': copy.deepcopy(tracker.learned_mix()), 'scales': copy.deepcopy(tracker.chest_scales()),
+                'trips_per_hour': trips_per_hour, 'buffs': dict(synced['buffs']),
+                'charms_since': dict(summarize_finds(self.charm_tallies)['charms']),
+                'logbook_spacing': self._logbook_spacing()}
+
+    def _logbook_spacing(self):
+        """The median time between recent trips in the logbook (seconds), read once per run; None when too few."""
+        if self.logbook_spacing is False:
+            try:
+                sessions = load_sessions(self.config.account, self.roots['fishing'])[0]
+            except OSError:
+                sessions = []
+            self.logbook_spacing = trip_spacing(sessions)
+        return self.logbook_spacing
+
+    def _compute_plan(self, inputs):
+        if self.plan_data is None or self.model_data is None:
+            return {'error': self.planner.error or self.model_problem or 'The game data is not loaded.',
+                    'steps': [], 'next': None, 'prestige': {}, 'assumptions': [], 'cut_short': False}
+        state = from_run(inputs['account'], inputs['synced'], inputs['charms'], inputs.get('charms_since'))
+        if isinstance(state, str):
+            return {'error': f'not planned: {state}', 'steps': [], 'next': None, 'prestige': {},
+                    'assumptions': [], 'cut_short': False}
+        rows, _ = corrected_trip(state.account, state.setup, inputs['buffs'], self.model_data)
+        corrections = buff_corrections(rows)
+        # seconds per trip: this run's rate; before it has one, the logbook's recent trip spacing (an estimate)
+        overhead, note = 0.5, 'seconds per trip: cooldown + 0.5 s until this run has a rate'
+        rate = inputs['trips_per_hour']
+        spacing = 3600 / rate if rate else inputs.get('logbook_spacing')
+        if spacing:
+            overhead = max(0.5, spacing - cooldown(state.account, state.setup, self.model_data))
+            if not rate:
+                note = (f"seconds per trip: cooldown + {overhead:.1f} s from the logbook's recent trip spacing "
+                        f"(median {spacing:.1f} s) until this run has a rate")
+        ctx = ModelContext(self.model_data, inputs['learned'], inputs['scales'], corrections, inputs['factors'],
+                           overhead)
+        plan = make_plan(state, ctx, self.plan_data)
+        if not rate:
+            plan['assumptions'] = sorted(set(plan['assumptions']) | {note})
+        return plan
+
+    def _poll_plan(self):
+        """Start a plan request left waiting by PlanRunner's spacing. Never blocks or stops the run."""
+        try:
+            self.planner.poll()
+        except Exception as error:
+            self.planner.error = f'The plan could not be started: {error}'
+
+    def _request_plan(self):
+        try:
+            self.planner.request(self._plan_inputs(self._dashboard()))
+        except Exception as error:  # never stops a run
+            self.planner.error = f'The plan could not be requested: {error}'
+
     def _project(self, action_id, tally):
         """Copy an acknowledged trip into the logbook. Idempotent: the session is keyed by the action id."""
         try:
@@ -780,6 +947,7 @@ class AutomationController:
         else:
             self.unread.pop(read, None)
             self.unread_trips.pop(read, None)
+        self._request_plan()
 
     def _defer(self, kind, observation, problems):
         """Set an unreadable /profile or /buffs aside: noted in Needs review, tried again every few trips. Without
@@ -838,6 +1006,7 @@ class AutomationController:
             except OSError:
                 sessions = []
             self.finds_before = summarize_finds([session['tally'] for session in reversed(sessions)])
+            self.logbook_spacing = trip_spacing(sessions)   # the same read serves the plan's seconds per trip
         stats['finds'] = {'run': summarize_finds(self.run_tallies),
                           'all': summarize_finds(self.run_tallies, self.finds_before)}
         if self.synced['profile']:

@@ -220,13 +220,81 @@ class AutomationWebTests(unittest.TestCase):
                                     'rows': [{'fish': 'Fish', 'predicted': 0.84, 'measured': None}]},
                             'estimates': ['trips per hour: cooldown + 0.5 s until this run has a rate']}}
         html = render_panel(status, 'live')
-        self.assertIn('<nav class="tabs"><a href="#run">Run</a><a href="#model">Model</a></nav>', html)
+        self.assertIn('<nav class="tabs"><a href="#run">Run</a><a href="#model">Model</a><a href="#plan">Plan</a></nav>',
+                      html)
         self.assertIn('data-tab="run"', html)
         self.assertIn('<section class="tab" data-tab="model" hidden>', html)
         self.assertIn('probably the official server bonus', html)
         self.assertIn('measuring 3/50 trips', html)
         self.assertIn('estimated from the calculator example', html)
         self.assertLess(html.index('class="strip'), html.index('class="tabs"'), 'Pause and Stop stay above the tabs')
+
+    def test_plan_tab_renders_next_action_route_and_prestige(self):
+        from src.automation_web import render_plan_tab
+        view = {'updating': False, 'made_at': '2026-10-10T20:00:00+00:00', 'error': None, 'plan': {
+            'error': None, 'cut_short': False, 'assumptions': ['640 is used <P4>'],
+            'next': {'phase_label': '1st XP grind', 'kind': 'buy', 'action': 'Salesman 8', 'cost': 25000,
+                     'currency': '$', 'sell': 4000, 'trips': 12.4, 'seconds': 840, 'why': 'Salesman 6 before Alloy Rod'},
+            'steps': [{'phase_label': '1st XP grind', 'kind': 'buy', 'action': 'Salesman 8', 'cost': 25000,
+                       'currency': '$', 'sell': 4000, 'trips': 12.4, 'seconds': 840, 'why': 'Salesman 6 before Alloy Rod'},
+                      {'phase_label': '1st charm grind', 'kind': 'switch', 'action': 'Switch: rod Golden Rod',
+                       'cost': 0, 'currency': '$', 'sell': 0, 'trips': 0, 'seconds': 90000, 'why': 'best setup'}],
+            'prestige': {'reached': True, 'trips': 400000, 'seconds': 1.6e6, 'missing': [], 'shop': ['International Ties']}}}
+        html = render_plan_tab(view)
+        for text in ('Salesman 8', '$25,000', 'sell $4,000', '1st charm grind', 'International Ties', '&lt;P4&gt;',
+                     '14 min'):
+            self.assertIn(text, html)
+
+    def test_plan_tab_trips_column_and_now(self):
+        from src.automation_web import render_plan_tab
+        step = {'phase_label': '1st XP grind', 'kind': 'switch', 'action': 'Switch: rod Supporter Rod', 'cost': 0,
+                'currency': '$', 'sell': 0, 'trips': 0, 'seconds': 0, 'why': 'best setup for money'}
+        later = dict(step, kind='buy', action='Salesman 8', cost=25000, trips=311.6, seconds=4800)
+        html = render_plan_tab({'updating': False, 'made_at': 'x', 'error': None, 'plan': {
+            'error': None, 'cut_short': False, 'assumptions': [], 'next': step, 'steps': [step, later],
+            'prestige': {'reached': False, 'missing': ['level 500 (the plan reaches 52)', '829 more charms']}}})
+        self.assertIn('Switch: rod Supporter Rod — now', html)
+        self.assertNotIn('about 1 min', html)
+        self.assertIn('<th>Trips</th>', html)
+        self.assertIn('<td>312</td><td>1.3 h</td>', html)
+        self.assertIn('<td></td><td>now</td>', html)
+        self.assertIn('Missing: level 500 (the plan reaches 52), 829 more charms.', html)
+
+    def test_plan_tab_shows_a_later_error_above_the_last_good_plan(self):
+        from src.automation_web import render_plan_tab
+        step = {'phase_label': '1st XP grind', 'kind': 'buy', 'action': 'Salesman 8', 'cost': 25000,
+                'currency': '$', 'sell': 0, 'trips': 3, 'seconds': 840, 'why': ''}
+        html = render_plan_tab({'updating': False, 'made_at': '2026-10-10T20:00:00+00:00',
+                                'error': 'The planner failed: unknown rod', 'plan': {
+                                    'error': None, 'cut_short': False, 'assumptions': [], 'next': step,
+                                    'steps': [step], 'prestige': {'reached': True, 'seconds': 60, 'shop': []}}})
+        self.assertIn('The planner failed: unknown rod. Showing the last good plan, made 2026-10-10T20:00:00+00:00',
+                      html)
+        self.assertLess(html.index('The planner failed'), html.index('Salesman 8'))
+
+    def test_a_broken_plan_leaves_the_page_rendering(self):
+        status = {'running': True, 'phase': 'READY', 'reason': 'Fishing.', 'trips': 3, 'paused': False,
+                  'config': {'max_trips': None}, 'dashboard': {}, 'account': None, 'model': None,
+                  'plan': {'plan': {'steps': [{'action': 'x'}], 'next': 5}, 'updating': False, 'made_at': None,
+                           'error': None}}
+        html = render_panel(status)
+        self.assertIn('The Plan tab could not be shown', html)
+        self.assertIn('data-tab="run"', html)
+        self.assertIn('Fishing.', html)
+
+    def test_plan_tab_error_and_updating(self):
+        from src.automation_web import render_plan_tab
+        self.assertIn('not planned: x', render_plan_tab({'plan': {'error': 'not planned: x', 'steps': []},
+                                                        'updating': False, 'made_at': None, 'error': None}))
+        self.assertIn('Working out', render_plan_tab({'plan': None, 'updating': True, 'made_at': None, 'error': None}))
+
+    def test_panel_has_three_tabs(self):
+        status = {'running': True, 'phase': 'READY', 'reason': 'Fishing.', 'trips': 3, 'paused': False,
+                  'config': {'max_trips': None}, 'dashboard': {}, 'account': None, 'model': None,
+                  'plan': {'plan': None, 'updating': True, 'made_at': None, 'error': None}}
+        html = render_panel(status)
+        self.assertIn('href="#plan"', html)
+        self.assertIn('data-tab="plan"', html)
 
     def test_model_tab_shows_a_problem(self):
         from src.automation_web import render_model_tab
