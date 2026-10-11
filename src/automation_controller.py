@@ -236,6 +236,9 @@ class AutomationController:
                 self.paused, self.captcha = False, None
                 self._safe_event('resumed', None)
                 self.phase, self.reason = 'READY', 'Resuming.'
+                refocus = getattr(self.transport, 'refocus', None)
+                if refocus is not None:
+                    refocus()   # the message box is clicked again before the next command
 
     def resolve(self, action_id: str, outcome: str) -> bool:
         """A person settles an uncertain command: 'happened' (the game acted; any trip is entered by hand from

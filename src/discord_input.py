@@ -20,6 +20,7 @@ class WindowsDiscordDriver:
         self.api = ctypes.WinDLL('user32', use_last_error=True)
         for name, args, result in (
             ('GetForegroundWindow', [], wintypes.HWND),
+            ('GetCursorPos', [ctypes.POINTER(wintypes.POINT)], wintypes.BOOL),
             ('SetCursorPos', [ctypes.c_int, ctypes.c_int], wintypes.BOOL),
             ('GetWindowRect', [wintypes.HWND, ctypes.POINTER(wintypes.RECT)], wintypes.BOOL),
             ('GetWindowTextLengthW', [wintypes.HWND], ctypes.c_int),
@@ -40,7 +41,14 @@ class WindowsDiscordDriver:
         return self.window, text.value
 
     def is_foreground(self):
-        return self.api.GetForegroundWindow() == self.window
+        foreground = self.api.GetForegroundWindow() == self.window
+        if not foreground:
+            self.box_focused = False
+        return foreground
+
+    def refocus(self):
+        """Click the message box again before the next command (after a pause)."""
+        self.box_focused = False
 
     def _guard(self, cancelled):
         if cancelled():
@@ -83,12 +91,18 @@ class WindowsDiscordDriver:
         self._event(0, 0x0004, lambda: False, release=True)
 
     def click(self, point, cancelled):
-        """Click a message button at window coordinates, with the same foreground and stop guards as typing."""
+        """Click a message button at window coordinates, with the same foreground and stop guards as typing, then
+        put the pointer back where it was."""
+        before = wintypes.POINT()
+        saved = self.api.GetCursorPos(ctypes.byref(before))
         try:
             self._click(point, cancelled)
         except FocusLost as error:
             raise Interrupted('Discord stopped being the active window before the button was clicked; it is '
                               'clicked once Discord is back.') from error
+        finally:
+            if saved:
+                self.api.SetCursorPos(before.x, before.y)
 
     def _key(self, vk, cancelled):
         self._event(1, (vk, 0, 0), cancelled)
@@ -145,9 +159,13 @@ class WindowsDiscordDriver:
                 # Discord hides the "Message @..." placeholder whenever the box holds anything, even a space.
                 raise NotDispatched('The message box placeholder is not visible: it may hold a draft (even a space '
                                     'or new line). Click it, clear it (Ctrl+A, Delete), then start again.')
-            # From the first click, anything left in the box is this command's draft.
+            # From the first click, anything left in the box is this command's draft. Discord keeps the box focused
+            # between commands, so it is clicked only the first time and after focus loss, a pause or a failed
+            # entry: the pointer stays free in between.
             self.draft_composer = composer_click(placeholder, self.channel)
-            self._click(self.draft_composer, cancelled)
+            if not getattr(self, 'box_focused', False):
+                self._click(self.draft_composer, cancelled)
+                self.box_focused = True
             self._text(command, cancelled)
             # The picker is rendered asynchronously. No submit until an exact VF command row is seen.
             target = None
@@ -176,6 +194,7 @@ class WindowsDiscordDriver:
                     note = 'the typed draft was cleared'
                 except TransportError:
                     note = 'clear the typed draft from the message box before starting again'
+                self.box_focused = False
                 raise NotDispatched(f'VF slash-command picker could not be verified; command not submitted ({note}).')
             # Keyboard selection followed by submission, as Discord's slash-command flow requires. Never click the
             # picker command. The final Enter's key-down is the point of sending: before it, nothing was sent.
@@ -185,8 +204,10 @@ class WindowsDiscordDriver:
         except NotDispatched:
             raise
         except FocusLost as error:
+            self.box_focused = False
             raise Interrupted(interrupted) from error
         except TransportError as error:
+            self.box_focused = False
             raise NotDispatched(f'{error} {command} was not sent.') from error
         self.draft_composer = None
 
@@ -195,6 +216,7 @@ class WindowsDiscordDriver:
         and check the box is empty again. Returns (composer, boxes, placeholder boxes); composer is None if it did
         not clear."""
         self._click(self.draft_composer, cancelled)
+        self.box_focused = True
         self._clear(cancelled)
         frame = self._frame(cancelled)
         boxes = frame.get('boxes', [])

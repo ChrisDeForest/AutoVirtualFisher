@@ -216,6 +216,10 @@ class DiscordTransport:
         self.title = title
         return None
 
+    def refocus(self):
+        """After a pause, the next command clicks the message box first."""
+        self.driver.refocus()
+
     def inspect_context(self):
         if self.blocked:
             return ContextStatus(False, self.context_id, self.blocked)

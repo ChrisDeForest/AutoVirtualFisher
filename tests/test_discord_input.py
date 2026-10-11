@@ -227,3 +227,79 @@ class FocusTests(unittest.TestCase):
         driver.dispatch('/fish', lambda: False)
         self.assertEqual(driver.events[:2], [('click', (500.0, 810.0)), ('clear', None)])
         self.assertEqual(driver.events[-1], ('key', 13))
+
+
+class ComposerClickTests(unittest.TestCase):
+    """The message box is clicked once, then again only after Discord lost focus, a pause, or a failed entry, so
+    the pointer stays free (Discord keeps the box focused between commands)."""
+    driver = NativeDispatchTests.driver
+
+    def frames(self):
+        return [{'boxes': [box('Message @Virtual Fisher', 800)]},
+                {'boxes': [box('/fish', 600), box('Virtual Fisher', 620)]}]
+
+    def clicks(self, driver):
+        return [event for event in driver.events if event[0] == 'click']
+
+    def again(self, driver):
+        from itertools import chain, repeat
+        frames = self.frames()
+        sequence = chain(frames, repeat(frames[-1]))
+        driver._frame = lambda cancelled: next(sequence)
+        driver.events.clear()
+
+    @patch('src.discord_input.time.sleep')
+    def test_later_commands_type_without_clicking(self, sleep):
+        driver = self.driver(self.frames())
+        driver.dispatch('/fish', lambda: False)
+        self.again(driver)
+        driver.dispatch('/fish', lambda: False)
+        self.assertEqual(self.clicks(driver), [])
+        self.assertEqual(driver.events[-1], ('key', 13))
+
+    @patch('src.discord_input.time.sleep')
+    def test_focus_loss_seen_between_commands_clicks_again(self, sleep):
+        driver = self.driver(self.frames())
+        driver.dispatch('/fish', lambda: False)
+        driver.api = type('Api', (), {'GetForegroundWindow': lambda self: 1})()
+        driver.window = 2
+        self.assertFalse(driver.is_foreground())
+        self.again(driver)
+        driver.dispatch('/fish', lambda: False)
+        self.assertEqual(self.clicks(driver), [('click', (500.0, 810.0))])
+
+    @patch('src.discord_input.time.sleep')
+    def test_resume_after_pause_clicks_again(self, sleep):
+        driver = self.driver(self.frames())
+        driver.dispatch('/fish', lambda: False)
+        driver.refocus()
+        self.again(driver)
+        driver.dispatch('/fish', lambda: False)
+        self.assertEqual(self.clicks(driver), [('click', (500.0, 810.0))])
+
+    @patch('src.discord_input.time.sleep')
+    def test_unverified_picker_clicks_on_the_next_attempt(self, sleep):
+        driver = self.driver(self.frames())
+        driver.dispatch('/fish', lambda: False)
+        sequence = iter([{'boxes': [box('Message @Virtual Fisher', 800)]}] + [{'boxes': []}] * 5)
+        driver._frame = lambda cancelled: next(sequence)
+        with self.assertRaises(NotDispatched):
+            driver.dispatch('/fish', lambda: False)
+        self.again(driver)
+        driver.dispatch('/fish', lambda: False)
+        self.assertEqual(self.clicks(driver), [('click', (500.0, 810.0))])
+
+    def test_button_click_puts_the_pointer_back(self):
+        driver = WindowsDiscordDriver.__new__(WindowsDiscordDriver)
+        moves = []
+        class Api:
+            def GetCursorPos(self, point):
+                point._obj.x, point._obj.y = 1700, 300
+                return True
+            def SetCursorPos(self, x, y):
+                moves.append((x, y))
+                return True
+        driver.api = Api()
+        driver._click = lambda point, cancelled: moves.append(('click', point))
+        driver.click((50, 60), lambda: False)
+        self.assertEqual(moves, [('click', (50, 60)), (1700, 300)])

@@ -276,6 +276,15 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(self.saved_trips(), 4)
         self.assertFalse(self.controller.status()['paused'])
 
+    def test_resume_asks_the_transport_to_click_the_message_box_again(self):
+        self.make().start()
+        self.run_for(5)
+        refocused = []
+        self.sim.refocus = lambda: refocused.append(True)
+        self.controller.pause()
+        self.controller.resume()
+        self.assertEqual(refocused, [True])
+
     # --- live stats and periodic resync ---
 
     def test_profile_and_buffs_are_resynced_every_n_trips(self):

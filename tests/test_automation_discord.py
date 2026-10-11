@@ -268,6 +268,11 @@ class DiscordTests(unittest.TestCase):
         self.intent = ActionIntent('a1', 'fish', self.transport.context_id,
                                    self.now.isoformat(), 'fishing')
 
+    def test_refocus_passes_to_the_driver(self):
+        self.driver.refocus = lambda: self.driver.sent.append('refocus')
+        self.transport.refocus()
+        self.assertEqual(self.driver.sent, ['refocus'])
+
     def test_disabled_by_default(self):
         with self.assertRaises(CapabilityError):
             self.transport.send(self.intent)
