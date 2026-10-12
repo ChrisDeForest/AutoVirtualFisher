@@ -631,6 +631,16 @@ class ControllerTests(unittest.TestCase):
         self.assertIn('3 commands in a row', status['reason'])
         self.assertEqual(len(self.fish_sends()), 3)
 
+    def test_profile_is_read_again_after_three_uncounted_trips(self):
+        # Live: 10 of 34 trips had no confirmed reply; their XP was never counted and the level shown fell a level
+        # behind until the next /profile, 100 trips later.
+        self.sim.script = {3: 'missing', 5: 'missing', 7: 'missing'}
+        self.make(config=replace(CONFIG, max_trips=8)).start()
+        self.run_for(200)
+        kinds = [intent.kind for _, intent in self.sim.sent]
+        self.assertEqual(kinds[:9], ['refresh_profile', 'refresh_buffs'] + ['fish'] * 6 + ['refresh_profile'])
+        self.assertEqual(self.controller.status()['dashboard']['uncounted_since_sync'], 0)
+
     def test_noted_outcome_is_not_carried_into_the_next_run(self):
         self.sim.script = {2: 'missing'}
         self.make(config=replace(CONFIG, max_trips=1)).start()

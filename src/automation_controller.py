@@ -52,6 +52,9 @@ STARTUP_ATTEMPTS = 3
 STARTUP_RETRY_DELAY = 2.0
 # Unknown outcomes in a row (no reply, unreadable, failed hand-over) before a run gives up.
 UNKNOWN_LIMIT = 3
+# Trips with an unknown outcome since /profile was read before it is read again: such a trip most likely happened,
+# but its XP and money are not counted, so the level and balance drift until the next read.
+UNCOUNTED_RESYNC = 3
 CAPTCHA_REASON = ('Virtual Fisher asked for a captcha. Type /captcha with the code from the image in Discord '
                   '(exact case). Fishing carries on by itself once Virtual Fisher replies to anything again; '
                   'Resume also works.')
@@ -240,6 +243,7 @@ class AutomationController:
         self.synced = {'profile': '', 'buffs': '', 'charms': ''}
         self.synced_at = {}
         self.sync_tallies, self.run_tallies = [], []
+        self.uncounted = 0             # trips since /profile was read whose outcome is unknown (not counted)
         self.charm_tallies = []        # trips since /charms was read: their charms add to its counts
         self.retry_counts = {}         # deferred refresh -> trips since it was last tried
         self.earlier_profile = None    # the projected profile when /profile was last read, for what a read misses
@@ -724,7 +728,7 @@ class AutomationController:
             self.synced[observation.kind] = observation.text
             self.synced_at[observation.kind] = observation.observed_at
             if observation.kind == 'profile':
-                self.sync_tallies = []
+                self.sync_tallies, self.uncounted = [], 0
             if observation.kind == 'charms':
                 self.charm_tallies = []
             self._request_plan()
@@ -919,6 +923,11 @@ class AutomationController:
             self.failed = stopped
             self.phase, self.reason = 'FAILED', stopped
             return
+        if intent.kind == 'fish':
+            self.uncounted += 1
+            if (self.uncounted >= UNCOUNTED_RESYNC and 'refresh_profile' in self.config.capabilities
+                    and 'refresh_profile' not in self.state.refresh_due):
+                self.state = replace(self.state, refresh_due=self.state.refresh_due + ('refresh_profile',))
         self.ready_at = max(self.ready_at, self.monotonic() + (self.state.cooldown_seconds or 0)
                             + self.config.cooldown_margin + self.jitter)
 
@@ -1028,7 +1037,7 @@ class AutomationController:
                    'events': list(tally['trip_details'][0]['events']) if tally.get('trip_details') else []}
                   for tally in reversed(self.run_tallies[-8:])]
         stats.update(run=run, per_hour=per_hour, synced_at=dict(self.synced_at), recent=recent,
-                     trips_since_sync=len(self.sync_tallies),
+                     trips_since_sync=len(self.sync_tallies), uncounted_since_sync=self.uncounted,
                      next_sync_in=(max(0, self.config.resync_trips - len(self.sync_tallies))
                                    if self.config.resync_trips else None),
                      next_level_in_seconds=(to_next * 3600 / per_hour['xp']
