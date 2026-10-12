@@ -631,6 +631,32 @@ class NativeCaptureTests(unittest.TestCase):
             self.assertFalse(target.exists())
 
 
+class LightCaptureTests(unittest.TestCase):
+    def test_a_light_read_skips_the_chat_rereads_controls_and_buttons(self):
+        # Typing a command checks only the window's text and the message box: the rest cost most of a read.
+        from unittest.mock import patch
+        from src.live_capture import make_capture
+        boxes = [dict(text='epicmouse used', left=300, top=100, right=420, bottom=118),
+                 dict(text='% fish', left=300, top=120, right=360, bottom=138),
+                 dict(text='Virtual Fisher 11:16 PM', left=300, top=140, right=480, bottom=158)]
+        used = []
+        with patch('src.window_capture.capture_supported', return_value=True), \
+                patch('src.screenshot_ocr.ocr_available', return_value=True), \
+                patch('src.window_capture.capture_window', return_value={'minimized': False, 'blank': False,
+                                                                         'width': 1000, 'height': 900}), \
+                patch('src.screenshot_ocr.read_image_boxes', return_value=boxes), \
+                patch('src.screenshot_ocr.read_region_boxes', side_effect=lambda *a: used.append('region') or []), \
+                patch('src.live_capture.repair_counts', side_effect=lambda column, *a: used.append('rereads') or column), \
+                patch('src.reply_ocr.repair_reply_regions', side_effect=lambda column, *a: used.append('controls') or []), \
+                patch('src.ocr_image.button_rows', side_effect=lambda *a: used.append('buttons') or []),                 patch('src.live_capture.chat_column', return_value=(boxes, 300, 18)):
+            capture = make_capture(window_provider=lambda: (7, 'Discord'), input_region=True)
+            self.assertEqual(capture(light=True)['status'], 'ok')
+            self.assertEqual(used, ['region'])                  # the message box region only
+            used.clear()
+            capture()
+            self.assertEqual(sorted(used), ['buttons', 'controls', 'region', 'region', 'rereads'])
+
+
 class KeptCaptureTests(unittest.TestCase):
     def test_only_the_newest_kept_captures_remain(self):
         from src.live_capture import prune_kept

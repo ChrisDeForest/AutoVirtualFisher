@@ -122,14 +122,18 @@ class WindowsDiscordDriver:
             self._event(1, (0, ord(character), 4), cancelled)
             self._event(1, (0, ord(character), 6), lambda: False, release=True)
 
-    def _frame(self, cancelled):
+    def _frame(self, cancelled, frame=None):
+        """A light read of the window (or `frame`, a read the transport just took), checked: same window, channel
+        and title, and no new verification prompt."""
         self._guard(cancelled)
-        frame = self.capture()
+        if frame is None:
+            frame = self.capture(light=True)
         context = frame.get('context') or {}
         if frame['status'] != 'ok' or context.get('window') != self.window \
                 or not channel_matches(context, self.channel):
             raise TransportError('Target changed or capture unavailable during command entry.')
-        challenges = len(CHALLENGE.findall('\n'.join(frame.get('lines', []))))
+        # Counted on the window's raw text, which full and light reads both have.
+        challenges = len(CHALLENGE.findall('\n'.join(box['text'] for box in frame.get('original_boxes', ()))))
         if self.challenges is not None and challenges > self.challenges:
             raise TransportError('Verification prompt appeared during entry; command not submitted.')
         if self.challenges is None:
@@ -150,15 +154,16 @@ class WindowsDiscordDriver:
             self._event(1, (0x11, 0, 2), lambda: False, release=True)
         self._key(0x08, cancelled)                                   # Backspace
 
-    def dispatch(self, command, cancelled):
+    def dispatch(self, command, cancelled, before=None):
         """Type a slash command and send it. Every step first checks that Discord is still the active window.
         Until the final Enter nothing has reached the game: losing focus before it raises Interrupted, and the
-        next attempt clears what was left in the message box, at the spot it was typed, before retyping."""
+        next attempt clears what was left in the message box, at the spot it was typed, before retyping.
+        `before`: the transport's read from just now, used as the first frame instead of reading the window again."""
         self.challenges = None  # captcha text already on screen; only one appearing during entry stops it
         interrupted = (f'Typing {command} was interrupted when Discord stopped being the active window; it is '
                        'cleared and retyped once Discord is back.')
         try:
-            frame = self._frame(cancelled)
+            frame = self._frame(cancelled) if before is None else self._frame(cancelled, before)
             initial_boxes = frame.get('boxes', [])
             placeholder = frame.get('original_boxes', initial_boxes)
             composer = composer_target(placeholder, self.channel)

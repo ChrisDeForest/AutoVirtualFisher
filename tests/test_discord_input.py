@@ -92,6 +92,39 @@ class NativeDispatchTests(unittest.TestCase):
         self.assertEqual(driver.events[-1], ('key', 13))
 
     @patch('src.discord_input.time.sleep')
+    def test_typing_starts_from_the_transports_read_and_reads_light_after(self, sleep):
+        # The transport's read from just now is the first frame; the reads while typing are light ones.
+        driver = WindowsDiscordDriver.__new__(WindowsDiscordDriver)
+        driver.window, driver.channel, driver.title = 7, 'Virtual Fisher', None
+        context = {'window': 7, 'title': 'Discord', 'channel': 'Virtual Fisher'}
+        frames = [{'status': 'ok', 'context': context, 'boxes': [box('/fish', 600), box('Virtual Fisher', 620)]},
+                  {'status': 'ok', 'context': context, 'boxes': [], 'original_boxes': [box('Message @Virtual Fisher', 800)]}]
+        calls = []
+        driver.capture = lambda **kwargs: calls.append(kwargs) or frames[min(len(calls), len(frames)) - 1]
+        driver._guard = lambda cancelled: None
+        driver.is_foreground = lambda: True
+        driver.box_focused = True
+        events = []
+        driver._text = lambda text, cancelled: events.append(('text', text))
+        driver._key = lambda key, cancelled: events.append(('key', key))
+        before = {'status': 'ok', 'context': context, 'lines': [], 'boxes': [],
+                  'original_boxes': [box('Message @Virtual Fisher', 800)]}
+        driver.dispatch('/fish', lambda: False, before=before)
+        self.assertEqual(events, [('text', '/fish'), ('key', 13), ('key', 13)])
+        self.assertEqual(calls, [{'light': True}, {'light': True}])     # picker check, then the box emptied
+
+    def test_a_new_verification_prompt_is_seen_in_light_reads(self):
+        # Light reads have no chat lines: the prompt is counted on the window's raw text.
+        driver = WindowsDiscordDriver.__new__(WindowsDiscordDriver)
+        driver.window, driver.channel, driver.title, driver.challenges = 7, 'Virtual Fisher', None, None
+        driver._guard = lambda cancelled: None
+        context = {'window': 7, 'title': 'Discord', 'channel': 'Virtual Fisher'}
+        driver._frame(lambda: False, {'status': 'ok', 'context': context, 'original_boxes': [box('hello', 100)]})
+        prompt = {'status': 'ok', 'context': context, 'original_boxes': [box('hello', 100), box('Please complete this captcha', 300)]}
+        with self.assertRaises(TransportError):
+            driver._frame(lambda: False, prompt)
+
+    @patch('src.discord_input.time.sleep')
     def test_submission_requires_verified_picker(self, sleep):
         driver = self.driver([
             {'boxes': [box('Message @Virtual Fisher', 800)]},

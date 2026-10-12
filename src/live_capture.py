@@ -387,10 +387,12 @@ def context_key(context: dict) -> str:
 def make_capture(keep_dir: Path | None = None, keep_limit: int = KEEP_LIMIT, window_provider=None, input_region=False):
     """Return a capture function for LiveCapture. Each call captures and reads the Discord window and returns
     {'status', 'lines', 'context'}; the image is deleted at once unless `keep_dir` is set, in which case captures whose
-    chat text changed are kept there as PNG plus JSON (OCR boxes and final lines) for analysis."""
+    chat text changed are kept there as PNG plus JSON (OCR boxes and final lines) for analysis.
+    `light=True` (typing a command) reads only what command entry checks: the window's text and the message box
+    region, without the chat rereads, the reply controls or the buttons; never kept."""
     last_kept = {'lines': None}
 
-    def capture() -> dict:
+    def capture(light=False) -> dict:
         from .screenshot_ocr import ocr_available, read_image_boxes, read_region_lines, read_region_boxes
         from .window_capture import bmp_to_png, capture_supported, capture_window, find_discord_window
 
@@ -416,20 +418,20 @@ def make_capture(keep_dir: Path | None = None, keep_limit: int = KEEP_LIMIT, win
                 reads = [read_region_lines(image, left, top, right, bottom, scale) for scale in REREAD_SCALES]
                 return reads[0] if all(read == reads[0] for read in reads) else []
 
-            if column:
+            if column and not light:
                 column = repair_counts(column, edge, height, reread)
             lines = [box['text'] for box in column]
-            if input_region and column:
+            if input_region and column and not light:
                 from .reply_ocr import repair_reply_regions
                 controls = read_region_boxes(image, (0, info['height'] * .5, info['width'], info['height']), 3)
                 lines = repair_reply_regions(join_boost_caption(column), image, info['height'], controls)
-            if keep_dir is not None and lines != last_kept['lines']:
+            if keep_dir is not None and not light and lines != last_kept['lines']:
                 _keep(image, Path(keep_dir), info, boxes, lines, bmp_to_png, keep_limit)
                 last_kept['lines'] = lines
             try:
                 from .ocr_image import button_rows
                 # Arrow buttons have no text; found by colour before the image is deleted.
-                buttons = button_rows(image, boxes)
+                buttons = [] if light else button_rows(image, boxes)
             except (OSError, ValueError):
                 buttons = []
             return {'status': 'ok', 'lines': lines, 'boxes': input_boxes, 'original_boxes': boxes,

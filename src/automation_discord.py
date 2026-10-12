@@ -65,6 +65,9 @@ COMMANDS = {'refresh_profile': '/profile', 'refresh_buffs': '/buffs', 'refresh_c
 FISHING_REREADS = 2
 # Seconds after sending /profile or /buffs before an identical reply sent that minute is taken as the answer.
 REFRESH_GRACE = 3.0
+# Seconds a read stays fresh: the context check's read serves the reply check and a send in the same step, each
+# read used once (a reply must be seen the same in two separate reads). A read takes 0.5-2 s live.
+FRESH_READ = 0.75
 SENT = re.compile(r'(\d{1,2}):(\d{2})\s*([AP])M', re.I)
 
 
@@ -186,6 +189,14 @@ class DiscordTransport:
         self.title = None
         self.captcha_bottom = None     # the newest message when a captcha was delivered
         self.lock = threading.Lock()
+        self.fresh = None              # (monotonic time, read) of the context check, for one later use
+
+    def _read(self):
+        """The context check's read when it is fresh (used once), else a new read."""
+        fresh, self.fresh = self.fresh, None
+        if fresh is not None and self.monotonic() - fresh[0] <= FRESH_READ:
+            return fresh[1]
+        return self.driver.capture()
 
     def enable(self):
         self.cancelled.clear()
@@ -224,7 +235,9 @@ class DiscordTransport:
         if self.blocked:
             return ContextStatus(False, self.context_id, self.blocked)
         try:
-            problem = self._check(self.driver.capture())
+            capture = self.driver.capture()
+            self.fresh = (self.monotonic(), capture)
+            problem = self._check(capture)
         except Exception as error:
             problem = f'Capture failed: {error}'
         return ContextStatus(not problem, self.context_id, problem or self.last_issue or '')
@@ -241,7 +254,7 @@ class DiscordTransport:
                 raise TransportError('Intent targets a different context.')
             # Checks before input only read the screen: a refusal here certainly sent nothing.
             try:
-                before = self.driver.capture()
+                before = self._read()
             except Exception as error:
                 raise NotDispatched(f'Capture failed before input: {error}') from error
             self.last_lines = list(before.get('lines', []))
@@ -265,7 +278,7 @@ class DiscordTransport:
                 if point is not None:
                     self.driver.click(point, self.cancelled.is_set)
                     return DispatchReceipt(intent.action_id, self.utc().isoformat(), 'Next-page button clicked')
-                self.driver.dispatch(COMMANDS[intent.kind], self.cancelled.is_set)
+                self.driver.dispatch(COMMANDS[intent.kind], self.cancelled.is_set, before=before)
                 return DispatchReceipt(intent.action_id, self.utc().isoformat(), 'Native UI command submitted')
             except NotDispatched:
                 # Nothing was sent (the driver says so: interrupted, or refused before the final Enter).
@@ -338,7 +351,7 @@ class DiscordTransport:
             return []
         with self.lock:
             try:
-                capture = self.driver.capture()
+                capture = self._read()
                 problem = self._check(capture)
                 if problem:
                     # Reported by inspect_context while it lasts; nothing is blocked for later.

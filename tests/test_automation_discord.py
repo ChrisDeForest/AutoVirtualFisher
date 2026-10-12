@@ -114,7 +114,7 @@ class Driver:
     def is_foreground(self):
         return self.foreground
 
-    def dispatch(self, command, cancelled):
+    def dispatch(self, command, cancelled, before=None):
         if cancelled():
             raise TransportError('Stopped')
         self.sent.append(command)
@@ -444,6 +444,47 @@ class DiscordTests(unittest.TestCase):
         self.assertTrue(self.transport.inspect_context().ok)
 
 
+class FreshReadTests(unittest.TestCase):
+    """Live: each step read the window twice (context check, then reply check) and a send read it again before
+    typing; at 0.5-2 s a read, trips came every 10-12 s against a 2.7-3.5 s cooldown."""
+
+    def setUp(self):
+        self.driver, self.clock, self.reads = Driver(), [0.0], []
+        capture = self.driver.capture
+        self.driver.capture = lambda: self.reads.append(self.clock[0]) or capture()
+        self.driver.dispatch = lambda command, cancelled, before=None: self.driver.sent.append((command, before))
+        now = datetime(2026, 10, 6, 12, tzinfo=timezone.utc)
+        self.transport = DiscordTransport(self.driver, 42, 'Virtual Fisher', 'epicmouse', 'epicmouse9925',
+                                          utc=lambda: now, monotonic=lambda: self.clock[0])
+        self.transport.enable()
+        self.intent = ActionIntent('a1', 'fish', self.transport.context_id, now.isoformat(), 'fishing')
+
+    def test_the_send_uses_the_context_checks_read(self):
+        self.assertTrue(self.transport.inspect_context().ok)
+        self.transport.send(self.intent)
+        self.assertEqual(len(self.reads), 1)
+        command, before = self.driver.sent[0]
+        self.assertEqual(command, '/fish')
+        self.assertEqual(before['lines'], self.driver.lines)   # typing starts from that read, not a new one
+
+    def test_each_read_serves_one_reply_check(self):
+        self.transport.send(self.intent)
+        self.driver.lines = self.driver.lines + fish(2, 2, 20)
+        self.reads.clear()
+        self.transport.inspect_context()
+        self.assertEqual(self.transport.poll(), [])          # first sight of the reply
+        self.assertEqual(len(self.reads), 1)
+        # The second check reads again: the reply is confirmed by two separate reads, never one read twice.
+        self.assertEqual(len(self.transport.poll()), 1)
+        self.assertEqual(len(self.reads), 2)
+
+    def test_a_stale_read_is_not_used(self):
+        self.transport.inspect_context()
+        self.clock[0] += 1.0
+        self.transport.send(self.intent)
+        self.assertEqual(len(self.reads), 2)
+
+
 class TargetTests(unittest.TestCase):
     def test_tall_fish_picker_keeps_exact_owner_check(self):
         boxes = [box('[fish', x=458, y=888), box('Virtual Fisher', x=2130, y=900)]
@@ -507,7 +548,7 @@ class ControllerIntegrationTests(unittest.TestCase):
         from tests.test_automation_controller import Clock
         from tests.test_live_stats import CHARMS
         driver, clock = Driver(), Clock()
-        def dispatch(command, cancelled):
+        def dispatch(command, cancelled, before=None):
             driver.sent.append(command)
             charms = ['epicmouse used', '% charms', 'Virtual Fisher 11:41 AM', *CHARMS.split('\n')]
             driver.lines += {'/profile': PROFILE, '/buffs': BUFFS, '/charms': charms,
