@@ -74,8 +74,6 @@ def from_run(account_state, synced, charms_text, since=None):
     if profile.get('balance') is None:
         return 'the balance has not been read from /profile yet'
     rods = set(_values(account_state, 'rod').get('owned') or [])
-    rods |= {name for name, item in (_values(account_state, 'shop_rods').get('items') or {}).items()
-             if item.get('owned')}
     rods.add(setup.rod)
     exotic_read = ((synced or {}).get('inventory') or {}).get('exotic_fish') or {}
     league = _values(account_state, 'shop_league')

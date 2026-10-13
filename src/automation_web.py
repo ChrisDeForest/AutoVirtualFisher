@@ -14,7 +14,7 @@ PHASES = {'BOOTSTRAPPING': 'Starting', 'WAITING_REPLY': 'Waiting for Virtual Fis
           'SENDING': 'Sending', 'NEEDS_REVIEW': 'Needs you', 'FAILED': 'Stopped by a problem', 'STOPPED': 'Stopped'}
 # What the run is reading while an account read (or its page 2) waits for its reply.
 ACCOUNT_READ_LABELS = {
-    'refresh_upgrades': 'Reading the upgrade shop', 'refresh_shop_rods': 'Reading the rod shop',
+    'refresh_upgrades': 'Reading the upgrade shop',
     'refresh_rod': 'Reading your rods', 'refresh_bait': 'Reading your bait', 'refresh_biome': 'Reading your biome',
     'refresh_boats': 'Reading the boat shop', 'refresh_pets': 'Reading your pets',
     'refresh_prestige_shop': 'Reading the prestige shop', 'refresh_league': 'Reading the league shop',
@@ -371,16 +371,10 @@ def _account_rows(sections):
     rows = []
     values, unread = section('shop_upgrades')
     rows.append(('Upgrades', _levels(values['items']) if values else None, unread))
-    values, unread = section('shop_rods')
+    values, unread = section('rod')
     if values:
-        # /rod lists the rods owned; the shop only shows which one is in use (other owned rows may not read)
-        in_use = ((sections.get('rod') or {}).get('values') or {}).get('current') \
-            or next((name for name, item in values['items'].items() if item['selected']), None)
-        names = ((sections.get('rod') or {}).get('values') or {}).get('owned') \
-            or [name for name, item in values['items'].items() if item['owned']]
-        owned = [name + (' (in use)' if name == in_use else '') for name in names]
-        priced = [(item['price'], name) for name, item in values['items'].items() if item['price']]
-        text = ', '.join(owned) + (f'; next {min(priced)[1]}, ${min(priced)[0]:,}' if priced else '')
+        owned = [name + (' (in use)' if name == values.get('current') else '') for name in values.get('owned') or []]
+        text = ', '.join(owned) or 'none'
     rows.append(('Rods', text if values else None, unread))
     values, unread = section('shop_boats')
     if values:

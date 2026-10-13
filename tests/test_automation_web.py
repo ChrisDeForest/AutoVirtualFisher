@@ -419,8 +419,8 @@ class AutomationWebTests(unittest.TestCase):
                           'pending_kind': kind}
                 self.assertTrue(state_label(status).startswith('Reading '), (kind, state_label(status)))
         status = {'running': True, 'phase': 'WAITING_REPLY', 'trips': 0, 'paused': False,
-                  'pending_kind': 'refresh_shop_rods_page2'}
-        self.assertEqual(state_label(status), 'Reading the rod shop')
+                  'pending_kind': 'refresh_upgrades_page2'}
+        self.assertEqual(state_label(status), 'Reading the upgrade shop')
         self.assertEqual(state_label(dict(status, pending_kind='fish')), 'Fishing')
 
     def test_account_box_lists_what_replies_showed(self):
@@ -429,7 +429,7 @@ class AutomationWebTests(unittest.TestCase):
         from src.account_state import apply_read, empty_state
         account = empty_state()
         for kind, text in (('shop_upgrades', sample.UPGRADES_PAGE_1), ('shop_upgrades', sample.UPGRADES_PAGE_2),
-                           ('shop_rods', sample.RODS_PAGE_1), ('shop_boats', sample.BOATS), ('pet', sample.PETS),
+                           ('rod', sample.ROD), ('shop_boats', sample.BOATS), ('pet', sample.PETS),
                            ('shop_league', sample.LEAGUE_PAGE_1), ('bait', sample.BAIT), ('biome', sample.BIOME)):
             account = apply_read(account, kind, PARSERS[kind](text), '2026-10-10T00:00:00+00:00')
         status = {'running': False, 'reason': 'done', 'phase': 'STOPPED', 'trips': 0, 'config': {'max_trips': 0},

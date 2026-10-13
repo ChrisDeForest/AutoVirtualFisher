@@ -17,7 +17,6 @@ class Read:
 
 ACCOUNT_READS = {
     'refresh_upgrades': Read('/shop upgrades', 'shop_upgrades', 2),
-    'refresh_shop_rods': Read('/shop rods', 'shop_rods', 2),
     'refresh_rod': Read('/rod', 'rod'),
     'refresh_bait': Read('/bait', 'bait'),
     'refresh_biome': Read('/biome', 'biome'),

@@ -79,28 +79,11 @@ class ShopTests(unittest.TestCase):
         second = PARSERS['shop_league'](sample.LEAGUE_PAGE_2)
         self.assertEqual(second['values']['items']['Duplicator 2.0'], {'level': 0, 'max': 10, 'price': 25})
 
-    def test_rod_shop_owned_selected_and_prices(self):
-        first = PARSERS['shop_rods'](sample.RODS_PAGE_1)['values']
-        self.assertEqual(first['items']['Fiberglass Rod'], {'owned': True, 'selected': True, 'price': None})
-        self.assertEqual(first['items']['Improved Rod'], {'owned': False, 'selected': False, 'price': 500})
-        second = PARSERS['shop_rods'](sample.RODS_PAGE_2)['values']
-        self.assertEqual(second['items']['Magma Rod']['price'], 10000000)
-        self.assertEqual(second['more_at_level'], 100)
-
-    def test_rod_without_price_or_select_is_not_known_to_be_owned(self):
-        # Live: OCR cleanup drops lines that are only a button word, so the owned rods' Select never arrives; and a
-        # rod the player cannot afford has its price on a dimmed button OCR misses (Lava and Magma Rod were read as
-        # owned). Neither row says which it is: /rod lists the rods owned.
-        text = '\n'.join(line for line in sample.RODS_PAGE_1.splitlines() if line != 'Select')
-        items = PARSERS['shop_rods'](text)['values']['items']
-        for name in ('Supporter Rod', 'Plastic Rod', 'Steel Rod'):
-            self.assertEqual(items[name], {'owned': None, 'selected': False, 'price': None})
-        self.assertEqual(items['Improved Rod'], {'owned': False, 'selected': False, 'price': 500})
-        self.assertEqual(items['Fiberglass Rod'], {'owned': True, 'selected': True, 'price': None})   # Selected
-        dimmed = '\n'.join(line for line in sample.RODS_PAGE_2.splitlines() if line not in ('$1,000,000', '$10,000,000'))
-        items = PARSERS['shop_rods'](dimmed)['values']['items']
-        self.assertIsNone(items['Lava Rod']['owned'])
-        self.assertIsNone(items['Magma Rod']['owned'])
+    def test_the_rod_shop_is_not_read(self):
+        # /rod lists every owned rod; prices and unlock levels come from game_model.json.
+        from src.account_reads import ACCOUNT_READS
+        self.assertNotIn('refresh_shop_rods', ACCOUNT_READS)
+        self.assertNotIn('shop_rods', PARSERS)
 
     def test_boat_shop(self):
         parsed = PARSERS['shop_boats'](sample.BOATS)
@@ -196,7 +179,7 @@ class KindTests(unittest.TestCase):
     def test_each_reply_is_recognised_by_its_first_line(self):
         from src.paste_detect import _kind
         from src.player_state import _clean
-        expected = {'shop_upgrades': sample.UPGRADES_PAGE_1, 'shop_rods': sample.RODS_PAGE_1, 'rod': sample.ROD,
+        expected = {'shop_upgrades': sample.UPGRADES_PAGE_1, 'rod': sample.ROD,
                     'bait': sample.BAIT, 'biome': sample.BIOME, 'shop_boats': sample.BOATS, 'pet': sample.PETS,
                     'prestige_shop': sample.PRESTIGE_SHOP, 'shop_league': sample.LEAGUE_PAGE_1,
                     'boosts': sample.BOOSTS}

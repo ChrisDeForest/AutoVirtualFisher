@@ -37,7 +37,6 @@ SIM_CHARMS = ('Charms are found in high tier crates. Try to get them all!\n'
               '11/840 - Charms found.')
 # Account replies, both pages, as seen on 2026-10-09.
 SIM_ACCOUNT = {'refresh_upgrades': samples.UPGRADES_PAGE_1, 'refresh_upgrades_page2': samples.UPGRADES_PAGE_2,
-               'refresh_shop_rods': samples.RODS_PAGE_1, 'refresh_shop_rods_page2': samples.RODS_PAGE_2,
                'refresh_rod': samples.ROD, 'refresh_bait': samples.BAIT, 'refresh_biome': samples.BIOME,
                'refresh_boats': samples.BOATS, 'refresh_pets': samples.PETS,
                'refresh_prestige_shop': samples.PRESTIGE_SHOP, 'refresh_league': samples.LEAGUE_PAGE_1,

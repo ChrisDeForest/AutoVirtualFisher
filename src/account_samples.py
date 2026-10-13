@@ -22,24 +22,6 @@ UPGRADES_PAGE_2 = '\n'.join((
     'Better Dailies (2/10)', '$25,000', 'Increases items in daily rewards by 10%.',
     'Page 2/2',
 ))
-RODS_PAGE_1 = '\n'.join((
-    'Fishing Rod Shop', 'Your balance: $266,418',
-    'Supporter Rod', 'Select', 'Rod given as thanks for supporting Virtual Fisher.',
-    'Plastic Rod', 'Select', 'Basic starter rod.',
-    'Improved Rod', '$500', 'Attracts slightly better fish.',
-    'Steel Rod', 'Select', 'Allows you to catch better fish, but slightly less of them.',
-    'Fiberglass Rod', 'Selected', 'Catches large amounts of quality fish.',
-    'Page 1/2',
-))
-RODS_PAGE_2 = '\n'.join((
-    'Fishing Rod Shop', 'Your balance: $266,418',
-    'Heavy Rod', '$100,000', "Doesn't catch as many fish, but gets you far more treasure.",
-    'Alloy Rod', '$250,000', 'Catch rare fish at an inconsistent rate.',
-    'Lava Rod', '$1,000,000', 'Catches many rare fish consistently.',
-    'Magma Rod', '$10,000,000', 'Empowered lava rod to attract even more fish.',
-    'More rods unlocked at level 100',
-    'Page 2/2',
-))
 ROD = '\n'.join(('/rod <rod name>', 'Currently using: Fiberglass Rod', 'Supporter Rod', 'Plastic Rod', 'Steel Rod',
                  'Fiberglass Rod'))
 BAIT = '\n'.join(('/bait <bait type> to use bait.', '/bait none is valid.', 'Current bait: NONE'))

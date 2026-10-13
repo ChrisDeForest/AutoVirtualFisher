@@ -141,40 +141,6 @@ def parse_shop_special(text):
     return parsed
 
 
-def parse_shop_rods(text):
-    lines = _lines(text)
-    items, order = {}, []
-    for line in lines:
-        rod = re.match(r'^\W*([A-Z][a-z]+) Rod$', line)
-        if rod and line != 'Fishing Rod Shop':
-            name = f'{rod[1]} Rod'
-            items[name] = {'owned': False, 'selected': False, 'price': None}
-            order.append(('item', name))
-        elif line.casefold() in ('select', 'selected'):
-            order.append(('price', line.casefold()))
-        elif MONEY.match(line) and not re.search(r'balance', line, re.I):
-            order.append(('price', _number(MONEY.match(line)[1])))
-        else:
-            order.append(('other', line))
-
-    def set_status(item, value):
-        item['_priced'] = True
-        if value in ('select', 'selected'):
-            item['owned'], item['selected'] = True, value == 'selected'
-        else:
-            item['price'] = value
-    _attach(items, order, set_status)
-    for item in items.values():
-        # Every rod shows a price, Select or Selected. A rod with neither read is not known to be owned: OCR cleanup
-        # drops a line that is only a button word (Select), and a rod the player cannot afford has its price on a
-        # dimmed button OCR misses (Lava and Magma Rod were once read as owned). /rod lists the rods owned.
-        if (not item.pop('_priced', None) or item['price'] is None) and not item['owned']:
-            item['owned'] = None
-    more =next((int(m[1]) for m in (re.search(r'More rods unlocked at level (\d+)', l, re.I) for l in lines) if m),
-                None)
-    return _result({'items': items, 'balance': _balance(lines, 'Your balance'), 'more_at_level': more}, (), lines)
-
-
 def parse_rod(text):
     lines = _lines(text)
     current = next((m[1].strip() for m in (re.match(r'Currently using:\s*(.+)$', l, re.I) for l in lines) if m), None)
@@ -283,6 +249,6 @@ def parse_boosts(text):
     return _result(values, (), lines)
 
 
-PARSERS = {'shop_upgrades': parse_shop_upgrades, 'shop_league': parse_shop_league, 'shop_special': parse_shop_special, 'shop_rods': parse_shop_rods,
+PARSERS = {'shop_upgrades': parse_shop_upgrades, 'shop_league': parse_shop_league, 'shop_special': parse_shop_special,
            'rod': parse_rod, 'bait': parse_bait, 'biome': parse_biome, 'shop_boats': parse_shop_boats,
            'pet': parse_pets, 'prestige_shop': parse_prestige_shop, 'boosts': parse_boosts}

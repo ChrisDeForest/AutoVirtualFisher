@@ -39,7 +39,6 @@ def _kind(line):
 SLASH = r"[/|Il\[']"
 ACCOUNT_MARKERS = (
     ('shop_upgrades', re.compile(r'Upgrades in this category are permanent', re.I)),
-    ('shop_rods', re.compile(r'Fishing Rod Shop$', re.I)),
     ('rod', re.compile(SLASH + r'?\s*rod\s*<rod name>', re.I)),
     ('bait', re.compile(SLASH + r'?\s*bait\s*<bait type>', re.I)),
     ('biome', re.compile(r'Current Biome:', re.I)),
