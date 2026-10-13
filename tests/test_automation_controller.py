@@ -23,7 +23,7 @@ from src.account_reads import ALL_READS  # noqa: E402
 READS_CONFIG = ('refresh_profile', 'refresh_buffs', 'refresh_charms', *ALL_READS, 'fish')
 ACCOUNT_ORDER = ['refresh_upgrades', 'refresh_upgrades_page2', 'refresh_shop_rods', 'refresh_shop_rods_page2',
                  'refresh_rod', 'refresh_bait', 'refresh_biome', 'refresh_boats', 'refresh_pets',
-                 'refresh_prestige_shop', 'refresh_league', 'refresh_league_page2', 'refresh_boosts']
+                 'refresh_prestige_shop', 'refresh_league', 'refresh_league_page2', 'refresh_special', 'refresh_boosts']
 STEP = 0.1
 
 
@@ -351,7 +351,7 @@ class ControllerTests(unittest.TestCase):
         startup = ['refresh_profile', 'refresh_buffs', 'refresh_charms'] + ACCOUNT_ORDER
         self.assertEqual(self.kinds(), startup + ['fish'] * 3 + startup + ['fish'])
         sections = load_state(path)['sections']
-        self.assertEqual(len(sections), 10)
+        self.assertEqual(len(sections), 11)
         self.assertEqual({kind: section['unread'] for kind, section in sections.items() if section['unread']}, {})
         self.assertEqual(sections['shop_upgrades']['values']['items']['Better Chests']['price'], 100000)
         self.assertEqual(self.controller.status()['account']['sections']['pet']['values']['current'], 'Dolphin')

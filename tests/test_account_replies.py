@@ -4,6 +4,20 @@ from src import account_samples as sample
 from src.account_replies import PARSERS
 
 
+class SpecialShopTests(unittest.TestCase):
+    def test_special_shop(self):
+        from src.paste_detect import _kind
+        self.assertEqual(_kind('Special Shop'), 'shop_special')
+        parsed = PARSERS['shop_special'](sample.SPECIAL)
+        self.assertEqual(parsed['values']['items'], {'Fish Ovens': {'level': 2, 'max': 20, 'price': None}})
+        self.assertEqual((parsed['values']['inventory'], parsed['values']['more_at_level']), (49, 100))
+        self.assertEqual(parsed['unread'], [])
+
+    def test_special_shop_is_an_account_read(self):
+        from src.account_reads import ACCOUNT_READS
+        self.assertEqual(ACCOUNT_READS['refresh_special'].command, '/shop special')
+
+
 class ShopTests(unittest.TestCase):
     def test_upgrades_page_1_levels_and_next_prices(self):
         parsed = PARSERS['shop_upgrades'](sample.UPGRADES_PAGE_1)

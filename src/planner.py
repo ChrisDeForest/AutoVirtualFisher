@@ -131,6 +131,11 @@ def _cached_chooser():
     return choose
 
 
+# Where each kind of step is bought in the game; a buy step goes by what it buys.
+WHERE = {'league': '/shop league', 'special': '/shop special', 'bait': '/shop bait',
+         'upgrade': '/shop upgrades', 'rod': '/shop rods', 'boat': '/shop boats'}
+
+
 def make_plan(state, ctx, plan_data, limits=(3000, 2.0), clock=time.monotonic):
     route, prices = plan_data['route'], plan_data['prices']
     labels = route['phase_labels']
@@ -152,10 +157,10 @@ def make_plan(state, ctx, plan_data, limits=(3000, 2.0), clock=time.monotonic):
         plan['assumptions'].add(band['estimate'])
     special_notes = route.get('special_estimates', [])
 
-    def add(kind, action, cost=0, currency='$', sell=0, why='', fished=0.0):
+    def add(kind, action, cost=0, currency='$', sell=0, why='', fished=0.0, where=None):
         steps.append({'phase': current, 'phase_label': labels.get(current, current), 'kind': kind,
                       'action': action, 'cost': cost, 'currency': currency, 'sell': sell, 'trips': fished,
-                      'seconds': seconds, 'why': why})
+                      'seconds': seconds, 'why': why, 'where': WHERE.get(kind, '') if where is None else where})
 
     _league(state, route, add)
     bait_step = {'bait': object()}                     # the last bait step, finished when the bait changes
@@ -244,7 +249,7 @@ def make_plan(state, ctx, plan_data, limits=(3000, 2.0), clock=time.monotonic):
         state.fish_value -= sell
         state.cash -= action.price
         label = f'{action.name} {action.level}' if action.kind == 'upgrade' else action.name
-        add('buy', label, action.price, '$', sell, reason, fished=result['trips'])
+        add('buy', label, action.price, '$', sell, reason, fished=result['trips'], where=WHERE[action.kind])
         if action.for_rod and action.for_rod in route.get('salesman_estimates', {}):
             plan['assumptions'].add(route['salesman_estimates'][action.for_rod])
         state = apply(state, action, ctx.data)

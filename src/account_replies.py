@@ -11,6 +11,8 @@ from .player_state import BAIT_NAMES, _clean, known_bait, parse_responses
 
 UPGRADES = ('Better Fish', 'Salesman', 'Bait Efficiency', 'More Chests', 'Worker Motivation', 'Artifact Specialist',
             'Experienced', 'Better Chests', 'Better Dailies')
+SPECIAL = ('Fish Ovens', 'Bait Lover', 'Aquatic Expert', 'Worker Extender', 'Ultimate Salesman',
+           'Highly Experienced', 'Boost Booster', 'Statistician', 'Duplicator', 'Charmer')
 LEAGUE = ('Pet Helper', 'Bait Helper', 'Super Crates', 'Worker Crates', 'Fishing Frenzy', 'Duplicator 2.0')
 BOATS = ('Rowboat', 'Fishing Boat', 'Speedboat', 'Pontoon', 'Sailboat', 'Yacht', 'Luxury Yacht', 'Cruise Ship',
          'Goldboat', 'Sky Cruiser', 'Satellite', 'Space Shuttle', 'Cruiser', 'Alien Raft', 'Alien Submarine')
@@ -120,6 +122,20 @@ def parse_shop_upgrades(text):
 
 def parse_shop_league(text):
     return parse_levelled(text, LEAGUE, currency='hooks')
+
+
+def parse_shop_special(text):
+    """/shop special: upgrades bought with exotic fish, "Fish Ovens (2/20)". Below the level the shop names ("More
+    upgrades unlocked at level 100.") the rest are not listed: not unlocked yet. "Inventory: 49" is the exotic fish
+    its prices are in (its icon is not read)."""
+    parsed = parse_levelled(text, SPECIAL, currency='hooks')
+    values = parsed['values']
+    values.pop('hooks', None)
+    inventory = re.search(r'Inventory:\s*([\d,]+)', text, re.I)
+    more = re.search(r'More upgrades unlocked at level\s*([\d,]+)', text, re.I)
+    values['inventory'] = _number(inventory[1]) if inventory else None
+    values['more_at_level'] = _number(more[1]) if more else None
+    return parsed
 
 
 def parse_shop_rods(text):
@@ -264,6 +280,6 @@ def parse_boosts(text):
     return _result(values, (), lines)
 
 
-PARSERS = {'shop_upgrades': parse_shop_upgrades, 'shop_league': parse_shop_league, 'shop_rods': parse_shop_rods,
+PARSERS = {'shop_upgrades': parse_shop_upgrades, 'shop_league': parse_shop_league, 'shop_special': parse_shop_special, 'shop_rods': parse_shop_rods,
            'rod': parse_rod, 'bait': parse_bait, 'biome': parse_biome, 'shop_boats': parse_shop_boats,
            'pet': parse_pets, 'prestige_shop': parse_prestige_shop, 'boosts': parse_boosts}

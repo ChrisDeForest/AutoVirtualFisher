@@ -25,6 +25,8 @@ ACCOUNT_READS = {
     'refresh_pets': Read('/pet', 'pet'),
     'refresh_prestige_shop': Read('/prestige shop', 'prestige_shop'),
     'refresh_league': Read('/shop league', 'shop_league', 2),
+    # One page below level 100; later levels may add a page 2 (not seen yet).
+    'refresh_special': Read('/shop special', 'shop_special'),
     'refresh_boosts': Read('/boosts', 'boosts'),
 }
 # Page-2 intent -> its read.

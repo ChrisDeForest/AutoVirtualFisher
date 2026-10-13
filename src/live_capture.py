@@ -330,8 +330,9 @@ def _cooldown_seconds(state: dict) -> float | None:
     return None
 
 
-# The search box: "Search Virtual Fisher#7036". OCR can misread the tag's digits ("#7O36") or space it out.
-SEARCH = re.compile(r'Search\s+(.+?)(?:\s*#\s*\w{4})?')
+# The search box: "Search Virtual Fisher#7036". OCR can misread the tag's digits ("#7O36") or space it out, and
+# read the magnifier icon at the box's right end as one more character ("Search Virtual Fisher#7036 Q").
+SEARCH = re.compile(r'Search\s+(.+?)(?:\s*#\s*\w{4})?(?:\s+\S)?')
 
 
 def channel_name(boxes: list[dict], image_height: float) -> str | None:

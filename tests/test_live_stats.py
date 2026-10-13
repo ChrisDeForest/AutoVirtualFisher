@@ -348,3 +348,20 @@ class LevelBonusTests(unittest.TestCase):
         self.assertEqual(tally['level_bonuses'], ['10% INCREASED SELLING PRICE'])
         self.assertEqual((tally['level_ups'], tally['level_up_money']), ([75], 120000))
         self.assertEqual(tally['warnings'], [])
+
+
+class PetLevelTests(unittest.TestCase):
+    def test_a_pet_level_up_is_not_a_charm(self):
+        # Live, Oct 13: "Your pet Puffer leveled up! It is now level 33!" showed in the Charms box as
+        # "pet Puffer leveled up! It".
+        text = 'You caught:\n2 Hot Cod\n+30 XP\nYour pet Puffer leveled up! It is now level 33!'
+        tally = parse_fishing(text)
+        self.assertEqual(tally['charm_levels'], {})
+        self.assertEqual(tally['pet_levels'], {'Puffer': 33})
+        self.assertEqual(tally['warnings'], [])
+        self.assertEqual(parse_fishing(text.replace('pet Puffer', 'pet \u2022O Puffer'))['pet_levels'], {'Puffer': 33})
+
+    def test_saved_trips_with_a_pet_read_as_a_charm_level_leave_it_out(self):
+        from src.live_stats import summarize_finds
+        saved = [{'charm_levels': {'pet Puffer leveled up! It': 33, 'Haste Charm': 2}}]
+        self.assertEqual(summarize_finds(saved)['charm_levels'], {'Haste Charm': 2})

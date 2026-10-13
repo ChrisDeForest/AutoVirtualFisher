@@ -3,7 +3,7 @@ from functools import cache
 from hashlib import sha256
 import re
 
-from .player_state import NUMBER, _clean, _name, _number
+from .player_state import NUMBER, _clean, _name, _number, known_pet
 
 FISHING_SCHEMA_VERSION = 1
 SKIPPED = (re.compile(r'You must wait .+ before fishing again\.?', re.I),
@@ -59,7 +59,7 @@ def _add(counts, name, amount):
 def parse_fishing(text: str) -> dict:
     tally = {'schema_version': FISHING_SCHEMA_VERSION, 'trips': 0, 'boosted_trips': 0, 'catches': {},
              'fishing_xp': 0, 'chest_xp': 0, 'chest_money': 0, 'finds': {}, 'chest_contents': {}, 'charm_levels': {}, 'level_ups': [],
-             'level_up_money': 0, 'level_bonuses': [], 'unlocks': [], 'quests_completed': [], 'bait_ran_out': [],
+             'level_up_money': 0, 'level_bonuses': [], 'pet_levels': {}, 'unlocks': [], 'quests_completed': [], 'bait_ran_out': [],
              'trip_details': [], 'warnings': [], 'unparsed_line_count': 0}
     mode = None
     trip = None
@@ -187,6 +187,10 @@ def parse_fishing(text: str) -> dict:
                 name = 'uncommon chest'
             _add(tally['finds'], name, 1)
             event(f'Found {name}')
+        elif match := re.fullmatch(r'Your pet (.+?) leveled up!\s*It is now level (\d+)!?', line, re.I):
+            name = known_pet(_name(match[1]))
+            tally['pet_levels'][name] = int(match[2])
+            event(f'Pet {name} now level {match[2]}')
         elif match := re.fullmatch(r'Your (.+?) is now level (\d+)!?', line, re.I):
             name = known_name(_name(match[1]))
             charms = [found for found in (trip or {}).get('events', []) if found.casefold().endswith('charm')]

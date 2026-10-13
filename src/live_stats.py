@@ -178,6 +178,8 @@ def summarize_finds(tallies, earlier: dict | None = None) -> dict:
         for name, level in tally.get('charm_levels', {}).items():
             if name.casefold() == 'charm' and len(charms) == 1:
                 name = charms[0]  # saved before the parser named it: the charm found that trip
+            if not name.casefold().endswith('charm'):
+                continue  # saved before pet level-ups were told apart: "pet Puffer leveled up! It"
             # Levels only rise; the highest the game reported stands.
             finds['charm_levels'][name] = max(level, finds['charm_levels'].get(name, 0))
     return finds

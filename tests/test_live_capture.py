@@ -734,7 +734,12 @@ class ChannelEvidenceTests(unittest.TestCase):
     def test_a_misread_tag_after_the_name_is_still_the_tag(self):
         # The DM search box shows "Search Virtual Fisher#7036"; OCR can misread or space out the tag.
         from src.live_capture import channel_hints, channel_name
-        for text in ('Search Virtual Fisher#7036', 'Search Virtual Fisher#7O36', 'Search Virtual Fisher # 7036'):
+        # Live: the magnifier icon right of the box read as a trailing "Q".
+        for text in ('Search Virtual Fisher#7036', 'Search Virtual Fisher#7O36', 'Search Virtual Fisher # 7036',
+                     'Search Virtual Fisher#7036 Q', 'Search Fishing Club Q'):
+            if 'Club' in text:
+                self.assertEqual(channel_name([{'text': text, 'top': 40}], 1000), 'Fishing Club')
+                continue
             self.assertEqual(channel_name([{'text': text, 'top': 40}], 1000), 'Virtual Fisher')
         box = {'text': 'IMessage@Virtual Fisher', 'top': 1340}
         self.assertEqual(channel_hints([box], 1399)['composer'], 'Virtual Fisher')   # the caret read as I

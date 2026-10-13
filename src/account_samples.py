@@ -95,3 +95,8 @@ LEAGUE_PAGE_2 = '\n'.join((
     'Page 2/2',
 ))
 BOOSTS = '\n'.join(('Active Boosts', 'Global Boost Duration: 3h 3m 30s', 'Current Booster: Colby'))
+
+# /shop special at level 75, as seen on 2026-10-13 (Fish Ovens' price, 50 Lava Fish, sat on a dimmed button: not read).
+SPECIAL = '\n'.join((
+    'Special Shop', 'Use /buy <upgrade name> to level up your upgrades.', 'Inventory: 49', 'Fish Ovens (2/20)',
+    'Cook the fish you sellfor a 5% increase in selling price.', 'More upgrades unlocked at level 100.'))

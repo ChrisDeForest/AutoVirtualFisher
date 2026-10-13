@@ -36,6 +36,14 @@ class BuildInputsTests(unittest.TestCase):
         self.assertEqual(setup.rod, 'Fiberglass Rod')
         self.assertEqual((setup.biome, setup.bait, setup.pet, setup.global_booster), ('River', None, 'Dolphin', True))
 
+    def test_the_special_shop_read_gives_its_levels(self):
+        # A read shop: what it lists has its level; what it does not list is not unlocked yet (level 0, not assumed).
+        state = {'sections': {**STATE['sections'], 'shop_special': {
+            'values': {'items': {'Fish Ovens': {'level': 2, 'max': 20, 'price': None}}}, 'unread': []}}}
+        account, _ = build_inputs(state, dict(PROFILE, level=75), CHARMS)
+        self.assertEqual(account.upgrades['Fish Ovens'], 2)
+        self.assertEqual([name for name in account.assumed if 'special shop' in account.assumed[name]], [])
+
     def test_unread_inputs_are_assumed(self):
         account, _ = build_inputs(STATE, PROFILE, CHARMS)
         self.assertIn('Experienced', account.assumed)

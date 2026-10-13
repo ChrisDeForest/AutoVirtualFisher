@@ -41,6 +41,7 @@ SIM_ACCOUNT = {'refresh_upgrades': samples.UPGRADES_PAGE_1, 'refresh_upgrades_pa
                'refresh_rod': samples.ROD, 'refresh_bait': samples.BAIT, 'refresh_biome': samples.BIOME,
                'refresh_boats': samples.BOATS, 'refresh_pets': samples.PETS,
                'refresh_prestige_shop': samples.PRESTIGE_SHOP, 'refresh_league': samples.LEAGUE_PAGE_1,
+               'refresh_special': samples.SPECIAL,
                'refresh_league_page2': samples.LEAGUE_PAGE_2, 'refresh_boosts': samples.BOOSTS}
 VISIBLE_REPLIES = 12
 

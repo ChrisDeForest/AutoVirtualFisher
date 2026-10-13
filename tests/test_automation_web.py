@@ -281,6 +281,18 @@ class AutomationWebTests(unittest.TestCase):
                      '14 min'):
             self.assertIn(text, html)
 
+    def test_plan_tab_says_where_each_purchase_is_made(self):
+        from src.automation_web import render_plan_tab
+        step = {'phase_label': '1st XP grind', 'kind': 'buy', 'action': 'Salesman 8', 'cost': 25000, 'currency': '$',
+                'sell': 0, 'trips': 0, 'seconds': 0, 'why': '', 'where': '/shop upgrades'}
+        view = {'plan': {'error': None, 'cut_short': False, 'assumptions': [], 'next': step,
+                         'steps': [step, {**step, 'kind': 'switch', 'action': 'Switch: rod Golden Rod', 'where': ''}],
+                         'prestige': {'reached': True, 'seconds': 10, 'shop': ['International Ties']}}}
+        html = render_plan_tab(view)
+        self.assertIn('Salesman 8<span class="where">/shop upgrades</span>', html)
+        self.assertIn('Salesman 8 in /shop upgrades', html)                     # the Next box
+        self.assertIn('Then buy International Ties in /prestige shop.', html)
+
     def test_plan_tab_trips_column_and_now(self):
         from src.automation_web import render_plan_tab
         step = {'phase_label': '1st XP grind', 'kind': 'switch', 'action': 'Switch: rod Supporter Rod', 'cost': 0,

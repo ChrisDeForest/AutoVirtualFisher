@@ -146,6 +146,16 @@ class PlannerTests(unittest.TestCase):
         first = next(s for s in plan['steps'] if s['kind'] == 'buy')
         self.assertGreater(first['sell'], 0)
 
+    def test_steps_say_where_to_buy(self):
+        plan = make_plan(state(balance=0, fish_value=10_000), ModelContext(DATA), PLAN)
+        where = {'league': '/shop league', 'special': '/shop special', 'bait': '/shop bait', 'switch': ''}
+        for step in plan['steps']:
+            if step['kind'] in where:
+                self.assertEqual(step['where'], where[step['kind']], step)
+        bought = {step['action']: step['where'] for step in plan['steps'] if step['kind'] == 'buy'}
+        self.assertTrue(bought)
+        self.assertTrue(set(bought.values()) <= {'/shop upgrades', '/shop rods', '/shop boats'}, bought)
+
     def test_league_step_waits_for_hooks(self):
         plan = make_plan(state(), ModelContext(DATA), PLAN)
         league = [s for s in plan['steps'] if s['kind'] == 'league']

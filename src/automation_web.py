@@ -18,6 +18,7 @@ ACCOUNT_READ_LABELS = {
     'refresh_rod': 'Reading your rods', 'refresh_bait': 'Reading your bait', 'refresh_biome': 'Reading your biome',
     'refresh_boats': 'Reading the boat shop', 'refresh_pets': 'Reading your pets',
     'refresh_prestige_shop': 'Reading the prestige shop', 'refresh_league': 'Reading the league shop',
+    'refresh_special': 'Reading the special shop',
     'refresh_boosts': 'Reading your boosts'}
 BUFFS = (('sell_price', 'Sell price'), ('fish_catch', 'Fish catch'), ('fish_quality', 'Fish quality'),
          ('treasure_chance', 'Treasure chance'), ('treasure_quality', 'Treasure quality'),
@@ -76,6 +77,7 @@ STYLE = """<style>
 .tabs a.current { color:var(--ink); border-bottom-color:var(--sea); }
 .model td.bad { color:#ffda8b; } .model td.good { color:var(--sea); }
 .model .why { display:block; color:var(--muted); font-size:13px; }
+.model .where { display:block; color:var(--muted); font-size:12px; font-family:ui-monospace,Consolas,monospace; }
 .visually-hidden { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
 @media(max-width:900px) { .finds { grid-template-columns:minmax(0,1fr); } }
 @media(max-width:900px) { .boxes, .rewards-row { grid-template-columns:minmax(0,1fr); } .box.wide { grid-column:auto; }
@@ -407,6 +409,11 @@ def _account_rows(sections):
     rows.append(('Prestige shop', text if values else None, unread))
     values, unread = section('shop_league')
     rows.append(('League', (_levels(values['items']) + f'; Hooks: {values["hooks"]}') if values else None, unread))
+    values, unread = section('shop_special')
+    if values:
+        text = (_levels(values['items']) or 'nothing listed') + (
+            f'; more at level {values["more_at_level"]}' if values.get('more_at_level') else '')
+    rows.append(('Special shop', text if values else None, unread))
     values, unread = section('boosts')
     rows.append(('Boosts', (f'global {values["global_duration"]}' if values['global_duration'] else 'none')
                  if values else None, unread))
@@ -534,6 +541,7 @@ def render_plan_tab(view) -> str:
     when = lambda item: 'now' if _when(item['seconds']) == 'now' else f'in about {_duration(item["seconds"])}'
     next_box = _box('Next', '<p class="next">' + (escape(
         (f'Sell ${step["sell"]:,.0f} of fish, then ' if step.get('sell') else '') + step['action']
+        + (f' in {step["where"]}' if step.get('where') else '')
         + (f' ({_cost(step)})' if _cost(step) else '') + f' — {when(step)}')
         if step else 'Nothing to do.') + '</p>', note=made + (f' · {step["why"]}' if step and step.get('why') else ''))
     rows, last = [], None
@@ -542,7 +550,8 @@ def render_plan_tab(view) -> str:
             rows.append(f'<tr><th colspan="5">{escape(item["phase_label"])}</th></tr>')
             last = item['phase_label']
         sell = f' · sell ${item["sell"]:,.0f}' if item.get('sell') else ''
-        rows.append(f'<tr><td>{escape(item["action"])}</td><td>{escape(_cost(item) + sell)}</td>'
+        where = f'<span class="where">{escape(item["where"])}</span>' if item.get('where') else ''
+        rows.append(f'<tr><td>{escape(item["action"])}{where}</td><td>{escape(_cost(item) + sell)}</td>'
                     f'<td>{escape(_trips(item.get("trips")))}</td><td>{escape(_when(item["seconds"]))}</td>'
                     f'<td>{escape(item.get("why") or "")}</td></tr>')
     route_box = _box('Route', _scroll('Route', '<table class="mini model"><thead><tr><th>Step</th><th>Cost</th>'
@@ -554,7 +563,7 @@ def render_plan_tab(view) -> str:
     if prestige.get('reached'):
         text = f'Prestige in about {_duration(prestige["seconds"])}.'
         if prestige.get('shop'):
-            text += ' Then buy ' + ', '.join(prestige['shop']) + '.'
+            text += ' Then buy ' + ', '.join(prestige['shop']) + ' in /prestige shop.'
     else:
         text = 'Not reached in this plan. Missing: ' + ', '.join(prestige.get('missing') or ['?']) + '.'
     prestige_box = _box('Prestige', f'<p>{escape(text)}</p>')

@@ -52,10 +52,18 @@ def build_inputs(account_state, profile, charms_text):
     assumed = {}
     upgrades = {**_levels(account_state, 'shop_upgrades', NORMAL_UPGRADES, assumed),
                 **_levels(account_state, 'shop_league', LEAGUE_UPGRADES, assumed)}
-    for name in SPECIAL_UPGRADES:
-        upgrades[name] = 0
-        if level >= 50:
-            assumed[name] = 'the special shop is not read yet'
+    if _values(account_state, 'shop_special'):
+        # A read special shop lists what is unlocked; the rest are not unlocked yet (level 0).
+        specials = _levels(account_state, 'shop_special', SPECIAL_UPGRADES, assumed)
+        upgrades.update(specials)
+        for name in SPECIAL_UPGRADES:
+            if assumed.get(name) == 'not shown':
+                del assumed[name]
+    else:
+        for name in SPECIAL_UPGRADES:
+            upgrades[name] = 0
+            if level >= 50:
+                assumed[name] = 'the special shop is not read yet'
     for name in NORMAL_UPGRADES + LEAGUE_UPGRADES:
         if name in assumed and assumed[name] == 'not shown':
             del assumed[name]  # a shop that was read and does not list it: not bought
