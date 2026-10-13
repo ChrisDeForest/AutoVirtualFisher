@@ -656,6 +656,55 @@ class LightCaptureTests(unittest.TestCase):
             capture()
             self.assertEqual(sorted(used), ['buttons', 'controls', 'region', 'region', 'rereads'])
 
+    def test_a_deep_read_also_reads_the_picker_zoomed_in(self):
+        # Live: "/boosts" went unread in the picker at x2 and was read at x4.
+        from unittest.mock import patch
+        from src.live_capture import make_capture
+        scales = []
+        with patch('src.window_capture.capture_supported', return_value=True), \
+                patch('src.screenshot_ocr.ocr_available', return_value=True), \
+                patch('src.window_capture.capture_window', return_value={'minimized': False, 'blank': False,
+                                                                         'width': 1000, 'height': 900}), \
+                patch('src.screenshot_ocr.read_image_boxes', return_value=[]), \
+                patch('src.screenshot_ocr.read_region_boxes',
+                      side_effect=lambda image, region, scale: scales.append(scale) or [{'scale': scale}]):
+            capture = make_capture(window_provider=lambda: (7, 'Discord'), input_region=True)
+            self.assertNotIn('deep_boxes', capture(light=True))
+            self.assertEqual(scales, [2])
+            scales.clear()
+            frame = capture(light=True, deep=True)
+        self.assertEqual(scales, [2, 3, 4])
+        self.assertEqual(frame['boxes'], [{'scale': 2}])
+        self.assertEqual(frame['deep_boxes'], [[{'scale': 3}], [{'scale': 4}]])
+
+    def test_the_automation_rereads_only_the_newest_message(self):
+        # Live: the rereads of every message on screen cost about 1.4 s of a 1.9 s read; the reply is the newest.
+        from unittest.mock import patch
+        from src.live_capture import make_capture
+        old = [dict(text='epicmouse used', left=300, top=100, right=420, bottom=118),
+               dict(text='Salmon', left=340, top=120, right=400, bottom=138)]
+        new = [dict(text='epicmouse used', left=300, top=140, right=420, bottom=158),
+               dict(text='Cod', left=340, top=160, right=380, bottom=178)]
+        seen = {}
+        with patch('src.window_capture.capture_supported', return_value=True), \
+                patch('src.screenshot_ocr.ocr_available', return_value=True), \
+                patch('src.window_capture.capture_window', return_value={'minimized': False, 'blank': False,
+                                                                         'width': 1000, 'height': 900}), \
+                patch('src.screenshot_ocr.read_image_boxes', return_value=old + new), \
+                patch('src.screenshot_ocr.read_region_boxes', return_value=[]), \
+                patch('src.live_capture.repair_counts',
+                      side_effect=lambda column, *a: seen.setdefault('rereads', [b['text'] for b in column]) and
+                      [{**b, 'text': b['text'] + '*'} for b in column]), \
+                patch('src.reply_ocr.repair_reply_regions',
+                      side_effect=lambda column, *a: seen.setdefault('repairs', [b['text'] for b in column])), \
+                patch('src.ocr_image.button_rows', return_value=[]), \
+                patch('src.live_capture.chat_column', return_value=(old + new, 300, 18)):
+            lines = make_capture(window_provider=lambda: (7, 'Discord'), input_region=True,
+                                 newest_only=True)()['lines']
+        self.assertEqual(seen['rereads'], ['epicmouse used', 'Cod'])
+        self.assertEqual(seen['repairs'], ['epicmouse used*', 'Cod*'])
+        self.assertEqual(lines, ['epicmouse used', 'Salmon', 'epicmouse used*', 'Cod*'])
+
 
 class KeptCaptureTests(unittest.TestCase):
     def test_only_the_newest_kept_captures_remain(self):

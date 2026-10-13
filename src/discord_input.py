@@ -25,7 +25,7 @@ class WindowsDiscordDriver:
             raise RuntimeError('Native dispatch requires Windows.')
         self.window, self.channel = window, channel
         self.title = None
-        self.capture = make_capture(window_provider=self._target_window, input_region=True)
+        self.capture = make_capture(window_provider=self._target_window, input_region=True, newest_only=True)
         self.api = ctypes.WinDLL('user32', use_last_error=True)
         for name, args, result in (
             ('GetForegroundWindow', [], wintypes.HWND),
@@ -122,12 +122,12 @@ class WindowsDiscordDriver:
             self._event(1, (0, ord(character), 4), cancelled)
             self._event(1, (0, ord(character), 6), lambda: False, release=True)
 
-    def _frame(self, cancelled, frame=None):
+    def _frame(self, cancelled, frame=None, deep=False):
         """A light read of the window (or `frame`, a read the transport just took), checked: same window, channel
-        and title, and no new verification prompt."""
+        and title, and no new verification prompt. `deep`: the picker is also read zoomed in ('deep_boxes')."""
         self._guard(cancelled)
         if frame is None:
-            frame = self.capture(light=True)
+            frame = self.capture(light=True, deep=True) if deep else self.capture(light=True)
         context = frame.get('context') or {}
         if frame['status'] != 'ok' or context.get('window') != self.window \
                 or not channel_matches(context, self.channel):
@@ -191,13 +191,18 @@ class WindowsDiscordDriver:
                 return any(abs(_center(b)[0] - _center(old)[0]) <= height
                            and abs(_center(b)[1] - _center(old)[1]) <= height for old in old_commands)
 
-            for _ in range(5):
+            for attempt in range(5):
                 time.sleep(0.2)
-                frame = self._frame(cancelled)
-                # Text already visible before typing is not evidence of a newly opened picker.
-                picker_boxes = [b for b in frame.get('boxes', [])
-                                if command_text(b['text']) != command.casefold() or not seen_before(b)]
-                target = command_target(picker_boxes, command, composer)
+                # After a miss the picker is also read zoomed in: live, a row's command title can go unread at the
+                # usual zoom while its description and bot label are read.
+                frame = self._frame(cancelled, deep=attempt > 0)
+                for boxes in [frame.get('boxes', [])] + frame.get('deep_boxes', []):
+                    # Text already visible before typing is not evidence of a newly opened picker.
+                    picker_boxes = [b for b in boxes
+                                    if command_text(b['text']) != command.casefold() or not seen_before(b)]
+                    target = command_target(picker_boxes, command, composer)
+                    if target is not None:
+                        break
                 if target is not None:
                     break
             if target is None:

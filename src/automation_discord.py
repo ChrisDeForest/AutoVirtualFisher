@@ -66,7 +66,8 @@ FISHING_REREADS = 2
 # Seconds after sending /profile or /buffs before an identical reply sent that minute is taken as the answer.
 REFRESH_GRACE = 3.0
 # Seconds a read stays fresh: the context check's read serves the reply check and a send in the same step, each
-# read used once (a reply must be seen the same in two separate reads). A read takes 0.5-2 s live.
+# read used once by a reply check (a reply that must be seen the same twice is seen in two separate reads); the read
+# that delivers a reply also serves the send right after it. A read takes 0.5-2 s live.
 FRESH_READ = 0.75
 SENT = re.compile(r'(\d{1,2}):(\d{2})\s*([AP])M', re.I)
 
@@ -190,13 +191,16 @@ class DiscordTransport:
         self.captcha_bottom = None     # the newest message when a captcha was delivered
         self.lock = threading.Lock()
         self.fresh = None              # (monotonic time, read) of the context check, for one later use
+        self.last_read = None          # (monotonic time, read) of the read _read returned last
 
     def _read(self):
         """The context check's read when it is fresh (used once), else a new read."""
         fresh, self.fresh = self.fresh, None
-        if fresh is not None and self.monotonic() - fresh[0] <= FRESH_READ:
-            return fresh[1]
-        return self.driver.capture()
+        if fresh is None or self.monotonic() - fresh[0] > FRESH_READ:
+            capture = self.driver.capture()
+            fresh = (self.monotonic(), capture)
+        self.last_read = fresh
+        return fresh[1]
 
     def enable(self):
         self.cancelled.clear()
@@ -424,7 +428,10 @@ class DiscordTransport:
                     problems = fishing_problems('\n'.join(message['lines']))
                 evidence = (message['key'], message.get('invoked_by'), message.get('sent')) if message['kind'] in ('profile', 'buffs') else (
                     message['key'], tuple(message['lines']), message.get('sent'))
-                if self.candidate != evidence:
+                # A fishing result that reads cleanly (one trip, known fish, its XP) is complete when first seen:
+                # it is taken from one read. Other replies, and results with problems, must read the same twice.
+                clean_catch = message['kind'] == 'fishing' and not cooldown and not problems
+                if self.candidate != evidence and not clean_catch:
                     self.candidate, self.rereads = evidence, 0
                     return []
                 if problems and self.rereads < FISHING_REREADS:
@@ -438,6 +445,8 @@ class DiscordTransport:
                                           message['kind'], recipient, '\n'.join(message['lines']),
                                           VERIFIED, correlation=action.action_id)
                 self.pending = self.baseline = self.candidate = None
+                # Its newest message is this reply: the next send in the same step starts from this read.
+                self.fresh = self.last_read
                 return [observation]
             except Exception as error:
                 self.candidate = None

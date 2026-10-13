@@ -63,8 +63,7 @@ class FishingOverlapRegressionTests(unittest.TestCase):
         self.assertEqual(transport.poll(), [])
         self.assertIsNotNone(transport.pending)
         driver.lines[-1] = 'LEVEL UP! You are now level 31.'
-        self.assertEqual(transport.poll(), [])
-        replies = transport.poll()
+        replies = transport.poll()                   # complete now: taken from this one read
         self.assertEqual(len(replies), 1)
         self.assertEqual(fishing_problems(replies[0].text), [])
 
@@ -244,13 +243,12 @@ class DiscordTests(unittest.TestCase):
         self.assertEqual([(reply.kind, reply.correlation) for reply in replies], [('captcha', 'a1')])
         self.assertIn('captcha', replies[0].text)
 
-    def test_temporary_overlap_loss_can_recover_without_resending(self):
+    def test_a_cut_off_catch_waits_for_the_whole_reply_without_resending(self):
         baseline = list(self.driver.lines)
         self.send()
-        self.driver.lines = fish(9, 9, 90)
+        self.driver.lines = baseline + fish(2, 2, 20)[:7]       # no XP line yet
         self.assertEqual(self.transport.poll(), [])
         self.driver.lines = baseline + fish(2, 2, 20)
-        self.assertEqual(self.transport.poll(), [])
         self.assertEqual(len(self.transport.poll()), 1)
         self.assertEqual(self.driver.sent, ['/fish'])
 
@@ -308,10 +306,11 @@ class DiscordTests(unittest.TestCase):
         self.send()
         self.assertEqual(self.transport.poll(), [])
 
-    def test_new_own_reply_stabilizes_then_correlates_once(self):
+    def test_a_clean_catch_is_taken_from_its_first_read_once(self):
+        # A fishing result that reads cleanly is complete when first seen; waiting for a second read cost a
+        # full read (about 1.5 s live) per trip.
         self.send()
         self.driver.lines = fish(1, 1, 10) + fish(2, 2, 20)
-        self.assertEqual(self.transport.poll(), [])
         replies = self.transport.poll()
         self.assertEqual(len(replies), 1)
         self.assertEqual(replies[0].correlation, 'a1')
@@ -359,7 +358,6 @@ class DiscordTests(unittest.TestCase):
         self.driver.lines = fish(6, 10, 131) + PROFILE + BUFFS
         self.send()
         self.driver.lines = ['Virtual fisher', "'fish", 'Reward:', '+370 xp'] + PROFILE + BUFFS + fish(4, 6, 83)
-        self.assertEqual(self.transport.poll(), [])
         [reply] = self.transport.poll()
         self.assertIn('4 Salmon', reply.text)
 
@@ -399,7 +397,6 @@ class DiscordTests(unittest.TestCase):
         self.send()
         self.assertEqual(self.transport.last_lines, ['epicmouse used', 'profile'])
         self.driver.lines = fish(1, 1, 10)
-        self.assertEqual(self.transport.poll(), [])
         self.assertEqual(len(self.transport.poll()), 1)
 
     def test_partial_dispatch_failure_blocks_another_send(self):
@@ -468,8 +465,10 @@ class FreshReadTests(unittest.TestCase):
         self.assertEqual(before['lines'], self.driver.lines)   # typing starts from that read, not a new one
 
     def test_each_read_serves_one_reply_check(self):
+        from tests.test_live_capture import BUFFS
+        self.intent = ActionIntent('b1', 'refresh_buffs', self.transport.context_id, self.intent.created_at, 'buffs')
         self.transport.send(self.intent)
-        self.driver.lines = self.driver.lines + fish(2, 2, 20)
+        self.driver.lines = self.driver.lines + BUFFS
         self.reads.clear()
         self.transport.inspect_context()
         self.assertEqual(self.transport.poll(), [])          # first sight of the reply
@@ -477,6 +476,27 @@ class FreshReadTests(unittest.TestCase):
         # The second check reads again: the reply is confirmed by two separate reads, never one read twice.
         self.assertEqual(len(self.transport.poll()), 1)
         self.assertEqual(len(self.reads), 2)
+
+    def test_the_read_that_delivers_a_reply_serves_the_next_send(self):
+        self.transport.send(self.intent)
+        self.driver.lines = self.driver.lines + fish(2, 2, 20)
+        self.reads.clear()
+        self.transport.inspect_context()
+        [reply] = self.transport.poll()
+        self.transport.send(ActionIntent('a2', 'fish', self.transport.context_id, self.intent.created_at, 'fishing'))
+        self.assertEqual(len(self.reads), 1)                 # one read: context check, reply and the next send
+        self.assertEqual(self.driver.sent[-1][1]['lines'], self.driver.lines)
+        self.driver.lines = self.driver.lines + fish(3, 3, 30)
+        self.assertEqual(len(self.transport.poll()), 1)       # the next reply is read anew
+        self.assertEqual(len(self.reads), 2)
+
+    def test_a_reply_check_with_nothing_new_leaves_no_read_for_the_send(self):
+        self.transport.send(self.intent)
+        self.transport.inspect_context()
+        self.assertEqual(self.transport.poll(), [])
+        self.transport.forget()
+        self.transport.send(ActionIntent('a2', 'fish', self.transport.context_id, self.intent.created_at, 'fishing'))
+        self.assertEqual(len(self.reads), 3)
 
     def test_a_stale_read_is_not_used(self):
         self.transport.inspect_context()

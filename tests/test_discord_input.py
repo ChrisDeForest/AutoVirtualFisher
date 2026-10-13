@@ -33,7 +33,8 @@ class NativeDispatchTests(unittest.TestCase):
         from itertools import chain, repeat
         sequence = chain(frames, repeat(frames[-1]))
         driver.events = []
-        driver._frame = lambda cancelled: next(sequence)
+        driver.deep = []
+        driver._frame = lambda cancelled, deep=False: driver.deep.append(deep) or next(sequence)
         driver._click = lambda point, cancelled: driver.events.append(('click', point))
         driver._text = lambda text, cancelled: driver.events.append(('text', text))
         driver._key = lambda key, cancelled: driver.events.append(('key', key))
@@ -155,6 +156,21 @@ class NativeDispatchTests(unittest.TestCase):
         self.assertFalse(any(kind == 'key' for kind, _ in driver.events))
 
     @patch('src.discord_input.time.sleep')
+    def test_a_command_missed_by_the_picker_read_is_found_zoomed_in(self, sleep):
+        # Live (27" 2560x1440, 1294x1399 window): the picker's "/boosts" title was not read at the usual zoom,
+        # only its description and the "Virtual Fisher" label; read at x4 it was there.
+        missed = [box('Check your currently active boos&', 625), dict(box('Virtual Fisher', 610), left=848, right=917)]
+        found = [box('[boosts', 600), dict(box('Virtual Fisher', 610), left=848, right=917)]
+        driver = self.driver([
+            {'boxes': [box('Message @Virtual Fisher', 800)]},
+            {'boxes': missed},
+            {'boxes': missed, 'deep_boxes': [missed, found]},
+        ])
+        driver.dispatch('/boosts', lambda: False)
+        self.assertEqual(driver.events[-1], ('key', 13))
+        self.assertEqual(driver.deep[1:3], [False, True])   # zoomed in only after a miss
+
+    @patch('src.discord_input.time.sleep')
     def test_missing_picker_never_presses_enter(self, sleep):
         driver = self.driver([{'boxes': [box('Message @Virtual Fisher', 800)]}] + [{'boxes': []}] * 5)
         # Enter was never pressed, so nothing reached the game; the typed draft is cleared for the next run.
@@ -237,7 +253,7 @@ class NativeDispatchTests(unittest.TestCase):
     def test_trouble_while_checking_after_sending_is_not_a_failure(self, sleep):
         driver = self.driver([self.EMPTY, self.PICKER])
         reads = iter([self.EMPTY, self.PICKER])
-        def frame(cancelled):
+        def frame(cancelled, deep=False):
             try:
                 return next(reads)
             except StopIteration:
@@ -325,7 +341,8 @@ class FocusTests(unittest.TestCase):
                  {'boxes': [box('/fish', 600), box('Virtual Fisher', 620)]}]
         from itertools import chain, repeat
         sequence = chain(later, repeat(later[-1]))
-        driver._frame = lambda cancelled: next(sequence)
+        driver.deep = []
+        driver._frame = lambda cancelled, deep=False: driver.deep.append(deep) or next(sequence)
         driver.events.clear()
         driver.dispatch('/fish', lambda: False)
         self.assertEqual(driver.events[:2], [('click', (500.0, 810.0)), ('clear', None)])
@@ -348,7 +365,8 @@ class ComposerClickTests(unittest.TestCase):
         from itertools import chain, repeat
         frames = self.frames()
         sequence = chain(frames, repeat(frames[-1]))
-        driver._frame = lambda cancelled: next(sequence)
+        driver.deep = []
+        driver._frame = lambda cancelled, deep=False: driver.deep.append(deep) or next(sequence)
         driver.events.clear()
 
     @patch('src.discord_input.time.sleep')
@@ -385,7 +403,8 @@ class ComposerClickTests(unittest.TestCase):
         driver = self.driver(self.frames())
         driver.dispatch('/fish', lambda: False)
         sequence = iter([{'boxes': [box('Message @Virtual Fisher', 800)]}] + [{'boxes': []}] * 5)
-        driver._frame = lambda cancelled: next(sequence)
+        driver.deep = []
+        driver._frame = lambda cancelled, deep=False: driver.deep.append(deep) or next(sequence)
         with self.assertRaises(NotDispatched):
             driver.dispatch('/fish', lambda: False)
         self.again(driver)

@@ -40,6 +40,8 @@ REREAD_SCALES = (2, 3)
 # Where the enlarged read of the message box and slash-command picker starts, as a share of the window's height.
 # A full picker reaches about 750 px above the box: half of a 1535 px window cut off its top row (the command).
 INPUT_REGION_TOP = .25
+# Zooms the picker is also read at after a miss: live (27" 2560x1440), "/boosts" went unread at x2 and x3, read at x4.
+DEEP_SCALES = (3, 4)
 # Seconds from the start of one capture to the next. The fishing cooldown changes as you level up and resets
 # when you prestige, so capture keeps pace with the cooldown in your latest /buffs: a capture every three quarters
 # of it, so at most one new reply normally arrives between captures and each capture overlaps the one before.
@@ -188,6 +190,8 @@ def bait_evidence(kind: str | None, lines: list[str]) -> tuple[bool, str | None]
 
 # Virtual Fisher's captcha (anti-bot) message; the code itself is in an image.
 CAPTCHA = re.compile(r'captcha|\bverify\b|verification|anti.bot', re.I)
+# The first line of a reply to a slash command: "epicmouse used /fish".
+INVOKED = re.compile(r'\S+ used\b')
 
 
 def capture_frame(lines: list[str]) -> dict:
@@ -384,15 +388,26 @@ def context_key(context: dict) -> str:
     return f'{context.get("window")}:{context.get("title")}'
 
 
-def make_capture(keep_dir: Path | None = None, keep_limit: int = KEEP_LIMIT, window_provider=None, input_region=False):
+def newest_message_start(boxes) -> int:
+    """Index of the newest message's "<name> used" line in the chat column, or 0 when there is none."""
+    starts = [index for index, box in enumerate(boxes) if INVOKED.match(box['text'].strip())]
+    return starts[-1] if starts else 0
+
+
+def make_capture(keep_dir: Path | None = None, keep_limit: int = KEEP_LIMIT, window_provider=None, input_region=False,
+                 newest_only=False):
     """Return a capture function for LiveCapture. Each call captures and reads the Discord window and returns
     {'status', 'lines', 'context'}; the image is deleted at once unless `keep_dir` is set, in which case captures whose
     chat text changed are kept there as PNG plus JSON (OCR boxes and final lines) for analysis.
     `light=True` (typing a command) reads only what command entry checks: the window's text and the message box
-    region, without the chat rereads, the reply controls or the buttons; never kept."""
+    region, without the chat rereads, the reply controls or the buttons; never kept. `deep=True` also reads that
+    region at DEEP_SCALES ('deep_boxes', one list per zoom), about 0.5 s more.
+    `newest_only=True` (the automation, whose reply is always the newest message) rereads only the newest message,
+    from its "<name> used" line down: the messages above were reread while they were newest. The rereads of every
+    message cost about 1.4 s of a 1.9 s read live."""
     last_kept = {'lines': None}
 
-    def capture(light=False) -> dict:
+    def capture(light=False, deep=False) -> dict:
         from .screenshot_ocr import ocr_available, read_image_boxes, read_region_lines, read_region_boxes
         from .window_capture import bmp_to_png, capture_supported, capture_window, find_discord_window
 
@@ -411,7 +426,9 @@ def make_capture(keep_dir: Path | None = None, keep_limit: int = KEEP_LIMIT, win
             if info['blank']:
                 return {'status': 'blank', 'lines': []}
             boxes = read_image_boxes(image)
-            input_boxes = read_region_boxes(image, (0, info['height'] * INPUT_REGION_TOP, info['width'], info['height']), 2) if input_region else boxes
+            region = (0, info['height'] * INPUT_REGION_TOP, info['width'], info['height'])
+            input_boxes = read_region_boxes(image, region, 2) if input_region else boxes
+            deep_boxes = [read_region_boxes(image, region, scale) for scale in DEEP_SCALES] if input_region and deep else None
             column, edge, height = chat_column(boxes)
 
             def reread(left, top, right, bottom):
@@ -419,12 +436,16 @@ def make_capture(keep_dir: Path | None = None, keep_limit: int = KEEP_LIMIT, win
                 return reads[0] if all(read == reads[0] for read in reads) else []
 
             if column and not light:
-                column = repair_counts(column, edge, height, reread)
+                start = newest_message_start(column) if newest_only else 0
+                column = column[:start] + repair_counts(column[start:], edge, height, reread)
             lines = [box['text'] for box in column]
             if input_region and column and not light:
                 from .reply_ocr import repair_reply_regions
                 controls = read_region_boxes(image, (0, info['height'] * .5, info['width'], info['height']), 3)
-                lines = repair_reply_regions(join_boost_caption(column), image, info['height'], controls)
+                joined = join_boost_caption(column)
+                start = newest_message_start(joined) if newest_only else 0
+                lines = [box['text'] for box in joined[:start]] + repair_reply_regions(
+                    joined[start:], image, info['height'], controls)
             if keep_dir is not None and not light and lines != last_kept['lines']:
                 _keep(image, Path(keep_dir), info, boxes, lines, bmp_to_png, keep_limit)
                 last_kept['lines'] = lines
@@ -434,10 +455,13 @@ def make_capture(keep_dir: Path | None = None, keep_limit: int = KEEP_LIMIT, win
                 buttons = [] if light else button_rows(image, boxes)
             except (OSError, ValueError):
                 buttons = []
-            return {'status': 'ok', 'lines': lines, 'boxes': input_boxes, 'original_boxes': boxes,
-                    'buttons': buttons, 'context': {'window': window[0], 'title': window[1],
-                                                    'channel': channel_name(boxes, info['height']),
-                                                    'channel_hints': channel_hints(boxes, info['height'])}}
+            frame = {'status': 'ok', 'lines': lines, 'boxes': input_boxes, 'original_boxes': boxes,
+                     'buttons': buttons, 'context': {'window': window[0], 'title': window[1],
+                                                     'channel': channel_name(boxes, info['height']),
+                                                     'channel_hints': channel_hints(boxes, info['height'])}}
+            if deep_boxes is not None:
+                frame['deep_boxes'] = deep_boxes
+            return frame
         finally:
             image.unlink(missing_ok=True)
 
