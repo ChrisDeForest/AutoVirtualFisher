@@ -59,16 +59,38 @@ def known_bait(name):
     return name
 
 
-def known_pet(name):
-    """The pet a read name stands for, its icon misread as up to two stray characters ("V Puffer" is Puffer) or
-    a stray mark after it ("Puffer _"); a name that is no known pet is returned unchanged."""
+# A misread name counts as the known name it is closest to when it is this close (difflib ratio) and closer to it
+# than to any other by the margin. Live: "Wcanic" for Volcanic is 0.71; names that are no misread are 0.5 or less.
+CLOSE, MARGIN = 0.7, 0.15
+
+
+def _known(name, names):
+    """The known name a read name stands for: its icon misread as up to two stray characters before it, a stray
+    mark after it, or a close misread of it. Otherwise the name as read."""
+    from difflib import SequenceMatcher
     trimmed = re.sub(r'[\s\W_]+$', '', name)
-    for pet in sorted((_pet_reference() or {}).get('pets', {}), key=len, reverse=True):
-        if trimmed.casefold().endswith(pet.casefold()):
-            prefix = trimmed[:len(trimmed) - len(pet)].strip()
+    for known in sorted(names, key=len, reverse=True):
+        if trimmed.casefold().endswith(known.casefold()):
+            prefix = trimmed[:len(trimmed) - len(known)].strip()
             if len(prefix) <= 2 and not re.search(r'[a-z]{2}', prefix, re.I):
-                return pet
+                return known
+    word = re.sub(r'^\W*\S{1,2}\s+(?=\w{3})|^\W+', '', trimmed)
+    ratios = sorted(((SequenceMatcher(None, word.casefold(), known.casefold()).ratio(), known) for known in names),
+                    reverse=True)
+    if ratios and ratios[0][0] >= CLOSE and (len(ratios) == 1 or ratios[0][0] - ratios[1][0] >= MARGIN):
+        return ratios[0][1]
     return name
+
+
+def known_biome(name):
+    """The biome a read name stands for ("i Volcanic" and "Wcanic" are Volcanic), else the name as read."""
+    from .catch_check import BIOMES
+    return _known(name, BIOMES)
+
+
+def known_pet(name):
+    """The pet a read name stands for ("V Puffer", "Puffer _" and "Pufter" are Puffer), else the name as read."""
+    return _known(name, list((_pet_reference() or {}).get('pets', {})))
 
 
 def _pet_reference():
@@ -245,6 +267,8 @@ def parse_responses(profile='', buffs='', prestige_shop='', pet='', quests=''):
                         if field == 'pet' and re.fullmatch(r'Level \d+\)?', value, re.I):
                             # Observed OCR: "Pet: (Level 51)", the emoji and name lost. The pet stays unknown.
                             continue
+                        if field == 'biome':
+                            value = known_biome(value)
                         if field == 'pet':
                             named = re.fullmatch(r'(.+?)(\s*\(Level \d+\)?)', value, re.I)
                             value = known_pet(named[1]) + named[2] if named else known_pet(value)

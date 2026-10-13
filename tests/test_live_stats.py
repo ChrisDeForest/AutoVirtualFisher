@@ -311,3 +311,16 @@ class ZoomedOcrTests(unittest.TestCase):
     def test_pet_with_its_icon_misread(self):
         profile = synced_stats('Pet: V Puffer (Level 32)', '')['profile']
         self.assertEqual((profile['pet'], profile['pet_level']), ('Puffer', 32))
+
+    def test_biome_and_pet_with_their_icons_misread_in_a_real_profile(self):
+        # Live /profile read, Oct 13.
+        profile = synced_stats('Currently using Supporter Rod.\nCurrent biome: i Volcanic\n'
+                               'Pet: \ufffdV Puffer (Level 32)', '')['profile']
+        self.assertEqual((profile['biome'], profile['pet'], profile['pet_level']), ('Volcanic', 'Puffer', 32))
+
+    def test_a_close_misread_is_the_biome_or_pet_it_is_closest_to(self):
+        # Live: "Wcanic" for Volcanic. A name close to none, or as close to two, is left as read.
+        for read, biome in (('Wcanic', 'Volcanic'), ('Ocaen', 'Ocean'), ('Spacc', 'Space'), ('Abyss', 'Abyss')):
+            self.assertEqual(synced_stats(f'Current biome: {read}', '')['profile']['biome'], biome)
+        for read, pet in (('Dolphln', 'Dolphin'), ('Pufter', 'Puffer'), ('Tune', 'Tuna'), ('Goldfish', 'Goldfish')):
+            self.assertEqual(synced_stats(f'Pet: {read} (Level 5)', '')['profile']['pet'], pet)
