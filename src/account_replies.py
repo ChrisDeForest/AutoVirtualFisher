@@ -24,7 +24,8 @@ BUTTONS = {'back', 'return', 'select', 'selected', 'deselect', 'maxed'}
 PAGE = re.compile(r'Page\s*(\d+)\s*(?:/|[1lI|](?=\s*\d))\s*(\d+)', re.I)
 LEVELLED = re.compile(r'(.+?)\s*\(\s*(\S+)\s*/\s*(\S+)\s*\)$')
 MONEY = re.compile(r'^\W*\$\s*([\d,]+)\W*$')
-HOOK_PRICE = re.compile(r'^\D{0,3}?(\d[\d,]*)$')
+# The Hook icon may read as up to four stray characters ("t.' 150").
+HOOK_PRICE = re.compile(r'^\D{0,4}?(\d[\d,]*)$')
 NUMBER = re.compile(r'^\d[\d,]*$')
 
 
@@ -135,6 +136,8 @@ def parse_shop_special(text):
     more = re.search(r'More upgrades unlocked at level\s*([\d,]+)', text, re.I)
     values['inventory'] = _number(inventory[1]) if inventory else None
     values['more_at_level'] = _number(more[1]) if more else None
+    # Only page 1 is read; a page 2 (expected from level 100) is flagged on the page until it is read too.
+    values['pages'] = parsed['page'][1]
     return parsed
 
 

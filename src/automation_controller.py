@@ -46,7 +46,16 @@ from .observation import VERIFIED
 from .player_snapshots import new_record_id
 from .review_queue import add_item
 
-COOLDOWN_REPLY = re.compile(r'You must wait ([\d.]+) seconds? before fishing again', re.I)
+# The game writes "You must wait 0.1s before fishing again." (live, Oct 13; OCR read "O.Is"); "2.5 seconds" too.
+COOLDOWN_REPLY = re.compile(r'You must wait\s+([\dOIl|.,]+)\s*(?:s|seconds?)\b\.?\s*before fishing again', re.I)
+
+
+def _cooldown_wait(match):
+    """Seconds the game still asked to wait, with OCR's O for 0 and I, l or | for 1; 0 when unreadable."""
+    try:
+        return float(re.sub(r'[Oo]', '0', re.sub(r'[Il|]', '1', match[1])).replace(',', '.'))
+    except ValueError:
+        return 0.0
 RESOLUTIONS = ('happened', 'not_sent')
 STARTUP_ATTEMPTS = 3
 STARTUP_RETRY_DELAY = 2.0
@@ -692,7 +701,7 @@ class AutomationController:
         self.last_result = {'action_id': action_id, 'result': result, 'at': observation.observed_at}
         now = self.monotonic()
         if result == 'cooldown':
-            self.ready_at = now + float(wait[1]) + self.config.cooldown_margin + self.jitter
+            self.ready_at = now + _cooldown_wait(wait) + self.config.cooldown_margin + self.jitter
         elif result == 'unreadable' and (kind in ACCOUNT_READS or kind in PAGE_TWO):
             # Fishing never waits on it; the whole read (both pages) is tried again later.
             self.state = replace(self.state, refresh_due=tuple(k for k in self.state.refresh_due if k != kind))

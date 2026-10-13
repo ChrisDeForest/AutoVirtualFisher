@@ -140,6 +140,20 @@ class ControllerTests(unittest.TestCase):
     def kinds(self):
         return [intent.kind for _, intent in self.sim.sent]
 
+    def test_a_cooldown_reply_ends_the_wait_at_once(self):
+        # Live, Oct 13: Discord was slow to send, the game's cooldown had not ended, and its "You must wait 0.1s
+        # before fishing again." went unrecognized: the run waited for a catch that never came.
+        self.make(config=replace(CONFIG, max_trips=3)).start()
+        while self.kinds().count('fish') < 1:
+            self.run_for(STEP)
+        self.sim.next_allowed += 1.5                       # the game counts its cooldown from a later moment
+        self.run_for(40)
+        results = [info.get('result') for info in AutomationJournal(self.journal_root).recover()['actions'].values()]
+        self.assertIn('cooldown', results)
+        self.assertNotIn('unknown', results)                 # never timed out
+        sends = self.fish_sends()
+        self.assertLess(max(b - a for a, b in zip(sends, sends[1:])), 10)
+
     def test_unreadable_profile_is_set_aside_and_retried_every_10_trips(self):
         # The same misread twice gives up at once; fishing goes on and /profile is tried again 10 trips later.
         self.sim.script = {0: 'unreadable_fixed', 1: 'unreadable_fixed'}

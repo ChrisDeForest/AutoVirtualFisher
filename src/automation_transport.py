@@ -168,7 +168,8 @@ class SimulationTransport:
                     'Fish quality: 1.00x\nTreasure chance: 1.00x\nTreasure quality: 1.00x\nXP Multiplier: 1.00x\n'
                     f'Fishing cooldown: {self.cooldown:g}s.', 'buffs')
         if now < self.next_allowed:
-            return f'You must wait {self.next_allowed - now:.1f} seconds before fishing again.', None
+            return (f'You must wait {self.next_allowed - now:.1f}s before fishing again.\n'
+                    f'Your cooldown: {self.cooldown:g}s'), None
         self.next_allowed = now + self.cooldown
         catches = {fish: self.random.randint(1, 9) for fish in FISH}
         xp = sum(catches.values()) * 10

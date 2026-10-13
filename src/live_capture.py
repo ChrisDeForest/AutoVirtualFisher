@@ -33,6 +33,11 @@ HARMLESS = re.compile(r"^(You don't have enough|You will now catch more fish|You
 # heights rather than pixels keeps this independent of window size, resolution, DPI, and Discord zoom.
 LEFT_MARGIN_HEIGHTS = 3
 RIGHT_REACH_HEIGHTS = 25
+# A shop's price button sits at the reply's right edge, past that reach (live: the league shop's "50" at 33 text
+# heights). A box that is only a price, level with a line in the column, is kept out to this reach.
+PRICE_REACH_HEIGHTS = 40
+# Its icon may read as up to four stray characters ("t.' 150" for the Hook icon and 150).
+PRICE_ONLY = re.compile(r'\D{0,4}?\$?\d[\d,]*')
 # A line starting this far right of the text edge may have lost a leading count to an emoji.
 REREAD_OFFSET_HEIGHTS = 1
 # Reread scales that must agree before a recovered count is trusted (one alone misread "10" as "IO").
@@ -132,6 +137,10 @@ def chat_column(boxes: list[dict]) -> tuple[list[dict], float | None, float | No
     height = median(box['bottom'] - box['top'] for box in anchors) or 1
     column = [box for box in boxes
               if left_edge - LEFT_MARGIN_HEIGHTS * height <= box['left'] <= left_edge + RIGHT_REACH_HEIGHTS * height]
+    column += [box for box in boxes
+               if left_edge + RIGHT_REACH_HEIGHTS * height < box['left'] <= left_edge + PRICE_REACH_HEIGHTS * height
+               and PRICE_ONLY.fullmatch(box['text'].strip())
+               and any(other['top'] < box['bottom'] and box['top'] < other['bottom'] for other in column)]
     column.sort(key=lambda box: box['top'])
     rows, ordered = [], []
     for box in column:

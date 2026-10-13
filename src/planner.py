@@ -51,17 +51,19 @@ def _switch_text(old, new):
     return 'Switch: ' + ', '.join(parts) if parts else None
 
 
-def _league(state, route, add):
+def _league(state, route, add, notes):
     """The first league upgrade in the route's order that has a price: bought with the Hooks on hand, or listed as
-    waiting for Hooks (Hooks earned while fishing are not counted). One before it whose price was not read is listed
-    as such; a maxed one (not in league_prices) is passed over."""
+    waiting for Hooks (Hooks earned while fishing are not counted). One whose price was not read is never a step
+    (it may cost more than the Hooks on hand): it is named in `notes`. A maxed one (not in league_prices) is passed
+    over."""
+    unpriced = []
     for name in route['league_order']:
         if name not in state.league_prices:
             continue
         price = state.league_prices[name]
         level = state.account.upgrades.get(name, 0) + 1
         if not price:
-            add('league', f'{name} {level}', 0, 'Hooks', why='price not read yet: read /shop league')
+            unpriced.append(f'{name} {level}')
             continue
         if state.hooks >= price:
             add('league', f'{name} {level}', price, 'Hooks', why='Hooks on hand')
@@ -70,7 +72,9 @@ def _league(state, route, add):
         else:
             add('league', f'{name} {level}', price, 'Hooks',
                 why=f'waiting for Hooks: {price - state.hooks} more needed ({state.hooks} on hand)')
-        return
+        break
+    if unpriced:
+        notes.add('league prices not read (/shop league): ' + ', '.join(unpriced) + '; left out of the route')
 
 
 def _until(current, action, charm_target, route, bait_wait=None):
@@ -162,7 +166,7 @@ def make_plan(state, ctx, plan_data, limits=(3000, 2.0), clock=time.monotonic):
                       'action': action, 'cost': cost, 'currency': currency, 'sell': sell, 'trips': fished,
                       'seconds': seconds, 'why': why, 'where': WHERE.get(kind, '') if where is None else where})
 
-    _league(state, route, add)
+    _league(state, route, add, plan['assumptions'])
     bait_step = {'bait': object()}                     # the last bait step, finished when the bait changes
 
     def close_bait():

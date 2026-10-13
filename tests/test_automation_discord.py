@@ -280,6 +280,17 @@ class DiscordTests(unittest.TestCase):
         self.transport.enable()
         return self.transport.send(self.intent)
 
+    def test_a_cooldown_reply_answers_the_fish_at_once(self):
+        # Live, Oct 13 (on screen as read): /fish reached the game before its cooldown ended. The reply answers it.
+        self.send()
+        self.driver.lines = self.driver.lines + [
+            'epicmouse used', 'fish', 'Virtual Fisher 3:22 PM', 'You must wait O.Is before fishing again.',
+            'Your cooldown: 2.7s', '@ Only you can see this • Dismiss message']
+        replies = self.transport.poll() or self.transport.poll()
+        self.assertEqual(len(replies), 1)
+        self.assertIn('You must wait', replies[0].text)
+        self.assertEqual(replies[0].correlation, 'a1')
+
     def test_target_verified_and_command_dispatched(self):
         self.assertTrue(self.transport.inspect_context().ok)
         self.assertEqual(self.send().action_id, 'a1')

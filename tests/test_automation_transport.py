@@ -59,7 +59,8 @@ class SimulationTransportTests(unittest.TestCase):
         self.clock.now = 1.0
         sim.send(intent(2))
         replies = sim.poll()
-        self.assertRegex(replies[-1].text, r'You must wait 2\.5 seconds before fishing again')
+        # The game's wording (Oct 13): "You must wait 0.1s before fishing again." and "Your cooldown: 2.7s".
+        self.assertRegex(replies[-1].text, r'You must wait 2\.5s before fishing again\.\nYour cooldown: 3\.5s')
         self.assertEqual(sim.totals['trips'], 1)
 
     def test_scripted_outcomes_are_reproducible(self):

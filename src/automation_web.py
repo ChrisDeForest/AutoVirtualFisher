@@ -413,6 +413,9 @@ def _account_rows(sections):
     if values:
         text = (_levels(values['items']) or 'nothing listed') + (
             f'; more at level {values["more_at_level"]}' if values.get('more_at_level') else '')
+        if (values.get('pages') or 1) > 1:
+            text += ('. Reminder: page 2 is not read yet. Open /shop special page 2 in Discord and ask Claude to '
+                     'add it.')
     rows.append(('Special shop', text if values else None, unread))
     values, unread = section('boosts')
     rows.append(('Boosts', (f'global {values["global_duration"]}' if values['global_duration'] else 'none')

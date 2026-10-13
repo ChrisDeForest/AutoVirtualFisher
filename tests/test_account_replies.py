@@ -13,6 +13,22 @@ class SpecialShopTests(unittest.TestCase):
         self.assertEqual((parsed['values']['inventory'], parsed['values']['more_at_level']), (49, 100))
         self.assertEqual(parsed['unread'], [])
 
+    def test_a_second_special_shop_page_shows_a_reminder(self):
+        # Only page 1 is read: when the shop grows a page 2 (expected from level 100), the Account box says so.
+        from src.automation_web import _account_rows
+        parsed = PARSERS['shop_special'](sample.SPECIAL + '\nPage 1/2')
+        self.assertEqual(parsed['values']['pages'], 2)
+        rows = {label: (text, unread) for label, text, unread in
+                _account_rows({'shop_special': {'values': parsed['values'], 'unread': []}})}
+        self.assertIn('page 2 is not read yet', rows['Special shop'][0])
+        one = PARSERS['shop_special'](sample.SPECIAL)['values']
+        rows = {label: text for label, text, _ in _account_rows({'shop_special': {'values': one, 'unread': []}})}
+        self.assertNotIn('page 2', rows['Special shop'])
+
+    def test_a_league_price_with_its_hook_icon_misread(self):
+        parsed = PARSERS['shop_league']("League Shop\nBalance: 11\nSuper Crates (2/5)\nt.' 150\nFind super crates.")
+        self.assertEqual(parsed['values']['items']['Super Crates']['price'], 150)
+
     def test_special_shop_is_an_account_read(self):
         from src.account_reads import ACCOUNT_READS
         self.assertEqual(ACCOUNT_READS['refresh_special'].command, '/shop special')

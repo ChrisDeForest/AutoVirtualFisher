@@ -126,12 +126,14 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(any('P18-29' in note for note in make_plan(late, ModelContext(DATA), PLAN,
                                                                    limits=(5, 2.0))['assumptions']))
 
-    def test_unread_league_price_is_a_step(self):
+    def test_an_unread_league_price_is_an_assumption_not_a_step(self):
+        # Live: no league price was read (11 Hooks on hand) and every league upgrade topped the route as "now".
         s = state()
         s.league_prices['Super Crates'] = None
-        league = [x for x in make_plan(s, ModelContext(DATA), PLAN, limits=(5, 2.0))['steps'] if x['kind'] == 'league']
-        self.assertEqual([x['action'] for x in league], ['Super Crates 3', 'Bait Helper 2'])
-        self.assertIn('price not read yet', league[0]['why'])
+        plan = make_plan(s, ModelContext(DATA), PLAN, limits=(5, 2.0))
+        league = [x for x in plan['steps'] if x['kind'] == 'league']
+        self.assertEqual([x['action'] for x in league], ['Bait Helper 2'])
+        self.assertTrue(any('Super Crates' in note and 'price' in note for note in plan['assumptions']))
 
     def test_missing_says_how_much_is_left(self):
         plan = make_plan(state(), ModelContext(DATA), PLAN, limits=(3, 2.0))

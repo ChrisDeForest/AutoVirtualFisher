@@ -823,3 +823,20 @@ class HeaderTests(unittest.TestCase):
         [message] = capture_frame(lines)['messages']
         self.assertEqual((message['kind'], message['invoked_by']), ('profile', 'epicmouse'))
         self.assertEqual(capture_frame(['Virtual Fisher [fish', 'Balance: $1.'])['messages'], [])   # the DM title
+
+
+class PriceColumnTests(unittest.TestCase):
+    def test_a_price_button_level_with_a_shop_item_is_kept(self):
+        # Live (Oct 13): the league shop's "50" and "100" sat at the reply's right edge, past the column's reach,
+        # so no league price was ever read and the plan listed every upgrade as "price not read yet".
+        from src.live_capture import chat_column
+        def box(text, left, top, right):
+            return dict(text=text, left=left, top=top, right=right, bottom=top + 15)
+        boxes = [box('League Shop', 389, 866, 480), box('Balance: 11', 389, 942, 454),
+                 box('Pet Helper (0/5)', 389, 979, 505), box('50', 881, 986, 896),
+                 box('Bait Helper (1/5)', 389, 1036, 507), box('100', 875, 1043, 896),
+                 box('Super Crates (2/5)', 389, 1093, 520), box("t.' 150", 857, 1095, 896),   # the Hook icon read as t.'
+                 box('May 5, 2019', 992, 495, 1062), box('42', 1000, 300, 1015)]   # the profile panel, far right
+        texts = [b['text'] for b in chat_column(boxes)[0]]
+        self.assertEqual(texts, ['League Shop', 'Balance: 11', 'Pet Helper (0/5)', '50', 'Bait Helper (1/5)', '100',
+                                 'Super Crates (2/5)', "t.' 150"])
