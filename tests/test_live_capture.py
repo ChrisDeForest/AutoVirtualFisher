@@ -797,3 +797,14 @@ class ChannelTests(unittest.TestCase):
         from src.live_capture import channel_matches
         hints = self.hints(self.box('Search Virtual ...', 70, left=1060))
         self.assertFalse(channel_matches({'channel': None, 'channel_hints': hints}, 'Virtual Fisher'))
+
+
+class HeaderTests(unittest.TestCase):
+    def test_a_reply_whose_time_lost_its_am_pm_is_still_a_reply(self):
+        # Live, Oct 13: "Virtual Fisher 1:49" (PM not read) hid three /profile replies in a row; the run stopped.
+        from src.live_capture import capture_frame
+        lines = ['epicmouse used', 'profile', 'Virtual Fisher 1:49', 'Inventory of epicmouse', 'Balance: $416,556.',
+                 'P4 Level 70, 42,925/46,500 XP to next leveL', 'Message @Virtual Fisher']
+        [message] = capture_frame(lines)['messages']
+        self.assertEqual((message['kind'], message['invoked_by']), ('profile', 'epicmouse'))
+        self.assertEqual(capture_frame(['Virtual Fisher [fish', 'Balance: $1.'])['messages'], [])   # the DM title
