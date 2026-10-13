@@ -69,7 +69,8 @@ REFRESH_GRACE = 3.0
 # read used once by a reply check (a reply that must be seen the same twice is seen in two separate reads); the read
 # that delivers a reply also serves the send right after it. A read takes 0.5-2 s live.
 FRESH_READ = 0.75
-SENT = re.compile(r'(\d{1,2}):(\d{2})\s*([AP])M', re.I)
+# A send time; OCR can lose its AM/PM ('Virtual Fisher 4:15').
+SENT = re.compile(r'(\d{1,2}):(\d{2})(?:\s*([AP])M)?', re.I)
 
 
 def _bottom(messages):
@@ -92,15 +93,27 @@ def _is_new(bottom, baseline):
     if baseline is None:
         return True
     (key, sent, run), (old_key, old_sent, old_run) = bottom, baseline
-    return key != old_key or bool(sent and old_sent and sent != old_sent) or run > old_run
+    return key != old_key or bool(sent and old_sent and not _same_time(sent, old_sent)) or run > old_run
 
 
 def _minute_of_day(sent):
+    """(minute of the day, 1440), or (minute of the half day, 720) when the AM/PM was not read; None if unread."""
     match = SENT.search(sent or '')
     if not match:
         return None
+    if match[3] is None:
+        return (int(match[1]) % 12) * 60 + int(match[2]), 720
     hour = int(match[1]) % 12 + (12 if match[3].upper() == 'P' else 0)
-    return hour * 60 + int(match[2])
+    return hour * 60 + int(match[2]), 1440
+
+
+def _same_time(sent, other):
+    """Whether two read send times are the same minute; one without its AM/PM matches either half of the day."""
+    first, second = _minute_of_day(sent), _minute_of_day(other)
+    if first is None or second is None:
+        return sent == other
+    period = min(first[1], second[1])
+    return first[0] % period == second[0] % period
 from .live_capture import CAPTCHA as CHALLENGE
 
 
@@ -341,7 +354,7 @@ class DiscordTransport:
         sent = _minute_of_day(message.get('sent'))
         return (message['kind'] == self.pending.expected_reply_kind
                 and message.get('invoked_by') == self.identity.display_name
-                and sent is not None and (sent - self.sent_minute) % 1440 <= 1
+                and sent is not None and (sent[0] - self.sent_minute) % sent[1] <= 1
                 and self.monotonic() - self.sent_clock >= REFRESH_GRACE)
 
     def forget(self):

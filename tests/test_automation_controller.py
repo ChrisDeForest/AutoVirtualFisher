@@ -209,7 +209,7 @@ class ControllerTests(unittest.TestCase):
         self.run_for(40)
         kinds = [intent.kind for _, intent in self.sim.sent]
         self.assertEqual(kinds[:3], ['refresh_profile', 'refresh_profile', 'refresh_buffs'])
-        self.assertGreaterEqual(self.sim.sent[1][0] - self.sim.sent[0][0], 20)
+        self.assertGreaterEqual(self.sim.sent[1][0] - self.sim.sent[0][0], CONFIG.reply_timeout)
         self.assertEqual(self.saved_trips(), 1)
 
     def test_discord_sending_wait_is_bounded_and_never_resends(self):
@@ -543,7 +543,7 @@ class ControllerTests(unittest.TestCase):
         while not any(intent.kind == 'fish' for _, intent in self.sim.sent):
             self.run_for(STEP)
         self.sim.unfocus()                          # the reply is on its way; Discord is in the background
-        self.run_for(45)                            # longer than the 20 s reply timeout
+        self.run_for(45)                            # longer than the 15 s reply timeout
         status = self.controller.status()
         self.assertEqual(status['phase'], 'WAITING_FOCUS')
         self.assertIn('fish was sent', status['reason'])

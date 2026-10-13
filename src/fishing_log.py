@@ -34,6 +34,8 @@ def _known_names():
     return EXOTIC_FISH + CHARM_NAMES + tuple(row['name'] for row in (load_fish_reference() or {}).values())
 
 
+# Cached: it depends on the name alone, and summing a long run's finds called it thousands of times per page refresh.
+@cache
 def known_name(name: str) -> str:
     """A found item's name as the game writes it when it is a known fish, else as read. A charm's emoji read
     as one trailing letter ("Quantity Charm Q") is dropped."""

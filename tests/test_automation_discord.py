@@ -647,6 +647,23 @@ class IdenticalReplyTests(unittest.TestCase):
         [reply] = self.poll(0.5)
         self.assertEqual(reply.correlation, 'p1')
 
+    def test_identical_refresh_whose_header_lost_its_am_pm_is_accepted(self):
+        # Live, Oct 13: two /profile replies in a row were never taken; the header read 'Virtual Fisher 11:41'.
+        profile = [line.replace('11:41 AM', '11:41') for line in self.profile]
+        self.assertNotEqual(profile, self.profile)
+        self.driver.lines = profile + profile
+        self.send()
+        self.assertEqual(self.poll(1), [])
+        self.assertEqual(self.poll(1), [])
+        self.assertEqual(self.poll(1.5), [])
+        [reply] = self.poll(0.5)
+        self.assertEqual(reply.correlation, 'p1')
+
+    def test_the_same_send_time_read_with_and_without_am_pm_is_not_a_new_reply(self):
+        from src.automation_discord import _is_new
+        self.assertFalse(_is_new((('profile', 'x'), '11:41', 1), (('profile', 'x'), '11:41 AM', 1)))
+        self.assertTrue(_is_new((('profile', 'x'), '11:42', 1), (('profile', 'x'), '11:41 AM', 1)))
+
     def test_identical_refresh_from_an_earlier_minute_is_not_the_reply(self):
         self.driver.lines = self.profile + self.profile
         self.local[0] = datetime(2026, 10, 6, 14, 56, 5)

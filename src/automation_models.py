@@ -41,7 +41,7 @@ class AutomationConfig:
     context_id: str | None         # the channel the run is pinned to
     max_trips: int | None = None   # bounded runs stop after this many confirmed trips...
     max_seconds: float | None = None  # ...or this long, whichever comes first
-    reply_timeout: float = 20.0    # seconds without a correlated reply before the action becomes uncertain
+    reply_timeout: float = 15.0    # seconds without a correlated reply before the action becomes uncertain
     cooldown_margin: float = 0.0   # seconds added to the verified cooldown (the random jitter is added too)
     # A random extra wait before each fish: (share of fish, from, to, step) in seconds, ends included.
     jitter_bands: tuple = ((0.75, 0.0, 0.25, 0.025), (0.175, 0.25, 0.5, 0.05), (0.075, 0.5, 0.75, 0.05))

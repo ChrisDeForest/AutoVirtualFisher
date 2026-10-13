@@ -23,36 +23,44 @@ async def _read(path: Path, scale: float, region: tuple | None = None) -> list[d
 
     file = await StorageFile.get_file_from_path_async(str(Path(path).resolve()))
     stream = await file.open_async(FileAccessMode.READ)
-    decoder = await BitmapDecoder.create_async(stream)
-    transform = BitmapTransform()
-    transform.scaled_width = int(decoder.pixel_width * scale)
-    transform.scaled_height = int(decoder.pixel_height * scale)
-    transform.interpolation_mode = BitmapInterpolationMode.FANT
-    offset_x = offset_y = 0
-    if region:
-        left, top, right, bottom = (max(0, value) for value in region)
-        right, bottom = min(right, decoder.pixel_width), min(bottom, decoder.pixel_height)
-        if right <= left or bottom <= top:
-            return []
-        offset_x, offset_y = left, top
-        transform.bounds = BitmapBounds(int(left * scale), int(top * scale), int((right - left) * scale),
-                                        int((bottom - top) * scale))
-    bitmap = await decoder.get_software_bitmap_transformed_async(
-        BitmapPixelFormat.BGRA8, BitmapAlphaMode.PREMULTIPLIED, transform,
-        ExifOrientationMode.IGNORE_EXIF_ORIENTATION, ColorManagementMode.DO_NOT_COLOR_MANAGE)
-    engine = OcrEngine.try_create_from_user_profile_languages()
-    if engine is None:
-        raise RuntimeError('Windows has no OCR language installed for your profile languages.')
-    result = await engine.recognize_async(bitmap)
-    lines = []
-    for line in result.lines:
-        rects = [word.bounding_rect for word in line.words]
-        lines.append({'text': line.text,
-                      'left': min(rect.x for rect in rects) / scale + offset_x,
-                      'top': min(rect.y for rect in rects) / scale + offset_y,
-                      'right': max(rect.x + rect.width for rect in rects) / scale + offset_x,
-                      'bottom': max(rect.y + rect.height for rect in rects) / scale + offset_y})
-    return lines
+    bitmap = None
+    try:
+        decoder = await BitmapDecoder.create_async(stream)
+        transform = BitmapTransform()
+        transform.scaled_width = int(decoder.pixel_width * scale)
+        transform.scaled_height = int(decoder.pixel_height * scale)
+        transform.interpolation_mode = BitmapInterpolationMode.FANT
+        offset_x = offset_y = 0
+        if region:
+            left, top, right, bottom = (max(0, value) for value in region)
+            right, bottom = min(right, decoder.pixel_width), min(bottom, decoder.pixel_height)
+            if right <= left or bottom <= top:
+                return []
+            offset_x, offset_y = left, top
+            transform.bounds = BitmapBounds(int(left * scale), int(top * scale), int((right - left) * scale),
+                                            int((bottom - top) * scale))
+        bitmap = await decoder.get_software_bitmap_transformed_async(
+            BitmapPixelFormat.BGRA8, BitmapAlphaMode.PREMULTIPLIED, transform,
+            ExifOrientationMode.IGNORE_EXIF_ORIENTATION, ColorManagementMode.DO_NOT_COLOR_MANAGE)
+        engine = OcrEngine.try_create_from_user_profile_languages()
+        if engine is None:
+            raise RuntimeError('Windows has no OCR language installed for your profile languages.')
+        result = await engine.recognize_async(bitmap)
+        lines = []
+        for line in result.lines:
+            rects = [word.bounding_rect for word in line.words]
+            lines.append({'text': line.text,
+                          'left': min(rect.x for rect in rects) / scale + offset_x,
+                          'top': min(rect.y for rect in rects) / scale + offset_y,
+                          'right': max(rect.x + rect.width for rect in rects) / scale + offset_x,
+                          'bottom': max(rect.y + rect.height for rect in rects) / scale + offset_y})
+        return lines
+    finally:
+        # Closed at once, not left to garbage collection: a x4 read of a 1294x1399 window is about 115 MB of
+        # pixels, and the open stream holds the screenshot file that is deleted right after.
+        if bitmap is not None:
+            bitmap.close()
+        stream.close()
 
 
 def read_image_boxes(path: Path) -> list[dict]:

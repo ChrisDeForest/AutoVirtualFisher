@@ -125,7 +125,8 @@ def clean_ocr(lines: list[str], label: str, capture: bool = False) -> str:
         if _garbled_button(line):
             continue
         if MESSAGE_HEADER.fullmatch(line):
-            header('Virtual Fisher', True, (TIME.search(line) or [None])[0])
+            # A time whose AM/PM went unread is kept as read ('4:15'): the transport compares it by the minute.
+            header('Virtual Fisher', True, (TIME.search(line) or re.search(r'\d{1,2}:\d{2}', line) or [None])[0])
             continue
         if CHROME.fullmatch(line):
             continue
