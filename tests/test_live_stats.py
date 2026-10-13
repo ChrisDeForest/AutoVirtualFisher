@@ -324,3 +324,15 @@ class ZoomedOcrTests(unittest.TestCase):
             self.assertEqual(synced_stats(f'Current biome: {read}', '')['profile']['biome'], biome)
         for read, pet in (('Dolphln', 'Dolphin'), ('Pufter', 'Puffer'), ('Tune', 'Tuna'), ('Goldfish', 'Goldfish')):
             self.assertEqual(synced_stats(f'Pet: {read} (Level 5)', '')['profile']['pet'], pet)
+
+
+class FishIconTests(unittest.TestCase):
+    def test_a_catch_with_its_icon_misread_is_the_fish(self):
+        # Live, Oct 13: "18 \ufffdV Fiery Puffer"; every reread saw it, so the trip was never counted.
+        from src.fishing_log import known_name, parse_fishing
+        from src.live_capture import fishing_problems
+        text = ('You caught:\n2 Tropical Fish\n18 \ufffdV Fiery Puffer\n2 Hot Cod\n+1,397 XP')
+        self.assertEqual(fishing_problems(text), [])
+        self.assertEqual(parse_fishing(text)['catches'].get('Fiery Puffer'), 18)
+        self.assertEqual(known_name('V Fiery Puffer').casefold(), 'fiery puffer')
+        self.assertEqual(known_name('Xy Fiery Puffer'), 'Xy Fiery Puffer')     # two letters: a word, not an icon

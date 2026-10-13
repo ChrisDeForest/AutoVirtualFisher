@@ -330,13 +330,17 @@ def _cooldown_seconds(state: dict) -> float | None:
     return None
 
 
+# The search box: "Search Virtual Fisher#7036". OCR can misread the tag's digits ("#7O36") or space it out.
+SEARCH = re.compile(r'Search\s+(.+?)(?:\s*#\s*\w{4})?')
+
+
 def channel_name(boxes: list[dict], image_height: float) -> str | None:
     """The open DM or server as Discord's search box shows it in the capture ("Search Virtual Fisher#7036",
     "Search Fishing Club"), read from the top bar only; None when OCR did not read it."""
     for box in sorted(boxes, key=lambda box: box['top']):
         if box['top'] > image_height * TOP_BAR_FRACTION:
             break
-        if match := re.fullmatch(r'Search\s+(.+?)(?:#\d{4})?', box['text'].strip()):
+        if match := re.fullmatch(SEARCH, box['text'].strip()):
             name = match[1].strip()
             # A narrow (snapped) window shortens it to "Search Virtual …": not a name on its own.
             return None if TRUNCATED.search(name) else name
@@ -354,11 +358,11 @@ def channel_hints(boxes: list[dict], image_height: float) -> dict:
     for box in boxes:
         text = box['text'].strip()
         if box['top'] <= image_height * TOP_BAR_FRACTION:
-            if match := re.fullmatch(r'Search\s+(.+?)(?:#\d{4})?', text):
+            if match := re.fullmatch(SEARCH, text):
                 hints['search'] = hints['search'] or match[1].strip()
             else:
                 hints['header'].append(text)
-        if match := re.fullmatch(r'Message\s*@\s*(.+)', text):
+        if match := re.fullmatch(r'[I|l]?M?essage\s*@\s*(.+)', text, re.I):
             hints['composer'] = match[1].strip()
     return hints
 

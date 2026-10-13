@@ -38,7 +38,18 @@ def known_name(name: str) -> str:
     """A found item's name as the game writes it when it is a known fish, else as read. A charm's emoji read
     as one trailing letter ("Quantity Charm Q") is dropped."""
     name = re.sub(r'(\bCharm)\s+\S$', r'\1', name, flags=re.I)
-    return next((known for known in _known_names() if _fold(known) == _fold(name)), name)
+    found = next((known for known in _known_names() if _fold(known) == _fold(name)), None)
+    return found or next((known for known in _known_names() if _fold(known) == _fold(without_icon(name))), name)
+
+
+def without_icon(name: str) -> str:
+    """A catch's name without its icon when OCR read the icon as a mark of up to two characters with at most one
+    letter, and what follows is exactly a known name ("�V Fiery Puffer" is Fiery Puffer, seen with Discord
+    zoomed in). Otherwise the name as read: a real word in front is never dropped."""
+    icon = re.fullmatch(r'(\S{1,2})\s+(.+)', name)
+    if icon and not re.search(r'[A-Za-z]{2}|\d', icon[1]) and icon[2].casefold() in map(str.casefold, _known_names()):
+        return icon[2]
+    return name
 
 
 def _add(counts, name, amount):
@@ -125,8 +136,8 @@ def parse_fishing(text: str) -> dict:
         if mode == 'catch':
             catch = re.fullmatch(r'(\d{1,3}(?:,\d{3})+|\d+)\s+(.+)', line)
             if catch and _name(catch[2]):
-                _add(tally['catches'], _name(catch[2]), _number(catch[1]))
-                _add(trip['catches'], _name(catch[2]), _number(catch[1]))
+                _add(tally['catches'], without_icon(_name(catch[2])), _number(catch[1]))
+                _add(trip['catches'], without_icon(_name(catch[2])), _number(catch[1]))
                 continue
             mode = None
         if match := re.fullmatch(rf'\+({NUMBER}) XP', line, re.I):

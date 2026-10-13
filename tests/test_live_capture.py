@@ -731,6 +731,14 @@ class ChannelEvidenceTests(unittest.TestCase):
                           'only the top bar counts, not chat text')
         self.assertIsNone(channel_name([], 1000))
 
+    def test_a_misread_tag_after_the_name_is_still_the_tag(self):
+        # The DM search box shows "Search Virtual Fisher#7036"; OCR can misread or space out the tag.
+        from src.live_capture import channel_hints, channel_name
+        for text in ('Search Virtual Fisher#7036', 'Search Virtual Fisher#7O36', 'Search Virtual Fisher # 7036'):
+            self.assertEqual(channel_name([{'text': text, 'top': 40}], 1000), 'Virtual Fisher')
+        box = {'text': 'IMessage@Virtual Fisher', 'top': 1340}
+        self.assertEqual(channel_hints([box], 1399)['composer'], 'Virtual Fisher')   # the caret read as I
+
 
 class CapturePngTests(unittest.TestCase):
     def test_bmp_capture_converts_to_png(self):
