@@ -336,3 +336,15 @@ class FishIconTests(unittest.TestCase):
         self.assertEqual(parse_fishing(text)['catches'].get('Fiery Puffer'), 18)
         self.assertEqual(known_name('V Fiery Puffer').casefold(), 'fiery puffer')
         self.assertEqual(known_name('Xy Fiery Puffer'), 'Xy Fiery Puffer')     # two letters: a word, not an icon
+
+
+class LevelBonusTests(unittest.TestCase):
+    def test_a_level_up_bonus_is_read_from_the_trip(self):
+        # Live, Oct 13, level 75.
+        text = ('epicmouse9925\nYou caught:\n23 :fire_puffer: Fiery Puffer\n8 :hot_cod: Hot Cod\n+3,183 XP\n'
+                ':fish: LEVEL UP! :fish: You are now level 75.\n$120,000 received for leveling up.\n'
+                '10% INCREASED SELLING PRICE FOR LEVELING UP!')
+        tally = parse_fishing(text)
+        self.assertEqual(tally['level_bonuses'], ['10% INCREASED SELLING PRICE'])
+        self.assertEqual((tally['level_ups'], tally['level_up_money']), ([75], 120000))
+        self.assertEqual(tally['warnings'], [])

@@ -297,6 +297,14 @@ class ControllerTests(unittest.TestCase):
                           'refresh_profile', 'refresh_buffs', 'fish', 'fish'])
         self.assertEqual(self.controller.status()['dashboard']['trips_since_sync'], 2)
 
+    def test_a_level_up_bonus_reads_buffs_again(self):
+        # Live: "10% INCREASED SELLING PRICE FOR LEVELING UP!" at level 75 changes /buffs at once.
+        self.sim.script = {3: 'level_bonus'}
+        self.make(config=replace(CONFIG, max_trips=4, resync_trips=100)).start()
+        self.run_for(60)
+        self.assertEqual(self.kinds(), ['refresh_profile', 'refresh_buffs', 'fish', 'fish', 'refresh_buffs',
+                                        'fish', 'fish'])
+
     def test_unreadable_resync_never_stops_fishing(self):
         self.sim.script = {5: 'unreadable_fixed', 6: 'unreadable_fixed'}
         self.make(config=replace(CONFIG, max_trips=5, resync_trips=3)).start()

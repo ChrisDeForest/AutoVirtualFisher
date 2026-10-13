@@ -770,6 +770,11 @@ class AutomationController:
                 self.state = replace(self.state, refresh_due=tuple(
                     kind for kind in ('refresh_profile', 'refresh_buffs', 'refresh_charms', *self._account_reads())
                     if kind in self.config.capabilities))
+            # A milestone level-up raises a multiplier at once ("10% INCREASED SELLING PRICE FOR LEVELING UP!"):
+            # /buffs is read again at the next gap.
+            if (tally.get('level_bonuses') and 'refresh_buffs' in self.config.capabilities
+                    and 'refresh_buffs' not in self.state.refresh_due):
+                self.state = replace(self.state, refresh_due=self.state.refresh_due + ('refresh_buffs',))
             self._count_retries()
             self._project(action_id, tally)
             self._model_observe(tally)

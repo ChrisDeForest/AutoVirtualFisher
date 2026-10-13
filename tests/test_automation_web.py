@@ -366,13 +366,20 @@ class AutomationWebTests(unittest.TestCase):
         self.assertIn('<dd class="known" data-left="2.46">in 2.5 s', render_panel(status))
         self.assertIn('[data-left]', SCRIPT)
         self.assertIn('requestAnimationFrame', SCRIPT)
+        # The status strip counts down too, from the same value.
+        status['reason'] = 'Next fish in 3.4 s.'
+        self.assertIn('<span class="why">Next fish <span data-left="2.46">in 2.5 s</span>.</span>', render_panel(status))
 
-    def test_the_xp_line_glides_from_where_it_was(self):
-        # Replacing the panel would restart the bar; the script starts the new bar where the old one stood.
+    def test_the_xp_line_is_moved_by_the_page_across_levels(self):
+        # Live: a big XP gain moved the bar a little, then it snapped (a level-up made the new bar shorter, and a
+        # refresh mid-glide restarted it). The page keeps its own position and eases it through each level's end.
         from src.automation_web import SCRIPT, STYLE
-        self.assertIn("panel.querySelector('.line .cast')", SCRIPT)
+        status = {'running': False, 'reason': 'done', 'phase': 'STOPPED', 'trips': 0, 'config': {'max_trips': 0},
+                  'dashboard': {'profile': {'level': 31, 'xp_current': 1500, 'xp_required': 6000}}}
+        self.assertIn('class="line" data-level="31" data-share="25.0"', render_panel(status))
+        self.assertIn('data-share', SCRIPT)
         self.assertIn('@keyframes', STYLE)
-        self.assertIn('prefers-reduced-motion', STYLE)
+        self.assertNotIn('transition:width', STYLE)
 
     def test_tab_script_keeps_the_hash_across_refreshes(self):
         from src.automation_web import SCRIPT

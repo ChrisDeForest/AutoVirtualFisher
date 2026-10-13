@@ -80,14 +80,13 @@ STYLE = """<style>
 @media(max-width:900px) { .finds { grid-template-columns:minmax(0,1fr); } }
 @media(max-width:900px) { .boxes, .rewards-row { grid-template-columns:minmax(0,1fr); } .box.wide { grid-column:auto; }
   .start .pair { grid-template-columns:minmax(0,1fr); } }
-/* The bar glides over the 2 s between refreshes, so XP gained trip by trip moves it steadily; light runs along
-   the line and the bobber floats. */
+/* The page moves the bar (see the script); light runs along the line and the bobber floats. */
 @keyframes flow { from { background-position:0 0; } to { background-position:160px 0; } }
 @keyframes float { 0%, 100% { transform:translateY(0); } 50% { transform:translateY(-3px); } }
 @media(prefers-reduced-motion:no-preference) {
-  .line .cast { transition:width 2s linear; background:linear-gradient(90deg, var(--sea) 0, #c8f5ee 40px, var(--sea) 80px,
+  .line .cast { background:linear-gradient(90deg, var(--sea) 0, #c8f5ee 40px, var(--sea) 80px,
     var(--sea) 160px) 0 0 / 160px 2px repeat-x; animation:flow 1.6s linear infinite; }
-  .line .bobber { transition:left 2s linear; animation:float 2.4s ease-in-out infinite; } }
+  .line .bobber { animation:float 2.4s ease-in-out infinite; } }
 </style>"""
 SCRIPT = """<script nonce="{nonce}">
 (function () {
@@ -115,27 +114,37 @@ SCRIPT = """<script nonce="{nonce}">
     var at = performance.now() + parseFloat(el.getAttribute('data-left')) * 1000;
     if (deadline === null || Math.abs(at - deadline) > 500) deadline = at;
   }
-  function tick() {
-    var el = panel.querySelector('[data-left]');
-    if (el && deadline !== null) {
-      var left = Math.max(0, (deadline - performance.now()) / 1000);
-      el.textContent = left >= 0.05 ? 'in ' + left.toFixed(1) + ' s' : 'now';
+  // The XP line is moved here, never by the refresh: its place is level * 100 + percent, eased toward the newest
+  // read every frame, so a big gain runs smoothly through the end of a level into the next. A lower level
+  // (prestige) or reduced motion places it at once.
+  var still = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var shown = null, last = null;
+  function moveLine(now) {
+    var line = panel.querySelector('.line[data-share]');
+    if (!line) { shown = null; return; }
+    var goal = Number(line.getAttribute('data-level')) * 100 + Number(line.getAttribute('data-share'));
+    if (shown === null || still || goal < Math.floor(shown / 100) * 100) {
+      shown = goal;
+    } else {
+      shown += (goal - shown) * (1 - Math.exp(-(now - last) / 450));
+      if (Math.abs(goal - shown) < 0.02) shown = goal;
     }
+    var share = shown - Math.floor(shown / 100) * 100;
+    if (shown === goal) share = Number(line.getAttribute('data-share'));
+    line.querySelector('.cast').style.width = share + '%';
+    line.querySelector('.bobber').style.left = share + '%';
+  }
+  function tick(now) {
+    var left = deadline === null ? null : Math.max(0, (deadline - performance.now()) / 1000);
+    panel.querySelectorAll('[data-left]').forEach(function (el) {
+      if (left !== null) el.textContent = left >= 0.05 ? 'in ' + left.toFixed(1) + ' s' : 'now';
+    });
+    moveLine(now);
+    last = now;
     requestAnimationFrame(tick);
   }
   syncCountdown();
-  requestAnimationFrame(tick);
-  // The XP line starts where the old one stood and glides to its new place (a new level starts afresh).
-  function glide(from) {
-    var cast = panel.querySelector('.line .cast'), bob = panel.querySelector('.line .bobber');
-    if (!from || !cast || !bob || parseFloat(cast.style.width) < parseFloat(from[0])) return;
-    var to = [cast.style.width, bob.style.left];
-    cast.style.transition = bob.style.transition = 'none';
-    cast.style.width = from[0]; bob.style.left = from[1];
-    void cast.offsetWidth;
-    cast.style.transition = bob.style.transition = '';
-    cast.style.width = to[0]; bob.style.left = to[1];
-  }
+  requestAnimationFrame(function (now) { last = now; tick(now); });
   setInterval(function () {
     fetch('/automation/panel', {cache: 'no-store'}).then(function (r) { return r.text(); }).then(function (html) {
       var was = panel.getAttribute('data-running');
@@ -144,12 +153,10 @@ SCRIPT = """<script nonce="{nonce}">
       panel.querySelectorAll('.scroll').forEach(function (el, i) {
         kept[(el.getAttribute('aria-label') || '') + '#' + i] = [el.scrollTop, el.scrollLeft];
       });
-      var oldCast = panel.querySelector('.line .cast'), oldBob = panel.querySelector('.line .bobber');
-      var from = oldCast && oldBob ? [oldCast.style.width, oldBob.style.left] : null;
       panel.innerHTML = html;
       showTab();
       syncCountdown();
-      glide(from);
+      moveLine(performance.now());
       panel.querySelectorAll('.scroll').forEach(function (el, i) {
         var at = kept[(el.getAttribute('aria-label') || '') + '#' + i];
         if (at) { el.scrollTop = at[0]; el.scrollLeft = at[1]; }
@@ -229,7 +236,10 @@ def _level_line(profile, dashboard):
     line = ''
     if xp is not None and required:
         share = max(0.0, min(1.0, xp / required)) * 100
-        line = (f'<div class="line" role="img" aria-label="{escape(meta[0])}"><span class="cast" '
+        # The page moves the line itself from data-level and data-share (see SCRIPT); the inline widths are where
+        # it stands without the script.
+        line = (f'<div class="line" data-level="{level}" data-share="{share:.1f}" role="img" '
+                f'aria-label="{escape(meta[0])}"><span class="cast" '
                 f'style="width:{share:.1f}%"></span><span class="bobber" style="left:{share:.1f}%"></span></div>')
     return (f'<div class="level"><div class="level-head"><p class="level-number">{escape(title)}</p>'
             + ''.join(f'<span class="level-meta">{escape(item)}</span>' for item in meta) + f'</div>{line}</div>')
@@ -574,8 +584,14 @@ def render_panel(status, mode=None) -> str:
         buttons = f'<div class="actions">{toggle}{_button("stop", "Stop now")}</div>'
     active = label in ('Fishing', 'Refreshing stats') or label.startswith('Reading ')
     tone = 'on' if active else ('halted' if running else '')
+    reason = escape(status['reason'])
+    next_fish = status.get('next_eligible_in')
+    if running and next_fish is not None and status['reason'].startswith('Next fish in '):
+        # Counted down in the page, from the same value as the Next fish row.
+        reason = (f'Next fish <span data-left="{next_fish:.2f}">'
+                  + (f'in {next_fish:.1f} s' if next_fish else 'now') + '</span>.')
     strip = (f'<div class="strip {tone}"><span class="phase">{escape(label)}</span>'
-             f'<span class="why">{escape(status["reason"])}</span>{buttons}</div>')
+             f'<span class="why">{reason}</span>{buttons}</div>')
     dashboard = status.get('dashboard') or {}
     profile = dashboard.get('profile') or {}
     gained = dashboard.get('gained') or {}
@@ -601,7 +617,6 @@ def render_panel(status, mode=None) -> str:
 
     sources = run.get('sources') or {}
     limit = status['config']['max_trips']
-    next_fish = status.get('next_eligible_in')
     sync_note = ''
     if dashboard.get('next_sync_in') is not None and dashboard.get('synced_at'):
         sync_note = (f'Profile and buffs read {dashboard["trips_since_sync"]:,} trips ago; read again in '

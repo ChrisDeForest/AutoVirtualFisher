@@ -348,6 +348,10 @@ def channel_name(boxes: list[dict], image_height: float) -> str | None:
 
 
 TRUNCATED = re.compile(r'(\.{2,}|…)$')
+# The message box placeholder sits below this share of the window's height.
+COMPOSER_FRACTION = .85
+# How close a misread search name must be to the expected one (difflib ratio) for the message box to confirm it.
+SEARCH_CLOSE = .8
 
 
 def channel_hints(boxes: list[dict], image_height: float) -> dict:
@@ -362,7 +366,9 @@ def channel_hints(boxes: list[dict], image_height: float) -> dict:
                 hints['search'] = hints['search'] or match[1].strip()
             else:
                 hints['header'].append(text)
-        if match := re.fullmatch(r'[I|l]?M?essage\s*@\s*(.+)', text, re.I):
+        # The message box is at the bottom of the window; the same words higher up are chat text.
+        if box['top'] >= image_height * COMPOSER_FRACTION and (
+                match := re.fullmatch(r'[I|l]?M?essage\s*@\s*(.+)', text, re.I)):
             hints['composer'] = match[1].strip()
     return hints
 
@@ -376,11 +382,16 @@ def channel_matches(context: dict, expected: str) -> bool:
         return True
     hints = context.get('channel_hints') or {}
     search = (hints.get('search') or '').strip()
+    composer = (hints.get('composer') or '').casefold() == expected_key
     if search:
         prefix = TRUNCATED.sub('', search).strip().casefold()
         if not TRUNCATED.search(search) or not expected_key.startswith(prefix):
-            return False
-    if (hints.get('composer') or '').casefold() == expected_key:
+            # A full search name that is a close misread ("Virtual Flsher", "Virtual Fisher#7036 Q") gives way to
+            # the message box placeholder; live, one misread repeated on a still screen until the DM was reopened.
+            from difflib import SequenceMatcher
+            name = search.split('#')[0].strip().casefold()
+            return composer and SequenceMatcher(None, name, expected_key).ratio() >= SEARCH_CLOSE
+    if composer:
         return True
     return any(text.casefold() == expected_key or text.casefold().startswith(expected_key + ' ')
                for text in hints.get('header') or [])

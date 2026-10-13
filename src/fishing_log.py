@@ -59,7 +59,7 @@ def _add(counts, name, amount):
 def parse_fishing(text: str) -> dict:
     tally = {'schema_version': FISHING_SCHEMA_VERSION, 'trips': 0, 'boosted_trips': 0, 'catches': {},
              'fishing_xp': 0, 'chest_xp': 0, 'chest_money': 0, 'finds': {}, 'chest_contents': {}, 'charm_levels': {}, 'level_ups': [],
-             'level_up_money': 0, 'unlocks': [], 'quests_completed': [], 'bait_ran_out': [],
+             'level_up_money': 0, 'level_bonuses': [], 'unlocks': [], 'quests_completed': [], 'bait_ran_out': [],
              'trip_details': [], 'warnings': [], 'unparsed_line_count': 0}
     mode = None
     trip = None
@@ -153,6 +153,10 @@ def parse_fishing(text: str) -> dict:
             event(f'Reached level {match[1]}')
         elif match := re.fullmatch(rf'\$({NUMBER}) received for leveling up\.?', line, re.I):
             tally['level_up_money'] += _number(match[1])
+        elif match := re.fullmatch(r'(.+?) FOR LEVELING UP!?', line, re.I):
+            # A milestone level's bonus to the multipliers: "10% INCREASED SELLING PRICE FOR LEVELING UP!".
+            tally['level_bonuses'].append(match[1])
+            event(f'Level-up bonus: {match[1]}')
         elif match := re.match(r'UNLOCKED (.+?)\.(?:\s|$)', line):
             tally['unlocks'].append(match[1])
             event(f'Unlocked {match[1]}')

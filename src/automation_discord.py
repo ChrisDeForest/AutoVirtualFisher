@@ -218,7 +218,9 @@ class DiscordTransport:
         if context.get('window') != self.window:
             return 'Different Discord window.'
         if not channel_matches(context, self.channel):
-            return 'Different or unreadable channel.'
+            hints = context.get('channel_hints') or {}
+            return (f'Different or unreadable channel (read: search box {hints.get("search")!r}, message box '
+                    f'{hints.get("composer")!r}).')
         title = context.get('title')
         if not title:
             return 'Window title unavailable.'

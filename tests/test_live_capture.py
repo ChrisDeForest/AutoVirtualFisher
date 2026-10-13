@@ -793,6 +793,16 @@ class ChannelTests(unittest.TestCase):
         self.assertFalse(channel_matches({'channel': 'BugParticle', 'channel_hints': other}, 'Virtual Fisher'),
                          'a full, different search name always wins')
 
+    def test_a_misread_search_name_with_the_message_box_confirming_it(self):
+        # Live: "Different or unreadable channel" for minutes on a still screen, until the channel was reopened.
+        from src.live_capture import channel_matches
+        for misread in ('Virtual Flsher', 'Virtual Fisher#7036 Q', 'Virtua1 Fisher'):
+            hints = self.hints(self.box(f'Search {misread}', 70), self.box('Message @Virtual Fisher', 1460))
+            self.assertTrue(channel_matches({'channel': misread, 'channel_hints': hints}, 'Virtual Fisher'), misread)
+        # The placeholder text higher up (quoted in chat) is not the message box.
+        hints = self.hints(self.box('Search Virtual Flsher', 70), self.box('Message @Virtual Fisher', 700))
+        self.assertFalse(channel_matches({'channel': 'Virtual Flsher', 'channel_hints': hints}, 'Virtual Fisher'))
+
     def test_a_shortened_search_alone_is_not_enough(self):
         from src.live_capture import channel_matches
         hints = self.hints(self.box('Search Virtual ...', 70, left=1060))

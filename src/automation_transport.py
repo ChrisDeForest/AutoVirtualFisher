@@ -20,7 +20,8 @@ from .observation import Identity, Observation, check_identity, recipients
 #   delivered twice), other_player_first (another player's reply arrives first), uncorrelated (the reply carries
 #   no evidence of which action it answers), send_error (the hand-over fails), partial (one field lost to OCR),
 #   captcha, xp_unread (the profile's XP numbers lost), no_button (page 2's arrow not found; nothing sent),
-#   interrupted (Discord lost focus while typing; nothing sent; out of focus until focus()).
+#   interrupted (Discord lost focus while typing; nothing sent; out of focus until focus()), level_bonus (the trip
+#   levels up with a bonus to the multipliers, as at milestone levels).
 OUTCOMES = ('ok', 'unreadable', 'unreadable_fixed', 'noisy', 'missing', 'duplicate', 'other_player_first', 'uncorrelated', 'send_error')
 FISH = ('Salmon', 'Cod')
 # A real /charms reply (11 charms found).
@@ -100,6 +101,9 @@ class SimulationTransport:
             self.context = ContextStatus(False, self.context.context_id, NOT_FOREGROUND)
             raise Interrupted(f'Typing {intent.kind} was interrupted when Discord stopped being the active window.')
         text, kind = self._play(intent, now)
+        if outcome == 'level_bonus' and kind == 'fishing':
+            text += ('\n:fish: LEVEL UP! :fish: You are now level 75.\n$120,000 received for leveling up.\n'
+                     '10% INCREASED SELLING PRICE FOR LEVELING UP!')
         if outcome == 'noisy' and kind == 'fishing':
             text += '\n$6 , 6O0 recieved for levelling up'  # an extra line OCR garbled beyond reading
         if outcome in ('unreadable', 'unreadable_fixed') and kind == 'fishing':
