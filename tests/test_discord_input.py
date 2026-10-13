@@ -67,7 +67,7 @@ class NativeDispatchTests(unittest.TestCase):
         driver = self.driver([{'boxes': [box('Message @Virtual Fisher', 800)]},
                               {'boxes': [box('/fish', 600), box('Virtual Fisher', 620)]}])
         driver.dispatch('/fish', lambda: False)
-        self.assertEqual(driver.events[0], ('click', (500.0, 810.0)))
+        self.assertEqual(driver.events[0], ('click', (660.0, 810.0)))
 
     def test_picker_read_reaches_a_full_picker_in_a_tall_window(self):
         # Live: a 1535 px window, "/rod" matched eight commands, and the picker's top row sat at y=757.
@@ -345,7 +345,7 @@ class FocusTests(unittest.TestCase):
         driver._frame = lambda cancelled, deep=False: driver.deep.append(deep) or next(sequence)
         driver.events.clear()
         driver.dispatch('/fish', lambda: False)
-        self.assertEqual(driver.events[:2], [('click', (500.0, 810.0)), ('clear', None)])
+        self.assertEqual(driver.events[:2], [('click', (660.0, 810.0)), ('clear', None)])
         self.assertEqual(driver.events[-1], ('key', 13))
 
 
@@ -387,7 +387,7 @@ class ComposerClickTests(unittest.TestCase):
         self.assertFalse(driver.is_foreground())
         self.again(driver)
         driver.dispatch('/fish', lambda: False)
-        self.assertEqual(self.clicks(driver), [('click', (500.0, 810.0))])
+        self.assertEqual(self.clicks(driver), [('click', (660.0, 810.0))])
 
     @patch('src.discord_input.time.sleep')
     def test_resume_after_pause_clicks_again(self, sleep):
@@ -396,7 +396,7 @@ class ComposerClickTests(unittest.TestCase):
         driver.refocus()
         self.again(driver)
         driver.dispatch('/fish', lambda: False)
-        self.assertEqual(self.clicks(driver), [('click', (500.0, 810.0))])
+        self.assertEqual(self.clicks(driver), [('click', (660.0, 810.0))])
 
     @patch('src.discord_input.time.sleep')
     def test_unverified_picker_clicks_on_the_next_attempt(self, sleep):
@@ -409,7 +409,7 @@ class ComposerClickTests(unittest.TestCase):
             driver.dispatch('/fish', lambda: False)
         self.again(driver)
         driver.dispatch('/fish', lambda: False)
-        self.assertEqual(self.clicks(driver), [('click', (500.0, 810.0))])
+        self.assertEqual(self.clicks(driver), [('click', (660.0, 810.0))])
 
     def test_button_click_puts_the_pointer_back(self):
         driver = WindowsDiscordDriver.__new__(WindowsDiscordDriver)

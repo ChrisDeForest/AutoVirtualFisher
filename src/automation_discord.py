@@ -122,12 +122,12 @@ def composer_target(boxes, channel):
 
 
 def composer_click(boxes, channel):
-    """Where to click the message box: in its empty part just right of the placeholder, so the pointer
-    never covers the placeholder text."""
+    """Where to click the message box: in its empty part, well right of the placeholder (ten text heights, about
+    150 px live), so the pointer stays clear of the placeholder text the box checks read."""
     box = composer_box(boxes, channel)
     if box is None:
         return None
-    return (box['right'] + 2 * (box['bottom'] - box['top']), _center(box)[1])
+    return (box['right'] + 10 * (box['bottom'] - box['top']), _center(box)[1])
 
 
 def command_target(boxes, command, composer=None):
