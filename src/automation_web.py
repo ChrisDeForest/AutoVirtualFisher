@@ -37,7 +37,7 @@ STYLE = """<style>
 .level-meta { color:var(--muted); }
 .line { position:relative; height:26px; margin-top:14px; }
 .line::before { content:''; position:absolute; left:0; right:0; top:12px; border-top:2px dashed #3d5a69; }
-.line .cast { position:absolute; left:0; top:12px; border-top:2px solid var(--sea); }
+.line .cast { position:absolute; left:0; top:12px; height:2px; background:var(--sea); }
 .line .bobber { position:absolute; top:5px; width:16px; height:16px; margin-left:-8px; border-radius:50%;
   background:var(--sea); box-shadow:0 0 0 4px #101e29; }
 .boxes { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:22px 34px; }
@@ -80,7 +80,14 @@ STYLE = """<style>
 @media(max-width:900px) { .finds { grid-template-columns:minmax(0,1fr); } }
 @media(max-width:900px) { .boxes, .rewards-row { grid-template-columns:minmax(0,1fr); } .box.wide { grid-column:auto; }
   .start .pair { grid-template-columns:minmax(0,1fr); } }
-@media(prefers-reduced-motion:no-preference) { .line .cast, .line .bobber { transition:all .6s ease-out; } }
+/* The bar glides over the 2 s between refreshes, so XP gained trip by trip moves it steadily; light runs along
+   the line and the bobber floats. */
+@keyframes flow { from { background-position:0 0; } to { background-position:160px 0; } }
+@keyframes float { 0%, 100% { transform:translateY(0); } 50% { transform:translateY(-3px); } }
+@media(prefers-reduced-motion:no-preference) {
+  .line .cast { transition:width 2s linear; background:linear-gradient(90deg, var(--sea) 0, #c8f5ee 40px, var(--sea) 80px,
+    var(--sea) 160px) 0 0 / 160px 2px repeat-x; animation:flow 1.6s linear infinite; }
+  .line .bobber { transition:left 2s linear; animation:float 2.4s ease-in-out infinite; } }
 </style>"""
 SCRIPT = """<script nonce="{nonce}">
 (function () {
@@ -99,6 +106,36 @@ SCRIPT = """<script nonce="{nonce}">
   }
   window.addEventListener('hashchange', showTab);
   showTab();
+  // Next fish counts down here between refreshes. A refresh within half a second of the running count keeps it,
+  // so the count never steps back and forth; a new cooldown starts a new count.
+  var deadline = null;
+  function syncCountdown() {
+    var el = panel.querySelector('[data-left]');
+    if (!el) { deadline = null; return; }
+    var at = performance.now() + parseFloat(el.getAttribute('data-left')) * 1000;
+    if (deadline === null || Math.abs(at - deadline) > 500) deadline = at;
+  }
+  function tick() {
+    var el = panel.querySelector('[data-left]');
+    if (el && deadline !== null) {
+      var left = Math.max(0, (deadline - performance.now()) / 1000);
+      el.textContent = left >= 0.05 ? 'in ' + left.toFixed(1) + ' s' : 'now';
+    }
+    requestAnimationFrame(tick);
+  }
+  syncCountdown();
+  requestAnimationFrame(tick);
+  // The XP line starts where the old one stood and glides to its new place (a new level starts afresh).
+  function glide(from) {
+    var cast = panel.querySelector('.line .cast'), bob = panel.querySelector('.line .bobber');
+    if (!from || !cast || !bob || parseFloat(cast.style.width) < parseFloat(from[0])) return;
+    var to = [cast.style.width, bob.style.left];
+    cast.style.transition = bob.style.transition = 'none';
+    cast.style.width = from[0]; bob.style.left = from[1];
+    void cast.offsetWidth;
+    cast.style.transition = bob.style.transition = '';
+    cast.style.width = to[0]; bob.style.left = to[1];
+  }
   setInterval(function () {
     fetch('/automation/panel', {cache: 'no-store'}).then(function (r) { return r.text(); }).then(function (html) {
       var was = panel.getAttribute('data-running');
@@ -107,8 +144,12 @@ SCRIPT = """<script nonce="{nonce}">
       panel.querySelectorAll('.scroll').forEach(function (el, i) {
         kept[(el.getAttribute('aria-label') || '') + '#' + i] = [el.scrollTop, el.scrollLeft];
       });
+      var oldCast = panel.querySelector('.line .cast'), oldBob = panel.querySelector('.line .bobber');
+      var from = oldCast && oldBob ? [oldCast.style.width, oldBob.style.left] : null;
       panel.innerHTML = html;
       showTab();
+      syncCountdown();
+      glide(from);
       panel.querySelectorAll('.scroll').forEach(function (el, i) {
         var at = kept[(el.getAttribute('aria-label') || '') + '#' + i];
         if (at) { el.scrollTop = at[0]; el.scrollLeft = at[1]; }
@@ -158,8 +199,10 @@ def _duration(seconds):
     return f'about {minutes / 60:.1f} h'
 
 
-def _row(label, value, gain=None):
-    shown = (f'<dd class="known">{escape(str(value))}' if value is not None else '<dd class="unknown">not read')
+def _row(label, value, gain=None, left=None):
+    """`left`: seconds the value counts down from; the page counts it down between refreshes."""
+    counting = f' data-left="{left:.2f}"' if left is not None else ''
+    shown = (f'<dd class="known"{counting}>{escape(str(value))}' if value is not None else '<dd class="unknown">not read')
     if gain and value is not None:
         shown += f'<span class="gain">+{gain:,}</span>'
     return f'<div class="stat"><dt>{escape(label)}</dt>{shown}</dd></div>'
@@ -578,7 +621,8 @@ def render_panel(status, mode=None) -> str:
         _row('Trips per hour', _num(per_hour.get('trips'))),
         _row('XP per hour', _num(per_hour.get('xp'))),
         _row('Fish value per hour', _num(per_hour.get('fish_value'), '$')),
-        _row('Next fish', (f'in {next_fish:.1f} s' if next_fish else 'now') if running else 'not running'),
+        _row('Next fish', (f'in {next_fish:.1f} s' if next_fish else 'now') if running else 'not running',
+             left=next_fish if running and next_fish is not None else None),
     )) + '</dl>', note=sync_note)
     rewards_box = _box('Rewards', '<dl>'
                        + _source_rows('Quests', sources.get('quests') or {'money': 0, 'xp': 0, 'other': {}})

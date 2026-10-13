@@ -110,8 +110,8 @@ def _center(box):
 
 def composer_box(boxes, channel):
     """The empty message box's "Message @channel" placeholder. The blinking caret sits on its M, so OCR may
-    read it without one."""
-    pattern = re.compile(r'M?essage\s*@\s*' + re.escape(channel), re.I)
+    read it without one, or read the caret in front of it as I, | or l."""
+    pattern = re.compile(r'[I|l]?M?essage\s*@\s*' + re.escape(channel), re.I)
     found = [box for box in boxes if pattern.fullmatch(box['text'].strip())]
     return found[0] if len(found) == 1 else None
 

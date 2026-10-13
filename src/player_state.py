@@ -59,6 +59,18 @@ def known_bait(name):
     return name
 
 
+def known_pet(name):
+    """The pet a read name stands for, its icon misread as up to two stray characters ("V Puffer" is Puffer) or
+    a stray mark after it ("Puffer _"); a name that is no known pet is returned unchanged."""
+    trimmed = re.sub(r'[\s\W_]+$', '', name)
+    for pet in sorted((_pet_reference() or {}).get('pets', {}), key=len, reverse=True):
+        if trimmed.casefold().endswith(pet.casefold()):
+            prefix = trimmed[:len(trimmed) - len(pet)].strip()
+            if len(prefix) <= 2 and not re.search(r'[a-z]{2}', prefix, re.I):
+                return pet
+    return name
+
+
 def _pet_reference():
     try:
         return json.loads(PET_REFERENCE_PATH.read_text(encoding='utf-8'))
@@ -207,6 +219,11 @@ def parse_responses(profile='', buffs='', prestige_shop='', pet='', quests=''):
                 assign(section, 'level', int(level[2]))
                 assign(section, 'xp_to_next_level', _number(level[3]))
                 continue
+            if section == 'buffs' and ':' not in line:
+                # Observed OCR: "XP Multiplier. 1.251", the colon read as a full stop.
+                misread = re.fullmatch(r'([A-Za-z ]+?)\s*[.;,]\s*(\d.*)', line)
+                if misread:
+                    line = f'{misread[1]}: {misread[2]}'
             label, separator, value = line.partition(':')
             field = ALIASES.get(label.strip().lower(), label.strip().lower().replace(' ', '_'))
             try:
@@ -228,6 +245,9 @@ def parse_responses(profile='', buffs='', prestige_shop='', pet='', quests=''):
                         if field == 'pet' and re.fullmatch(r'Level \d+\)?', value, re.I):
                             # Observed OCR: "Pet: (Level 51)", the emoji and name lost. The pet stays unknown.
                             continue
+                        if field == 'pet':
+                            named = re.fullmatch(r'(.+?)(\s*\(Level \d+\)?)', value, re.I)
+                            value = known_pet(named[1]) + named[2] if named else known_pet(value)
                         if field == 'bait':
                             stock = re.fullmatch(r'(.+?)\s+\((\d+(?:,\d{3})*)\)', value)
                             if stock:
@@ -237,11 +257,15 @@ def parse_responses(profile='', buffs='', prestige_shop='', pet='', quests=''):
                 else:
                     match = re.fullmatch(rf'({NUMBER})\s*(%|x|s|seconds?)', value, re.I)
                     prefix = re.fullmatch(rf'x\s*({NUMBER})', value, re.I)
+                    # The game shows multipliers with two decimals and an x; observed OCR read "1.25x" as "1.251".
+                    misread_x = re.fullmatch(r'(\d+\.\d{2})[1lI|]', value)
                     if prefix:
                         amount, unit = _number(prefix[1]), 'multiplier'
                     elif match:
                         amount = _number(match[1])
                         unit = 'percent' if match[2] == '%' else ('multiplier' if match[2].lower() == 'x' else 'seconds')
+                    elif misread_x and field != 'fishing_cooldown':
+                        amount, unit = _number(misread_x[1]), 'multiplier'
                     else:
                         raise ValueError('Expected a percentage, multiplier, or seconds')
                     if (field == 'fishing_cooldown') != (unit == 'seconds'):
@@ -297,7 +321,7 @@ def parse_responses(profile='', buffs='', prestige_shop='', pet='', quests=''):
                 continue
         current = re.fullmatch(r'Current pet:\s*(.+)', line, re.I)
         if current:
-            result['pets']['current_pet'] = _name(current[1])
+            result['pets']['current_pet'] = known_pet(_name(current[1]))
             continue
         if re.fullmatch(r'You have no pets!.*', line, re.I):
             result['pets']['status'] = 'No pets'

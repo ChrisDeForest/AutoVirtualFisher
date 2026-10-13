@@ -120,6 +120,12 @@ class SetupTests(unittest.TestCase):
         self.assertEqual((profile['bait'], profile['bait_quantity']), ('Fish', 120))
         self.assertEqual(parse_responses(profile='Bait: Goldfish')['profile']['bait'], 'Goldfish')   # not a bait
 
+    def test_current_pet_with_a_stray_mark(self):
+        # Live: /pet saved the current pet as "Puffer _".
+        from src.player_state import parse_responses
+        self.assertEqual(parse_responses(pet='Current pet: Puffer _')['pets']['current_pet'], 'Puffer')
+        self.assertEqual(parse_responses(pet='Current pet: V Puffer')['pets']['current_pet'], 'Puffer')
+
     def test_bait_owned_unknown_without_the_current_line(self):
         parsed = PARSERS['bait']('Worms - 68')
         self.assertIsNone(parsed['values']['owned'])                  # not a whole reply: keep the earlier read

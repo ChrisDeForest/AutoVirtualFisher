@@ -249,6 +249,12 @@ def parse_charms(text: str) -> dict:
         if not match:
             continue
         name = known_name(f'{match[3]} Charm')
+        if name not in CHARM_NAMES:
+            # Observed OCR: "%rker Charm", the icon and the start of "Worker" read as one mark. A word of three
+            # letters or more that ends exactly one charm's name is that charm.
+            ending = [charm for charm in CHARM_NAMES
+                      if len(match[3]) >= 3 and charm.removesuffix(' Charm').casefold().endswith(match[3].casefold())]
+            name = ending[0] if len(ending) == 1 else name
         level, top = int(match[1]), int(match[2])
         if name not in CHARM_NAMES or level > top:
             continue

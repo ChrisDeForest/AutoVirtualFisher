@@ -286,3 +286,28 @@ class SourceTests(unittest.TestCase):
         self.assertEqual(sources['chests'], {'money': 296, 'xp': 150, 'other': {'Gold Fish': 2}})
         self.assertEqual(sources['quests'], {'money': 350, 'xp': 370, 'other': {'uncommon chest': 1}})
         self.assertEqual(sources['level_ups'], {'money': 6200})
+
+
+class ZoomedOcrTests(unittest.TestCase):
+    """Live reads on a 27" 2560x1440 screen with Discord zoomed in (Oct 13)."""
+
+    def test_xp_multiplier_with_its_colon_and_x_misread(self):
+        # Shown "XP Multiplier: 1.25x", read "XP Multiplier. 1.251".
+        buffs = synced_stats('', "epicmouse9925's current multipliers (including bait):\nSell price: 4.32x\n"
+                                 'XP Multiplier. 1.251\nFishing cooldown: 2.9s.')['buffs']
+        self.assertEqual(buffs['xp_multiplier'], {'value': 1.25, 'unit': 'multiplier'})
+        self.assertEqual(buffs['sell_price'], {'value': 4.32, 'unit': 'multiplier'})
+        self.assertEqual(buffs['fishing_cooldown'], {'value': 2.9, 'unit': 'seconds'})
+
+    def test_worker_charm_with_its_first_letters_misread(self):
+        from src.live_stats import parse_charms
+        parsed = parse_charms('1/14\n%rker Charm - Workers catch more fish. (2 to next tier).')
+        self.assertEqual(parsed['charms']['Worker Charm']['level'], 1)
+
+    def test_a_charm_ending_no_charm_has_is_not_guessed(self):
+        from src.live_stats import parse_charms
+        self.assertEqual(parse_charms('1/14\n%xyz Charm - Something. (2 to next tier).')['charms'], {})
+
+    def test_pet_with_its_icon_misread(self):
+        profile = synced_stats('Pet: V Puffer (Level 32)', '')['profile']
+        self.assertEqual((profile['pet'], profile['pet_level']), ('Puffer', 32))

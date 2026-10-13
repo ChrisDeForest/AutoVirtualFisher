@@ -358,6 +358,22 @@ class AutomationWebTests(unittest.TestCase):
                  'mix': {'source': '', 'rows': []}, 'estimates': []}
         self.assertIn('applied ⚠ 13% off', render_model_tab(model))
 
+    def test_next_fish_counts_down_in_the_page(self):
+        # The panel is replaced every 2 s; the page counts down between refreshes instead of jumping.
+        from src.automation_web import SCRIPT
+        status = {'running': True, 'reason': '', 'phase': 'WAITING_COOLDOWN', 'trips': 3, 'config': {'max_trips': 0},
+                  'next_eligible_in': 2.46, 'dashboard': {}}
+        self.assertIn('<dd class="known" data-left="2.46">in 2.5 s', render_panel(status))
+        self.assertIn('[data-left]', SCRIPT)
+        self.assertIn('requestAnimationFrame', SCRIPT)
+
+    def test_the_xp_line_glides_from_where_it_was(self):
+        # Replacing the panel would restart the bar; the script starts the new bar where the old one stood.
+        from src.automation_web import SCRIPT, STYLE
+        self.assertIn("panel.querySelector('.line .cast')", SCRIPT)
+        self.assertIn('@keyframes', STYLE)
+        self.assertIn('prefers-reduced-motion', STYLE)
+
     def test_tab_script_keeps_the_hash_across_refreshes(self):
         from src.automation_web import SCRIPT
         self.assertIn('location.hash', SCRIPT)

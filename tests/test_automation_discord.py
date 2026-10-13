@@ -539,6 +539,10 @@ class TargetTests(unittest.TestCase):
         self.assertIsNone(composer_target([box('Message #Virtual Fisher')], 'Virtual Fisher'))
         # The blinking caret sits on the M of an empty box.
         self.assertEqual(composer_target([box('essage @Virtual Fisher')], 'Virtual Fisher'), (380, 810))
+        # Live (Discord zoomed to 125%): half the reads of the empty box saw the caret before the M as an I.
+        self.assertEqual(composer_target([box('IMessage@Virtual Fisher')], 'Virtual Fisher'), (380, 810))
+        self.assertEqual(composer_target([box('|Message @Virtual Fisher')], 'Virtual Fisher'), (380, 810))
+        self.assertIsNone(composer_target([box('xMessage @Virtual Fisher')], 'Virtual Fisher'))
 
     def test_sidebar_status_is_not_a_second_picker_command(self):
         # Live: the DM list shows "Virtual Fisher" with the status "/fish", read as "[fish", far above the picker.
