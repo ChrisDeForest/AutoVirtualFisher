@@ -606,7 +606,11 @@ class TargetTests(unittest.TestCase):
         # Live (Discord zoomed to 125%): half the reads of the empty box saw the caret before the M as an I.
         self.assertEqual(composer_target([box('IMessage@Virtual Fisher')], 'Virtual Fisher'), (380, 810))
         self.assertEqual(composer_target([box('|Message @Virtual Fisher')], 'Virtual Fisher'), (380, 810))
-        self.assertIsNone(composer_target([box('xMessage @Virtual Fisher')], 'Virtual Fisher'))
+        # Live 2026-10-14: the caret and the M read as up to three marks; each of these cost a fish.
+        for read in ('xMessage @Virtual Fisher', 'bessage@VirtuaI Fisher', 'blessage@Virtual Fisher',
+                     'BAessage@Virtual Fisher', '[vlessage@Virtual Fisher', "['lessage@Virtual Fisher"):
+            self.assertEqual(composer_target([box(read)], 'Virtual Fisher'), (380, 810), read)
+        self.assertIsNone(composer_target([box('Send a message about fish')], 'Virtual Fisher'))
         # The name after the @ is compared loosely: a strict match failed a read in a few (2026-10-14).
         for read in ('Message @VirtualFisher', 'Message @Virtual Fisber', 'Message @Virtual Fisher .',
                      'IMessage@Virtual  Fisher', 'Message @Virtua1 Fisher'):

@@ -37,6 +37,12 @@ class OutcomeTests(unittest.TestCase):
         self.assertEqual(outcome(better, 'You cant afford that upgrade.')[0], 'failed')
         self.assertEqual(outcome(better, 'You just bought Better Fish level 19!')[0], 'unclear')
         self.assertEqual(outcome(better, 'something else')[0], 'unclear')
+        # Bait has its own reply (user, 2026-10-14); the icon may read as a mark.
+        bait = Action('buy', 'Artifact Magnet', amount=200, shop='bait', price=15000)
+        reply = ('Bait purchase\nYou bought 200 artifact magnet :bait_artifact: for $15,000.\n'
+                 'Use /bait to see all bait you currently have.')
+        self.assertEqual(outcome(bait, reply), ('done', 'bought 200 artifact magnet for $15,000'))
+        self.assertEqual(outcome(bait, reply.replace(':bait_artifact:', 'C'))[0], 'done')
         # Seen live 2026-10-14 (Artifact Specialist 6, bought by hand earlier).
         self.assertEqual(outcome(better, 'x You already have that upgrade maxed.'), ('failed', 'already maxed'))
 

@@ -1140,15 +1140,20 @@ class AutomationController:
         full cooldown, so a command that did reach the game is not followed too soon, then carries on."""
         self.state = replace(self.state, pending=None,
                              refresh_due=tuple(k for k in self.state.refresh_due if k != intent.kind))
+        # What the chat's bottom read as when the reply was given up on: live, replies went unseen for minutes with
+        # nothing saved to tell why (2026-10-14).
+        screen = list(getattr(self.transport, 'last_lines', None) or [])[-12:]
         forget = getattr(self.transport, 'forget', None)
         if forget is not None:
             forget()
-        self._safe_event('resolved', intent.action_id, outcome='unknown', reason=reason)
+        self._safe_event('resolved', intent.action_id, outcome='unknown', reason=reason,
+                         **({'screen': screen} if screen else {}))
         if intent.kind == 'act':
             # It may have happened: never sent again; the reads it changes (and /profile) are done again.
             self._finish_action(intent.arguments[0], 'unknown', reason)
         add_item(self.roots['review'], self.config.account, 'automation', f'{intent.kind}: {reason}',
-                 [f'This {intent.kind} may or may not have reached the game; the run carried on.', reason],
+                 [f'This {intent.kind} may or may not have reached the game; the run carried on.', reason]
+                 + (['The bottom of the chat read: ' + ' | '.join(screen)] if screen else []),
                  blocks_actions=False)
         self.last_result = {'action_id': intent.action_id, 'result': 'unknown', 'at': _iso(self.utc())}
         if intent.kind == 'fish':

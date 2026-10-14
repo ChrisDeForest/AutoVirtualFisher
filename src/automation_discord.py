@@ -162,7 +162,8 @@ def composer_box(boxes, channel):
     read it without one, or read the caret in front of it as I, | or l. The name after the @ is compared loosely
     (spaces, one or two misread letters, a stray mark after it): a strict match failed one read in a few live and
     each failure cost a fish (2026-10-14)."""
-    pattern = re.compile(r'[I|l]?M?essage\s*@\s*(.+?)[\W_]{0,3}', re.I)
+    # Live 2026-10-14: the caret and the M read as "b", "bl", "BA", "[vl", "['l": up to three marks before "essage".
+    pattern = re.compile(r'\S{0,3}?essage\s*@\s*(.+?)[\W_]{0,3}', re.I)
     wanted = re.sub(r'\s+', '', channel).casefold()
 
     def matches(text):

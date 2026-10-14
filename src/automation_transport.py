@@ -162,6 +162,9 @@ class SimulationTransport:
         """The game's reply to an action, in the wording recorded live on 2026-10-13 (emoji read as letters)."""
         from .actions import Action
         action = Action.from_dict(intent.arguments[0])
+        if action.act == 'buy' and action.amount:
+            return (f'Bait purchase\nYou bought {action.amount} {action.name.lower()} for ${action.price or 0:,.0f}.\n'
+                    'Use /bait to see all bait you currently have.')
         if action.act == 'buy':
             return f'v You just bought {action.name}' + (f' level {action.level}!' if action.level else '!')
         if action.act == 'sell':

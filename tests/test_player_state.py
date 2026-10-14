@@ -92,6 +92,15 @@ UNLOCKED AT PRESTIGE 5: Virtual Fisher - 40% more high quality fish.''')
         result = parse_responses(profile='Balance: $1,000.\nCurrently using J Supporter Rod.')
         self.assertEqual(result['profile']['rod'], 'Supporter Rod')
 
+    def test_a_bait_icon_read_as_several_marks_is_dropped(self):
+        from src.player_state import known_bait
+        # Live 2026-10-14: the planner failed on "C'• Artifact Magnet" from /profile.
+        self.assertEqual(known_bait("C'• Artifact Magnet"), 'Artifact Magnet')
+        self.assertEqual(known_bait('Magnet'), 'Magnet')                       # not Artifact Magnet
+        self.assertEqual(known_bait('Something else'), 'Something else')
+        profile = parse_responses(profile="Balance: $1.\nCurrent bait: C'• Artifact Magnet (412)")['profile']
+        self.assertEqual((profile['bait'], profile['bait_quantity']), ('Artifact Magnet', 412))
+
     def test_a_rod_is_the_closest_known_rod(self):
         from src.player_state import known_rod
         # Live 2026-10-14: "Currently using Z golden." (icon as a letter, " Rod" lost).

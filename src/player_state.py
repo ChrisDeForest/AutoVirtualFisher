@@ -57,7 +57,9 @@ def known_bait(name):
             prefix = name[:len(name) - len(bait)].strip()
             if len(prefix) <= 2 and not re.search(r'[a-z]{2}', prefix, re.I):
                 return bait
-    return name
+    # Live 2026-10-14: "C'• Artifact Magnet" (the icon as three marks): the closest bait, as for rods and pets.
+    found = _known(name, BAIT_NAMES)
+    return found if found in BAIT_NAMES else name
 
 
 # A misread name counts as the known name it is closest to when it is this close (difflib ratio) and closer to it

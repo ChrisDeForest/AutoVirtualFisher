@@ -64,6 +64,11 @@ def outcome(action, text):
         return 'failed', 'invalid biome'
     name = action.name.casefold()
     if action.act == 'buy':
+        # Bait (user, 2026-10-14): "Bait purchase / You bought 200 artifact magnet :bait_artifact: for $15,000."
+        batch = re.search(r'You bought ([\d,]+) (.+?)\s+for \$([\d,]+)', text, re.I)
+        if batch:
+            name = re.sub(r'\s*:\w+:\s*$|\s+\S$', '', batch[2]).strip()
+            return 'done', f'bought {batch[1]} {name} for ${batch[3]}'
         bought = re.search(r'You just bought (.+?)(?: level (\d+))?[.!]', text, re.I)
         if not bought:
             return 'unclear', 'no purchase reply'

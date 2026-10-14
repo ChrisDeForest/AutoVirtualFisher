@@ -908,6 +908,14 @@ class ControllerTests(unittest.TestCase):
         self.assert_moves_on('missing')
         self.assertTrue(list_items(self.review)[0])
 
+    def test_a_missed_reply_records_what_the_chat_showed(self):
+        self.sim.last_lines = ['epicmouse used', 'fish', 'Virtual Fisher 3:36 PM', 'You caught:', '6 Tropical fish']
+        self.assert_moves_on('missing')
+        [item] = [item for item in list_items(self.review)[0] if item['kind'] == 'automation']
+        self.assertIn('The bottom of the chat read: epicmouse used | fish', ' '.join(item['reasons']))
+        resolved = next(e for e in self.controller.journal.events()[0] if e['type'] == 'resolved')
+        self.assertEqual(resolved['screen'][-1], '6 Tropical fish')
+
     def test_unreadable_result_is_noted_and_fishing_continues(self):
         self.assert_moves_on('unreadable')
         self.assertIn('fishing', [item['kind'] for item in list_items(self.review)[0]])
