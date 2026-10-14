@@ -227,10 +227,17 @@ def parse_shop_boats(text):
 
 def parse_pets(text):
     lines = _lines(text)
-    pets = parse_responses(pet='\n'.join(line for line in lines if line.casefold() not in BUTTONS))['pets']
+    parsed = parse_responses(pet='\n'.join(line for line in lines if line.casefold() not in BUTTONS))
+    pets = parsed['pets']
     owned = pets['owned'] or {}
     values = {'current': pets['current_pet'], 'xp_per_trip': pets['xp_per_fishing_trip_average'], 'owned': owned}
-    return _result(values, [] if owned else ['Pets'], lines)
+    # A line that looks like a pet's ("Name(Lvl N)") but did not read as one is named, never silently dropped: live,
+    # Axolotl went missing from every /pet read (2026-10-14).
+    looks_like_pet = re.compile(r'\(\s*L\S{0,3}\s*\S{0,3}\d|\bLvl\b', re.I)
+    missed = [line for line in parsed['unparsed'].get('pet', []) if looks_like_pet.search(line)]
+    missed += [pet['description'] for pet in owned.values()
+               if pet.get('description') and looks_like_pet.search(pet['description'])]
+    return _result(values, ([] if owned else ['Pets']) + [f'pet line {line!r}' for line in missed], lines)
 
 
 def parse_prestige_shop(text):

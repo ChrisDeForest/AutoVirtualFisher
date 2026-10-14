@@ -1175,7 +1175,7 @@ class AutomationController:
     def _refreshed_account(self, kind, observation, parsed):
         """Apply an account reply and save the state. Page 1 of a paged read queues page 2 next; a read that
         still lacks something (after both pages) is read again every few trips."""
-        self.account = apply_read(self.account, observation.kind, parsed, observation.observed_at)
+        self.account = apply_read(self.account, observation.kind, parsed, observation.observed_at, observation.text)
         if self.state_path:
             try:
                 save_state(self.state_path, self.account)

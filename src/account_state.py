@@ -61,8 +61,9 @@ def section_unread(kind: str, values: dict, parser_unread=()) -> list[str]:
     return missing
 
 
-def apply_read(state: dict, kind: str, parsed: dict, observed_at: str) -> dict:
-    """The state with this reply applied. `parsed` is an account_replies parser result."""
+def apply_read(state: dict, kind: str, parsed: dict, observed_at: str, text: str | None = None) -> dict:
+    """The state with this reply applied. `parsed` is an account_replies parser result; `text`, the reply as read,
+    is kept per page so a misread can be looked at later."""
     sections = dict(state.get('sections', {}))
     old = sections.get(kind, {'values': {}, 'pages': {}})
     values = _merge(old.get('values', {}), parsed['values'])
@@ -74,6 +75,9 @@ def apply_read(state: dict, kind: str, parsed: dict, observed_at: str) -> dict:
     page, _ = parsed.get('page') or (None, None)
     pages = dict(old.get('pages', {}))
     pages[str(page or 1)] = observed_at
+    texts = dict(old.get('texts', {}))
+    if text is not None:
+        texts[str(page or 1)] = text
     sections[kind] = {'values': values, 'unread': section_unread(kind, values, parsed.get('unread', ())),
-                      'read_at': observed_at, 'pages': pages}
+                      'read_at': observed_at, 'pages': pages, **({'texts': texts} if texts else {})}
     return {**state, 'sections': sections}

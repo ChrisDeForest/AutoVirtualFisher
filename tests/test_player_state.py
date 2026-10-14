@@ -117,6 +117,18 @@ UNLOCKED AT PRESTIGE 5: Virtual Fisher - 40% more high quality fish.''')
         owned = state['sections']['pet']['values']['owned']
         self.assertEqual({name: data['level'] for name, data in owned.items()}, {'Axolotl': 60, 'Tuna': 15})
 
+    def test_a_pet_line_that_does_not_read_is_named_and_the_text_kept(self):
+        from src.account_replies import PARSERS
+        from src.account_state import apply_read, empty_state
+        text = ('Zebrafish(Lvl 61)\nIncreases fish quality.\n13,875/45,000 XP to next level.\n'
+                'Ax0l#tl (Lu 6O\nTuna(Lvl 14)')
+        parsed = PARSERS['pet'](text)
+        self.assertEqual(set(parsed['values']['owned']), {'Zebrafish', 'Tuna'})
+        self.assertEqual(parsed['unread'], ["pet line 'Ax0l#tl (Lu 6O'"])
+        state = apply_read(empty_state(), 'pet', parsed, 'a', text)
+        self.assertEqual(state['sections']['pet']['texts'], {'1': text})
+        self.assertEqual(state['sections']['pet']['unread'], ["pet line 'Ax0l#tl (Lu 6O'"])
+
     def test_pet_response_records_no_pet_state_and_average_xp(self):
         result = parse_responses(pet='''Pets are permanent, they are not lost when you prestige. They increase in effectiveness as you level them up.
 
