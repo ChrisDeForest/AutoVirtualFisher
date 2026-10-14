@@ -891,7 +891,7 @@ def render_panel(status, mode=None) -> str:
         uncounted = dashboard.get('uncounted_since_sync') or 0
         if uncounted:
             sync_note += (f' {uncounted:,} trip{"s" if uncounted != 1 else ""} since then had no confirmed reply, so '
-                          'their XP and money are not counted; /profile is read again after 3.')
+                          'their XP and money are not counted until /profile is read, next.')
     for kind, unread in (dashboard.get('unread') or {}).items():
         sync_note += (f' Not read from /{kind}: {", ".join(unread["fields"])}; reading /{kind} again in '
                       f'{unread["retry_in"]:,} trips.')

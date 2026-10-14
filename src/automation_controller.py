@@ -60,11 +60,16 @@ def _cooldown_wait(match):
 RESOLUTIONS = ('happened', 'not_sent')
 STARTUP_ATTEMPTS = 3
 STARTUP_RETRY_DELAY = 2.0
-# Unknown outcomes in a row (no reply, unreadable, failed hand-over) before a run gives up.
+# Reads and actions in a row with an unknown outcome (no reply, unreadable, failed hand-over) before a run gives up:
+# the game is not answering. An unknown /fish does not count here: /profile is read next and says what happened.
 UNKNOWN_LIMIT = 3
+# /fish in a row with an unknown outcome before a run gives up, even while /profile answers (the user, 2026-10-14:
+# three unknown /fish stopped a run that a /profile read would have carried on).
+FISH_UNKNOWN_LIMIT = 10
 # Trips with an unknown outcome since /profile was read before it is read again: such a trip most likely happened,
-# but its XP and money are not counted, so the level and balance drift until the next read.
-UNCOUNTED_RESYNC = 3
+# but its XP and money are not counted, so the level and balance drift until the next read. Read at once: the read
+# also tells whether the game is answering at all.
+UNCOUNTED_RESYNC = 1
 CAPTCHA_REASON = ('Virtual Fisher asked for a captcha. Type /captcha with the code from the image in Discord '
                   '(exact case). Fishing carries on by itself once Virtual Fisher replies to anything again; '
                   'Resume also works.')
@@ -264,7 +269,7 @@ class AutomationController:
         self.startup_problems = {}
         self.startup_texts = {}        # command -> the text of its last unreadable reply
         self.startup_retry_at = float('-inf')
-        self.unknown_streak = 0
+        self.unknown_streak = self.fish_unknown_streak = 0
         self.refused_until, self.refused_reason = float('-inf'), ''
         self.paused = False            # paused by the person: nothing new is sent until resumed
         self.pause_id = 0              # counts pauses; Resume names the pause it ends, so a stale one cannot
@@ -314,7 +319,7 @@ class AutomationController:
             self.stop_event = threading.Event()
             self.running, self.failed, self.started_at = True, None, self.monotonic()
             self.startup_failures, self.startup_problems, self.startup_texts = {}, {}, {}
-            self.unknown_streak = 0
+            self.unknown_streak = self.fish_unknown_streak = 0
             self.refused_until, self.refused_reason = float('-inf'), ''
             self.paused, self.captcha, self.prestige_ready, self.prestige_seen = False, None, False, False
             self.recent = {}               # trips count from 0 again
@@ -902,6 +907,8 @@ class AutomationController:
             return self._journal_failed(f'Could not record the reply to {action_id}: {error}')
         self.acknowledged.add(action_id)
         self.unknown_streak = 0
+        if kind == 'fish':
+            self.fish_unknown_streak = 0   # only a confirmed /fish ends a run of unknown ones
         self.last_result = {'action_id': action_id, 'result': result, 'at': observation.observed_at}
         now = self.monotonic()
         if result == 'cooldown':
@@ -1144,9 +1151,14 @@ class AutomationController:
                  [f'This {intent.kind} may or may not have reached the game; the run carried on.', reason],
                  blocks_actions=False)
         self.last_result = {'action_id': intent.action_id, 'result': 'unknown', 'at': _iso(self.utc())}
-        self.unknown_streak += 1
-        if self.unknown_streak >= UNKNOWN_LIMIT:
-            stopped = f'{UNKNOWN_LIMIT} commands in a row had no confirmed outcome, so the run stopped. Last: {reason}'
+        if intent.kind == 'fish':
+            self.fish_unknown_streak += 1
+        else:
+            self.unknown_streak += 1
+        if self.unknown_streak >= UNKNOWN_LIMIT or self.fish_unknown_streak >= FISH_UNKNOWN_LIMIT:
+            count = UNKNOWN_LIMIT if self.unknown_streak >= UNKNOWN_LIMIT else FISH_UNKNOWN_LIMIT
+            what = 'reads or actions' if count == UNKNOWN_LIMIT else '/fish commands'
+            stopped = f'{count} {what} in a row had no confirmed outcome, so the run stopped. Last: {reason}'
             try:
                 self._finish(stopped)
             except OSError:

@@ -929,24 +929,37 @@ class ControllerTests(unittest.TestCase):
         self.assertFalse(note['blocks_actions'])
         self.assertIn('the rest was counted', ' '.join(note['reasons']))
 
-    def test_three_unknown_outcomes_in_a_row_stop_the_run(self):
-        self.sim.script = {2: 'missing', 3: 'missing', 4: 'missing'}
+    def test_unknown_fish_read_profile_and_carry_on(self):
+        # Live 2026-10-14: three /fish in a row with no confirmed reply stopped a run. An unknown /fish is followed
+        # by /profile, which says what happened; while the game answers it, fishing carries on.
+        self.sim.script = {2: 'missing', 4: 'missing', 6: 'missing'}
+        self.make(config=replace(CONFIG, max_trips=6)).start()
+        self.run_for(300)
+        kinds = self.kinds()
+        self.assertEqual(kinds[:8], ['refresh_profile', 'refresh_buffs', 'fish', 'refresh_profile', 'fish',
+                                     'refresh_profile', 'fish', 'refresh_profile'])
+        self.assertNotEqual(self.controller.status()['phase'], 'FAILED')
+        self.assertEqual(self.controller.status()['dashboard']['uncounted_since_sync'], 0)
+
+    def test_ten_unknown_fish_in_a_row_stop_the_run(self):
+        from src.automation_controller import FISH_UNKNOWN_LIMIT
+        # Every /fish goes unanswered (sends 2, 4, ...); every /profile after one is answered.
+        self.sim.script = {index: 'missing' for index in range(2, 200, 2)}
         self.make().start()
-        self.run_for(200)
+        self.run_for(1200)
         status = self.controller.status()
         self.assertEqual(status['phase'], 'FAILED')
-        self.assertIn('3 commands in a row', status['reason'])
-        self.assertEqual(len(self.fish_sends()), 3)
+        self.assertIn(f'{FISH_UNKNOWN_LIMIT} /fish commands in a row', status['reason'])
+        self.assertEqual(len(self.fish_sends()), FISH_UNKNOWN_LIMIT)
 
-    def test_profile_is_read_again_after_three_uncounted_trips(self):
-        # Live: 10 of 34 trips had no confirmed reply; their XP was never counted and the level shown fell a level
-        # behind until the next /profile, 100 trips later.
-        self.sim.script = {3: 'missing', 5: 'missing', 7: 'missing'}
-        self.make(config=replace(CONFIG, max_trips=8)).start()
-        self.run_for(200)
-        kinds = [intent.kind for _, intent in self.sim.sent]
-        self.assertEqual(kinds[:9], ['refresh_profile', 'refresh_buffs'] + ['fish'] * 6 + ['refresh_profile'])
-        self.assertEqual(self.controller.status()['dashboard']['uncounted_since_sync'], 0)
+    def test_three_unknown_reads_in_a_row_stop_the_run(self):
+        # The game is not answering at all: /fish, then the /profile after it, all go unanswered.
+        self.sim.script = {index: 'missing' for index in range(2, 20)}
+        self.make().start()
+        self.run_for(300)
+        status = self.controller.status()
+        self.assertEqual(status['phase'], 'FAILED')
+        self.assertIn('3 reads or actions in a row', status['reason'])
 
     def test_noted_outcome_is_not_carried_into_the_next_run(self):
         self.sim.script = {2: 'missing'}
