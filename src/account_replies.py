@@ -7,7 +7,7 @@ did not read cleanly, so the read is tried again. Paged shops are judged complet
 import re
 
 from .paste_detect import SLASH
-from .player_state import BAIT_NAMES, _clean, known_bait, parse_responses
+from .player_state import BAIT_NAMES, _clean, _rod_names, known_bait, known_rod, parse_responses
 
 UPGRADES = ('Better Fish', 'Salesman', 'Bait Efficiency', 'More Chests', 'Worker Motivation', 'Artifact Specialist',
             'Experienced', 'Better Chests', 'Better Dailies')
@@ -144,9 +144,13 @@ def parse_shop_special(text):
 def parse_rod(text):
     lines = _lines(text)
     current = next((m[1].strip() for m in (re.match(r'Currently using:\s*(.+)$', l, re.I) for l in lines) if m), None)
-    # A rod's icon may read as one stray letter ("J Supporter Rod").
-    owned = [match[1] for match in (re.match(r'^\W*(?:[A-Za-z]\s+)?([A-Z][a-z]+ Rod)$', line) for line in lines
-                                    if not line.lower().startswith('currently')) if match]
+    if current:
+        current = known_rod(current)
+    # Each rod line counts when it is closest to one rod in the game data (its icon read as a letter, a misread).
+    rods = set(_rod_names())
+    owned = list(dict.fromkeys(rod for rod in (known_rod(line) for line in lines
+                                               if not line.lower().startswith(('currently', '/rod')))
+                               if rod in rods))
     return _result({'current': current, 'owned': owned}, [] if current else ['Rod in use'], lines)
 
 

@@ -92,6 +92,15 @@ UNLOCKED AT PRESTIGE 5: Virtual Fisher - 40% more high quality fish.''')
         result = parse_responses(profile='Balance: $1,000.\nCurrently using J Supporter Rod.')
         self.assertEqual(result['profile']['rod'], 'Supporter Rod')
 
+    def test_a_rod_is_the_closest_known_rod(self):
+        from src.player_state import known_rod
+        # Live 2026-10-14: "Currently using Z golden." (icon as a letter, " Rod" lost).
+        for read, rod in (('Z golden.', 'Golden Rod'), ('Gplden Rod', 'Golden Rod'), ('Lava', 'Lava Rod'),
+                          ('Steel Rod.', 'Steel Rod'), ('Abyssal Supermagnet', 'Abyssal Supermagnet')):
+            self.assertEqual(known_rod(read), rod, read)
+        for read in ('Mystery Rod', 'Rod'):                   # close to no rod, or to several: kept as read
+            self.assertEqual(known_rod(read), read)
+
     def test_pet_response_records_no_pet_state_and_average_xp(self):
         result = parse_responses(pet='''Pets are permanent, they are not lost when you prestige. They increase in effectiveness as you level them up.
 

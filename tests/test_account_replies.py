@@ -113,6 +113,10 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(parsed['values'], {'current': 'Fiberglass Rod',
                                             'owned': ['Supporter Rod', 'Plastic Rod', 'Steel Rod', 'Fiberglass Rod']})
         self.assertEqual(PARSERS['rod']('/rod <rod name>')['unread'], ['Rod in use'])
+        misread = PARSERS['rod']('/rod <rod name>\nCurrently using: Z golden.\nJ Supporter Rod\nLava\nGolden Rod\n'
+                                 'Some other line')
+        self.assertEqual(misread['values'], {'current': 'Golden Rod',
+                                             'owned': ['Supporter Rod', 'Lava Rod', 'Golden Rod']})
 
     def test_bait_none(self):
         parsed = PARSERS['bait'](sample.BAIT)

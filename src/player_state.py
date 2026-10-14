@@ -5,6 +5,7 @@ Unknown lines are retained; numbers never default to zero.
 """
 import re
 import json
+from functools import cache
 from pathlib import Path
 
 PROFILE_FIELDS = ('account_name', 'balance', 'level', 'prestige', 'xp_current', 'xp_required',
@@ -86,6 +87,32 @@ def known_biome(name):
     """The biome a read name stands for ("i Volcanic" and "Wcanic" are Volcanic), else the name as read."""
     from .catch_check import BIOMES
     return _known(name, BIOMES)
+
+
+def known_rod(name):
+    """The rod a read name stands for, from every rod in game_model.json: its icon misread before it or a mark
+    after it ("J Supporter Rod", "Z golden."), " Rod" lost, or a close misread. A name close to two rods, or to
+    none, is returned as read."""
+    rods = _rod_names()
+    found = _known(name, rods)
+    if found in rods:
+        return found
+    # Matched on the name without " Rod" too ("golden" is Golden Rod), never when two rods share that word.
+    stems = {}
+    for rod in rods:
+        stems.setdefault(rod.removesuffix(' Rod'), []).append(rod)
+    stem = _known(name, [word for word, owners in stems.items() if len(owners) == 1])
+    return stems[stem][0] if stem in stems and len(stems[stem]) == 1 else name
+
+
+@cache
+def _rod_names():
+    """Read once: every /profile read names the rod."""
+    try:
+        from .game_model_data import load_game_data
+        return list(load_game_data()['rods'])
+    except Exception:  # without the game data a rod is kept as read
+        return []
 
 
 def known_pet(name):
@@ -268,8 +295,8 @@ def parse_responses(profile='', buffs='', prestige_shop='', pet='', quests=''):
                             # Observed OCR: "Pet: (Level 51)", the emoji and name lost. The pet stays unknown.
                             continue
                         if field == 'rod':
-                            # The rod's icon may read as one stray letter ("J Supporter Rod", live 2026-10-14).
-                            value = re.sub(r'^[A-Za-z]\s+(?=[A-Z][a-z]+ Rod\.?$)', '', value)
+                            # Live: "J Supporter Rod", "Z golden." (the icon as a letter, " Rod" lost).
+                            value = known_rod(value)
                         if field == 'biome':
                             value = known_biome(value)
                         if field == 'pet':
