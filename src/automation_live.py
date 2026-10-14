@@ -8,7 +8,8 @@ from .automation_controller import AutomationController
 from .automation_discord import DiscordTransport
 from .automation_journal import AutomationJournal
 from .automation_models import AutomationConfig
-from .discord_input import WindowsDiscordDriver
+from .ahk_discord_input import AhkDiscordDriver
+from .ahk_runtime import AhkSetupError, ready_ahk, resolve_ahk
 from .player_snapshots import account_key, write_json_atomically
 from .window_capture import find_discord_window
 from .run_output import RunOutput
@@ -16,7 +17,7 @@ from .run_output import RunOutput
 DEFAULT_LIVE_ROOT = Path(__file__).parent / 'data' / 'automation_live'
 
 
-def live_problem() -> str:
+def live_problem(ahk_exe: Path | None = None) -> str:
     """Why live mode cannot run on this machine, or '' when it can."""
     import sys
     from .screenshot_ocr import ocr_available
@@ -26,11 +27,15 @@ def live_problem() -> str:
     if not ocr_available():
         return ('Live mode needs the Windows OCR packages. Start the server with the project\'s .venv Python '
                 '(see README).')
+    try:
+        ready_ahk(ahk_exe)
+    except AhkSetupError as error:
+        return str(error)
     return ''
 
 
 def build_live(channel, account, username, root=DEFAULT_LIVE_ROOT, max_trips=None, max_seconds=None,
-               interval=0.5, window=None):
+               interval=0.5, window=None, ahk_exe: Path | None = None):
     """(controller, transport) for a live run against the Discord window. Raises RuntimeError when no Discord
     window is found. Nothing is sent until the transport is enabled and the controller started."""
     if window is None:
@@ -38,7 +43,8 @@ def build_live(channel, account, username, root=DEFAULT_LIVE_ROOT, max_trips=Non
         if detected is None:
             raise RuntimeError('Discord window not found. Open Discord and try again.')
         window = detected[0]
-    driver = WindowsDiscordDriver(window, channel)
+    runtime = resolve_ahk(ahk_exe)
+    driver = AhkDiscordDriver(window, channel, runtime)
     transport = DiscordTransport(driver, window, channel, account, username)
     folder = Path(root) / account_key(account)
     config = AutomationConfig(account, username, transport.context_id,
@@ -86,11 +92,12 @@ def parse_args(argv=None):
     parser.add_argument('--channel', required=True, help='Exact VF DM label (server channels are not supported yet)')
     parser.add_argument('--account', required=True, help='VF profile display name')
     parser.add_argument('--username', required=True, help='Discord username shown in fishing replies')
+    parser.add_argument('--ahk-exe', type=Path, help='Ordinary AutoHotkey v2 x64 executable override')
     parser.add_argument('--window', type=int, help='Window handle; defaults to the detected Discord window')
-    parser.add_argument('--live', action='store_true', help='Enable native input; default is inspection only')
+    parser.add_argument('--live', action='store_true', help='Enable targeted AHK input; default is inspection only')
     parser.add_argument('--trips', type=int, help='Optional limit of 1–25 confirmed trips')
     parser.add_argument('--seconds', type=int, help='Optional time limit of 1–900 seconds')
-    parser.add_argument('--startup-delay', type=float, default=5, help='Time to foreground Discord after starting')
+    parser.add_argument('--startup-delay', type=float, default=5, help='Preparation grace period before starting')
     parser.add_argument('--data-dir', type=Path, default=DEFAULT_LIVE_ROOT)
     parser.add_argument('--resolve', help='Resolve a previously uncertain action without starting a run')
     parser.add_argument('--outcome', choices=('happened', 'not_sent'))
@@ -118,24 +125,30 @@ def main():
 def run(args, output):
     try:
         controller, transport = build_live(args.channel, args.account, args.username, args.data_dir,
-                                           args.trips, args.seconds, window=args.window)
+                                           args.trips, args.seconds, window=args.window, ahk_exe=args.ahk_exe)
     except RuntimeError as error:
         output.say(str(error))
         return
-    output.say(f'{args.account} — {args.channel}. Switch to Discord within {args.startup_delay:g} seconds.')
-    time.sleep(args.startup_delay)
-    if not args.live and not args.resolve:
-        status = transport.inspect_context()
-        output.say('Discord is ready. Inspection only; nothing sent.' if status.ok else 'Discord is not ready: ' + status.reason)
-        return
     try:
-        controller.start()
+        runtime = getattr(transport.driver, 'bridge', None)
+        if runtime is not None:
+            runtime = runtime.runtime
+            output.say(f'AutoHotkey {runtime.version} x{runtime.bitness}: {runtime.executable}')
+        output.say(f'{args.account} — {args.channel}. Starting after {args.startup_delay:g} seconds.')
+        time.sleep(args.startup_delay)
+        if not args.live and not args.resolve:
+            status = transport.inspect_context()
+            output.say('Discord is ready. Inspection only; nothing sent.' if status.ok else 'Discord is not ready: ' + status.reason)
+            return
         if args.resolve:
+            controller.start()
             resolved = controller.resolve(args.resolve, args.outcome)
             output.say('Action resolved.' if resolved else 'That action was not awaiting resolution.')
             return
         transport.enable()
-        output.say('Starting. Keep Discord in front: switching away pauses the run. Ctrl+C stops it.')
+        controller.start()
+        output.say('Keep Discord open on the Virtual Fisher DM and not minimized. '
+                   'You can use other applications while the run continues. Ctrl+C stops it.')
         while controller.running:
             controller.tick()
             status = controller.status()
@@ -148,10 +161,13 @@ def run(args, output):
     finally:
         transport.stop()
         controller.stop()
-        output.update(controller.status())
-        problem = save_diagnostics(controller, transport, args.data_dir)
-        if problem:
-            output.say(problem)
+        try:
+            output.update(controller.status())
+            problem = save_diagnostics(controller, transport, args.data_dir)
+            if problem:
+                output.say(problem)
+        finally:
+            transport.close()
 
 
 if __name__ == '__main__':

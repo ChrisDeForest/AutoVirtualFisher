@@ -378,6 +378,9 @@ class AutomationController:
 
     def stop(self, reason='Stopped.', timeout=10.0):
         """Stop sending. A command already handed over is not undone; its outcome stays in the journal."""
+        cancel_input = getattr(self.transport, 'stop', None)
+        if cancel_input is not None:
+            cancel_input()  # Available even while another thread holds the controller/send lock.
         with self.lock:
             if self.running:
                 self._event('run_stopped', reason=reason)
@@ -1384,10 +1387,16 @@ class AutomationController:
         return ' '.join(f'{action}: {reason}' for action, reason in sorted(self.unresolved.items()))
 
     def _journal_failed(self, reason):
+        cancel_input = getattr(self.transport, 'stop', None)
+        if cancel_input is not None:
+            cancel_input()
         self.failed = reason
         self.phase, self.reason = 'FAILED', reason
 
     def _finish(self, reason):
+        cancel_input = getattr(self.transport, 'stop', None)
+        if cancel_input is not None:
+            cancel_input()
         self._event('run_stopped', reason=reason)
         self.running = False
         self.generation += 1

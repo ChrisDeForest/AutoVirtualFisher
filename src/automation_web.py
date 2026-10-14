@@ -1118,8 +1118,8 @@ def render_automation(head, status, notice='', live_problem='', settings=None, m
                         '<title>Automation · AutoVirtualFisher</title>').replace('</head>', STYLE + '</head>')
     notice_html = f'<p class="save-status">{escape(notice)}</p>' if notice else ''
     if running and mode == 'live':
-        control = ('<p class="status"><strong>Switch to Discord</strong> to fish. The run types into Discord only '
-                   'while it is in front; switching away pauses it until you come back.</p>')
+        control = ('<p class="status">Keep Discord open on the Virtual Fisher DM and not minimized. '
+                   'You can use other applications while the run continues.</p>')
     elif running:
         control = ''
     else:

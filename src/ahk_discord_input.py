@@ -83,8 +83,11 @@ class AhkDiscordDriver(WindowsDiscordDriver):
     def _guard(self,cancelled):
         if cancelled():
             raise TransportError('Stopped.')
-        if self._target_window() is None or self.api.IsIconic(self.window):
+        current = self._target_window()
+        if current is None or self.api.IsIconic(self.window):
             raise TransportError('Discord target changed or is minimized.')
+        if self.title is not None and current[1] != self.title:
+            raise TransportError('Discord title changed during input.')
         self._resolve_target()
 
     def _frame(self,cancelled,frame=None,deep=False):

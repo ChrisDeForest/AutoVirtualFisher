@@ -292,6 +292,7 @@ class Handler(BaseHTTPRequestHandler):
     automation_transport = None
     # Live runs keep their journal, trips, review items, diagnostics and last settings here.
     automation_live_root = DEFAULT_LIVE_ROOT
+    automation_ahk_exe = None
     automation_live_factory = staticmethod(build_live)
     automation_live_problem = staticmethod(live_problem)
     # Part 6: (account, monotonic time, progress) of the last Progress view built from the live account's files.
@@ -400,7 +401,7 @@ class Handler(BaseHTTPRequestHandler):
         cls = type(self)
         status = self.with_disk_progress(cls.automation.status() if cls.automation else None)
         nonce = secrets.token_urlsafe(16)
-        self.send_content(render_automation(head, status, notice, cls.automation_live_problem(),
+        self.send_content(render_automation(head, status, notice, self.automation_readiness(),
                                             self.live_settings(), cls.automation_mode, nonce), script_nonce=nonce)
 
     def live_settings(self):
@@ -461,12 +462,19 @@ class Handler(BaseHTTPRequestHandler):
     def stop_automation(self):
         """Stop the current run; a live run also stops input and saves what it last saw."""
         cls = type(self)
+        if cls.automation_transport is not None:
+            cls.automation_transport.stop()  # Cancel input before waiting for the controller thread.
         if cls.automation:
             cls.automation.stop()
         if cls.automation_transport is not None:
-            cls.automation_transport.stop()
-            save_diagnostics(cls.automation, cls.automation_transport, cls.automation_live_root)
-            cls.automation_transport = None
+            transport = cls.automation_transport
+            try:
+                save_diagnostics(cls.automation, transport, cls.automation_live_root)
+            finally:
+                close = getattr(transport, 'close', None)
+                if close is not None:
+                    close()
+                cls.automation_transport = None
 
     def automation_action(self):
         try:
@@ -544,11 +552,16 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Length', '0')
         self.end_headers()
 
-    def start_live(self, fields, trips, minutes):
-        """Start a live run; returns a problem to show, or '' once it is running (paused until Discord is in
-        front). Called with AUTOMATION_LOCK held."""
+    def automation_readiness(self):
         cls = type(self)
-        problem = cls.automation_live_problem()
+        if cls.automation_ahk_exe is None:
+            return cls.automation_live_problem()
+        return cls.automation_live_problem(ahk_exe=cls.automation_ahk_exe)
+
+    def start_live(self, fields, trips, minutes):
+        """Start a live run; return a problem or ''. Called with AUTOMATION_LOCK held."""
+        cls = type(self)
+        problem = self.automation_readiness()
         if problem:
             return problem
         account, username, channel = (fields.get(name, [''])[0].strip() for name in ('account', 'username', 'channel'))
@@ -557,8 +570,9 @@ class Handler(BaseHTTPRequestHandler):
             return 'Enter your Virtual Fisher name and Discord username.'
         self.stop_automation()
         try:
+            kwargs = {'ahk_exe': cls.automation_ahk_exe} if cls.automation_ahk_exe is not None else {}
             controller, transport = cls.automation_live_factory(channel, account, username, Path(cls.automation_live_root),
-                                                                trips, minutes * 60 if minutes else None, 0.5)
+                                                                trips, minutes * 60 if minutes else None, 0.5, **kwargs)
         except RuntimeError as error:
             return str(error)
         try:
@@ -570,8 +584,17 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             pass  # remembering the names is a convenience only
         cls.automation, cls.automation_transport, cls.automation_mode = controller, transport, 'live'
-        controller.start(thread=True)
-        transport.enable()
+        try:
+            transport.enable()
+            controller.start(thread=True)
+        except Exception as error:
+            transport.stop()
+            controller.stop()
+            close = getattr(transport, 'close', None)
+            if close is not None:
+                close()
+            cls.automation, cls.automation_transport = None, None
+            return f'Live run could not start: {error}'
         return ''
 
     def do_GET(self):
@@ -683,7 +706,7 @@ TIPS = (
     'The Model tab compares each trip with the game model; big gaps are worth a look.',
     'A captcha pauses the run and pops up an alert. Solve it in Discord, then Resume.',
     'Lava and Diamond Fish buy special shop upgrades; the Plan tab spends them in order.',
-    'Keep Discord in front while a run is live: it waits whenever it is not.',
+    'Keep Discord open on the Virtual Fisher DM and not minimized. You can use other applications while the run continues.',
 )
 
 
@@ -712,10 +735,12 @@ def greeting(port, account=None, hour=None, tip=None):
 def main():
     parser = argparse.ArgumentParser(description='Open the local player logbook')
     parser.add_argument('--port', type=int, default=8765)
+    parser.add_argument('--ahk-exe', type=Path, help='Ordinary AutoHotkey v2 x64 executable override')
     parser.add_argument('--keep-captures', type=Path, metavar='DIR',
                         help='Keep live-capture images whose chat text changed, with their OCR results, in DIR '
                              '(for analysing misreads; e.g. docs/screenshots/ocr)')
     args = parser.parse_args()
+    Handler.automation_ahk_exe = args.ahk_exe
     if args.keep_captures:
         Handler.live_capture_function = staticmethod(make_capture(args.keep_captures))
         Handler.keep_captures_dir = args.keep_captures.resolve()
@@ -734,10 +759,12 @@ def main():
         finally:
             if Handler.live:
                 Handler.live.stop()
+            if Handler.automation_transport is not None:
+                Handler.automation_transport.stop()
             if Handler.automation:
                 Handler.automation.stop()
             if Handler.automation_transport is not None:
-                Handler.automation_transport.stop()
+                Handler.automation_transport.close()
 
 
 if __name__ == '__main__':

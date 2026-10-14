@@ -60,7 +60,7 @@ def stable_frame(lines):
 
 COMMANDS = {'refresh_profile': '/profile', 'refresh_buffs': '/buffs', 'refresh_charms': '/charms', 'fish': '/fish',
             **{kind: read.command for kind, read in ACCOUNT_READS.items()},
-            # Page 2 of a paged read is a click on the â†’ button, never typed.
+            # Page 2 of a paged read is a click on the → button, never typed.
             **{kind: NEXT_PAGE for kind in PAGE_TWO}}
 # Identical reads of a fishing reply with problems before it is delivered as it is.
 FISHING_REREADS = 2
@@ -475,7 +475,7 @@ class DiscordTransport:
                     if (re.match(r'^' + re.escape(self.identity.display_name) + r' used\b', tail[0])
                             and re.search(r'\b' + re.escape(command) + r'\b', '\n'.join(tail[:2]))
                             and any(MESSAGE_HEADER.fullmatch(line) for line in tail[1:])
-                            and re.fullmatch(r'\W*Sending command(?:\.{3}|â€¦)?\W*', tail[-1], re.I)):
+                            and re.fullmatch(r'\W*Sending command(?:\.{3}|…)?\W*', tail[-1], re.I)):
                         self.sending_seen = True
                         self.candidate = None
                         self.last_issue = 'Discord shows Sending command; retrying reply capture without resending.'

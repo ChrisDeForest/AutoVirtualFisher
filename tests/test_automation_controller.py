@@ -267,7 +267,7 @@ class ControllerTests(unittest.TestCase):
         original = self.sim._play
         def play(intent, now):
             if intent.kind == 'refresh_profile':
-                return ('Inventory of sim\nBalance: $50.\nP4 Level 30, xp to next leveL\nFish Invent«y\na777 Salmon', 'profile')
+                return ('Inventory of sim\nBalance: $50.\nP4 Level 30, xp to next leveL\nFish InventÃ‚Â«y\na777 Salmon', 'profile')
             if intent.kind == 'refresh_buffs':
                 return ("sim0001's current multipliers (including bait):\nFish quality: ??\nFishing cooldown: 3.5s.", 'buffs')
             return original(intent, now)
@@ -1380,3 +1380,59 @@ class ControllerTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class AhkControllerIntegrationTests(unittest.TestCase):
+    setUp = ControllerTests.setUp
+    tearDown = ControllerTests.tearDown
+    make = ControllerTests.make
+    # Reuse fixture helpers, not the inherited test suite.
+    def test_ahk_foreground_changes_do_not_freeze_reply_deadline(self):
+        from tests.test_automation_discord import Driver
+        from src.automation_discord import DiscordTransport
+        driver=Driver(); driver.requires_foreground=False; driver.foreground=False
+        transport=DiscordTransport(driver,42,'Virtual Fisher','epicmouse','epicmouse9925',utc=self.clock.utc,monotonic=self.clock.monotonic)
+        self.sim=transport; transport.enable()
+        config=AutomationConfig('epicmouse','epicmouse9925',transport.context_id,capabilities=('refresh_profile',))
+        self.make(config=config).start(); self.controller.tick()
+        sent_at=self.controller.sent_at
+        self.clock.now=10; self.controller.tick()
+        self.assertEqual(self.controller.phase,'WAITING_REPLY')
+        self.assertEqual(self.controller.sent_at,sent_at)
+        self.assertIsNone(self.controller.focus_lost_at)
+        self.clock.now=21; self.controller.tick()
+        self.assertNotEqual(self.controller.phase,'WAITING_FOCUS')
+        self.assertNotEqual(self.controller.sent_at,sent_at)  # Existing startup retry follows the expired read.
+        self.assertEqual(len(driver.sent),2)
+
+    def test_terminal_finish_cancels_owned_input(self):
+        from unittest.mock import Mock
+        self.sim.stop=Mock()
+        self.make(config=replace(CONFIG,max_seconds=.1)).start()
+        self.clock.now=1; self.controller.tick()
+        self.sim.stop.assert_called_once()
+
+    def test_stop_cancels_transport_before_controller_lock(self):
+        from unittest.mock import Mock
+        self.sim.stop=Mock()
+        self.make().start(); self.controller.stop()
+        self.sim.stop.assert_called_once()
+
+    def test_ahk_uncertain_send_preserves_existing_startup_retry_policy(self):
+        from tests.test_automation_discord import Driver
+        from src.automation_discord import DiscordTransport
+        from src.automation_models import TransportError
+        driver=Driver(); driver.requires_foreground=False; driver.foreground=False
+        calls=[]
+        def lost(command,cancelled,before=None):
+            calls.append(command); raise TransportError('AHK lost acknowledgement after Enter')
+        driver.dispatch=lost
+        transport=DiscordTransport(driver,42,'Virtual Fisher','epicmouse','epicmouse9925',utc=self.clock.utc,monotonic=self.clock.monotonic)
+        self.sim=transport; transport.enable()
+        config=AutomationConfig('epicmouse','epicmouse9925',transport.context_id,capabilities=('refresh_profile',))
+        self.make(config=config).start(); self.controller.tick()
+        self.clock.now=5; self.controller.tick()
+        self.assertEqual(calls,['/profile','/profile'])  # Separate existing startup retry, not bridge replay.
+        self.assertIsNone(transport.blocked)  # Existing controller forgets after journaling each unknown read.
+        events=AutomationJournal(self.journal_root).recover()['actions']
+        self.assertTrue(any(info['status']!='never_sent' for info in events.values()))

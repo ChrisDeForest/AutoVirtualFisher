@@ -85,3 +85,9 @@ class AdapterTests(unittest.TestCase):
     def test_primitive_lifecycle_hooks(self):
         self.d.enable_input(); self.d.cancel_input(); self.d.close()
         self.d.bridge.start.assert_called_once(); self.d.bridge.cancel_input.assert_called_once(); self.d.bridge.close.assert_called_once()
+
+    def test_title_changed_between_primitives_refuses_input(self):
+        self.d.title='Virtual Fisher - Discord'
+        self.d._target_window=lambda:(99,'Other DM - Discord')
+        with self.assertRaises(TransportError): self.d._text('draft',lambda:False)
+        self.d.bridge.request.assert_not_called()

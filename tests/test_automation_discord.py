@@ -28,9 +28,9 @@ class FishingOverlapRegressionTests(unittest.TestCase):
         from src.automation_discord import stable_frame
         from src.live_capture import align
         old = ['Virtual Fisher 12:17 PM', 'You caught:', '2 Fish', '4 Salmon', '9 Cod',
-               '+117 XP', 'LEVEL UP! You are', 'QUEST COMPLETE!', 'Daily Levelâ€”ups Tier 1', 'Reward:', 'lx uncommon chest']
+               '+117 XP', 'LEVEL UP! You are', 'QUEST COMPLETE!', 'Daily Level—ups Tier 1', 'Reward:', 'lx uncommon chest']
         before = stable_frame(old)
-        repaired = ['epicmouse used /fish'] + [line.replace('Levelâ€”ups', 'Level-ups') for line in old]
+        repaired = ['epicmouse used /fish'] + [line.replace('Level—ups', 'Level-ups') for line in old]
         after = stable_frame(repaired + ['epicmouse used /profile', 'Virtual Fisher 12:20 PM',
                                         'Inventory of epicmouse', 'Balance: $54,056.', 'Level 31'])
         self.assertEqual(align(before, after)['status'], 'certain')
@@ -125,7 +125,7 @@ class DiscordTests(unittest.TestCase):
         self.intent = ActionIntent('p1', 'refresh_profile', self.transport.context_id,
                                    self.now.isoformat(), 'profile')
         self.send()
-        self.driver.lines += PROFILE + ['Fish InventÂ«y']
+        self.driver.lines += PROFILE + ['Fish Invent«y']
         self.assertEqual(self.transport.poll(), [])
         self.driver.lines[-1] = 'Fish Inventory ???'
         self.assertEqual(len(self.transport.poll()), 1)
@@ -279,7 +279,7 @@ class DiscordTests(unittest.TestCase):
 
     def test_caption_punctuation_change_is_not_a_new_trip(self):
         self.send()
-        self.driver.lines = [line.replace('Someone!', 'Someoneâ€”!') for line in self.driver.lines]
+        self.driver.lines = [line.replace('Someone!', 'Someone—!') for line in self.driver.lines]
         self.assertEqual(self.transport.poll(), [])
         self.assertTrue(self.transport.inspect_context().ok)
 
@@ -338,7 +338,7 @@ class DiscordTests(unittest.TestCase):
         self.send()
         self.driver.lines = self.driver.lines + [
             'epicmouse used', 'fish', 'Virtual Fisher 3:22 PM', 'You must wait O.Is before fishing again.',
-            'Your cooldown: 2.7s', '@ Only you can see this â€¢ Dismiss message']
+            'Your cooldown: 2.7s', '@ Only you can see this • Dismiss message']
         replies = self.transport.poll() or self.transport.poll()
         self.assertEqual(len(replies), 1)
         self.assertIn('You must wait', replies[0].text)

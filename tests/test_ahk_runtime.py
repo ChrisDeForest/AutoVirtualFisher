@@ -58,6 +58,19 @@ class RuntimeTests(unittest.TestCase):
         with self.assertRaises(self.m.AhkSetupError): self.m.resolve_ahk(uia)
 
     def test_import_does_not_start_process_or_initialize_windows(self):
-        with patch.object(subprocess,'run') as run, patch.object(subprocess,'Popen') as popen:
-            importlib.reload(self.m)
-            run.assert_not_called(); popen.assert_not_called()
+        import sys
+        code = "from unittest.mock import patch; import subprocess; " \
+               "r=patch.object(subprocess,'run'); p=patch.object(subprocess,'Popen'); " \
+               "run=r.start(); popen=p.start(); import src.ahk_runtime; " \
+               "run.assert_not_called(); popen.assert_not_called()"
+        result = subprocess.run([sys.executable,'-c',code],capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+
+    def test_readiness_cache_invalidates_when_executable_changes(self):
+        self.m._READINESS.clear()
+        with patch.object(self.m.subprocess,'run',return_value=self.report()) as run:
+            self.m.ready_ahk(self.exe); self.m.ready_ahk(self.exe)
+            self.assertEqual(run.call_count,1)
+            self.exe.write_bytes(b'changed')
+            self.m.ready_ahk(self.exe)
+            self.assertEqual(run.call_count,2)

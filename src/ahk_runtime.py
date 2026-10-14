@@ -83,3 +83,25 @@ def resolve_ahk(executable: Path | None = None) -> AhkRuntime:
             except AhkSetupError as error:
                 failures.append(str(error))
     raise AhkSetupError(failures[-1] if failures else 'AutoHotkey was not found. ' + SETUP)
+
+
+_READINESS = {}
+
+def ready_ahk(executable: Path | None = None) -> AhkRuntime:
+    """Cache positive read-only readiness by configuration and executable identity."""
+    override = executable if executable is not None else os.environ.get('AVF_AHK_EXE')
+    paths = [Path(override)] if override is not None else list(_candidates())
+    identities = []
+    for path in paths:
+        try:
+            stat = path.stat()
+            identity = (stat.st_mtime_ns, stat.st_size)
+        except OSError:
+            identity = None
+        identities.append((str(path.resolve()),identity))
+    key = tuple(identities)
+    if key not in _READINESS:
+        runtime = resolve_ahk(executable)
+        _READINESS.clear()
+        _READINESS[key] = runtime
+    return _READINESS[key]

@@ -134,7 +134,8 @@ class AutomationWebTests(unittest.TestCase):
                          ('epicmouse', 'epicmouse9925', 'Virtual Fisher'))
         self.assertEqual((call['max_trips'], call['max_seconds']), (None, None))
         self.assertTrue(call['transport'].enabled)
-        self.assertIn('Switch to Discord', html)
+        self.assertIn('not minimized', html)
+        self.assertIn('use other applications', html)
         self.assertIn('Live', html)
         self.assertTrue(self.handler.automation.status()['running'])
         html = self.post(action='stop')
@@ -735,3 +736,38 @@ class AutomationWebTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class AhkWebLifecycleTests(unittest.TestCase):
+    def test_override_and_input_start_precede_controller_thread(self):
+        from unittest.mock import Mock
+        with tempfile.TemporaryDirectory() as directory:
+            cls=type('AhkHandler',(Handler,),{})
+            handler=cls.__new__(cls)
+            cls.automation=None; cls.automation_transport=None
+            cls.automation_live_root=directory; cls.identity_path=Path(directory)/'identity.json'
+            cls.automation_ahk_exe=Path('C:/AHK/AutoHotkey64.exe')
+            order=[]; controller=Mock(); transport=Mock()
+            transport.enable.side_effect=lambda:order.append('enable')
+            controller.start.side_effect=lambda **kw:order.append('start')
+            readiness=Mock(return_value=''); factory=Mock(return_value=(controller,transport))
+            cls.automation_live_problem=staticmethod(readiness); cls.automation_live_factory=staticmethod(factory)
+            result=handler.start_live({'account':['epicmouse'],'username':['epicmouse9925']},1,None)
+            self.assertEqual(result,''); self.assertEqual(order,['enable','start'])
+            self.assertEqual(factory.call_args.kwargs,{'ahk_exe':cls.automation_ahk_exe})
+            readiness.assert_called_once_with(ahk_exe=cls.automation_ahk_exe)
+            from unittest.mock import patch
+            with patch('src.player_web.save_diagnostics',return_value=''):
+                handler.stop_automation()
+            transport.close.assert_called_once()
+
+    def test_disposal_closes_input_even_when_diagnostics_fail(self):
+        from unittest.mock import Mock, patch
+        cls=type('AhkFailureHandler',(Handler,),{})
+        handler=cls.__new__(cls)
+        cls.automation=Mock(); cls.automation_transport=Mock()
+        transport=cls.automation_transport
+        with patch('src.player_web.save_diagnostics',side_effect=RuntimeError('bad diagnostic')):
+            with self.assertRaises(RuntimeError): handler.stop_automation()
+        transport.close.assert_called_once()
+        self.assertIsNone(cls.automation_transport)
