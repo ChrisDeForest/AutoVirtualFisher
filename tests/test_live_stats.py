@@ -385,3 +385,13 @@ class PetLevelTests(unittest.TestCase):
         from src.live_stats import summarize_finds
         saved = [{'charm_levels': {'pet Puffer leveled up! It': 33, 'Haste Charm': 2}}]
         self.assertEqual(summarize_finds(saved)['charm_levels'], {'Haste Charm': 2})
+
+
+class ChestOcrFindsTests(unittest.TestCase):
+    def test_saved_chest_aliases_merge_without_losing_counts(self):
+        from src.live_stats import summarize_finds
+        tallies = [{'finds': {'legendary crate JtJ': 2, 'legendary crate': 3,
+                             'uncomrnon chest': 4, 'uncornmon chest': 1, 'uncommon chest': 5}}]
+        self.assertEqual(summarize_finds(tallies)['chests'],
+                         {'legendary crate': 5, 'uncommon chest': 10})
+        self.assertEqual(tallies[0]['finds']['uncomrnon chest'], 4)

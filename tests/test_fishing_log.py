@@ -54,6 +54,13 @@ class LiveFishingTests(unittest.TestCase):
         self.assertEqual(parse_fishing('You caught:\n1 Cod\nYou found 2x Worker Charm!\n+5 XP')['finds'],
                          {'Worker Charm': 2})
 
+    def test_observed_chest_ocr_variants_share_canonical_names(self):
+        text = ('You caught:\n1 Cod\nYou found a legendary crate JtJ\n'
+                'You found a legendary crate\nYou found an uncomrnon chest\n'
+                'You found an uncommon chest\n+5 XP')
+        tally = parse_fishing(text)
+        self.assertEqual(tally['finds'], {'legendary crate': 2, 'uncommon chest': 2})
+
     def test_charm_emoji_read_as_a_letter_is_not_part_of_its_name(self):
         tally = parse_fishing('You caught:\n2 Cod\nYou found an epic crate\nYou found a Quantity Charm Q !\n+233 xp')
         self.assertEqual(tally['finds'], {'epic crate': 1, 'Quantity Charm': 1})

@@ -41,8 +41,11 @@ def known_name(name: str) -> str:
     """A found item's name as the game writes it when it is a known fish, else as read. A charm's emoji read
     as one trailing letter ("Quantity Charm Q") is dropped."""
     name = re.sub(r'(\bCharm)\s+\S$', r'\1', name, flags=re.I)
-    # A chest's or crate's icon read as a mark after it ("legendary crate e", "epic crate $").
-    name = re.sub(r'\b(chest|crate|box)\s+\S{1,2}$', r'\1', name, flags=re.I)
+    # Observed icon reads include "legendary crate JtJ", as well as shorter marks.
+    name = re.sub(r'\b(chest|crate|box)\s+(?:\S{1,2}|JtJ)$', r'\1', name, flags=re.I)
+    # Normalize saved finds too: summaries call this same function when loading old tallies.
+    if name.casefold() in ('uncornmon chest', 'uncomrnon chest'):
+        name = 'uncommon chest'
     found = next((known for known in _known_names() if _fold(known) == _fold(name)), None)
     return found or _charm_name(name) or next(
         (known for known in _known_names() if _fold(known) == _fold(without_icon(name))), name)
@@ -215,9 +218,6 @@ def parse_fishing(text: str) -> dict:
             upcoming.append(f'Pet {name} +{match[2]} pet XP')
         elif match := re.fullmatch(r'You found (?:an? )?(?:(\d+)x )?(.+?)\s*!?', line, re.I):
             name = known_name(_name(match[2]))
-            # Exact observed OCR substitution: rn for m in this chest label only.
-            if name.lower() == 'uncornmon chest':
-                name = 'uncommon chest'
             # "You found 2x Worker Charm" (seen live): two at once.
             _add(tally['finds'], name, int(match[1]) if match[1] else 1)
             event(f'Found {name}')
