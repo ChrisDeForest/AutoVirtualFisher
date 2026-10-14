@@ -28,9 +28,9 @@ class FishingOverlapRegressionTests(unittest.TestCase):
         from src.automation_discord import stable_frame
         from src.live_capture import align
         old = ['Virtual Fisher 12:17 PM', 'You caught:', '2 Fish', '4 Salmon', '9 Cod',
-               '+117 XP', 'LEVEL UP! You are', 'QUEST COMPLETE!', 'Daily Level—ups Tier 1', 'Reward:', 'lx uncommon chest']
+               '+117 XP', 'LEVEL UP! You are', 'QUEST COMPLETE!', 'Daily Levelâ€”ups Tier 1', 'Reward:', 'lx uncommon chest']
         before = stable_frame(old)
-        repaired = ['epicmouse used /fish'] + [line.replace('Level—ups', 'Level-ups') for line in old]
+        repaired = ['epicmouse used /fish'] + [line.replace('Levelâ€”ups', 'Level-ups') for line in old]
         after = stable_frame(repaired + ['epicmouse used /profile', 'Virtual Fisher 12:20 PM',
                                         'Inventory of epicmouse', 'Balance: $54,056.', 'Level 31'])
         self.assertEqual(align(before, after)['status'], 'certain')
@@ -125,7 +125,7 @@ class DiscordTests(unittest.TestCase):
         self.intent = ActionIntent('p1', 'refresh_profile', self.transport.context_id,
                                    self.now.isoformat(), 'profile')
         self.send()
-        self.driver.lines += PROFILE + ['Fish Invent«y']
+        self.driver.lines += PROFILE + ['Fish InventÂ«y']
         self.assertEqual(self.transport.poll(), [])
         self.driver.lines[-1] = 'Fish Inventory ???'
         self.assertEqual(len(self.transport.poll()), 1)
@@ -279,7 +279,7 @@ class DiscordTests(unittest.TestCase):
 
     def test_caption_punctuation_change_is_not_a_new_trip(self):
         self.send()
-        self.driver.lines = [line.replace('Someone!', 'Someone—!') for line in self.driver.lines]
+        self.driver.lines = [line.replace('Someone!', 'Someoneâ€”!') for line in self.driver.lines]
         self.assertEqual(self.transport.poll(), [])
         self.assertTrue(self.transport.inspect_context().ok)
 
@@ -322,7 +322,7 @@ class DiscordTests(unittest.TestCase):
         # Live 2026-10-14: the Sell click restyled the catch's buttons, and that catch was taken as the reply.
         from src.actions import Action
         self.intent = ActionIntent('b1', 'act', self.transport.context_id, self.now.isoformat(), 'action',
-                                   arguments=(Action('sell').to_dict(),))
+                                   arguments=(dict(act='sell'),))
         self.driver.dispatch_action = lambda line, amount, cancelled, before=None: None
         self.send()
         self.driver.lines = self.driver.lines + fish(3, 3, 30)
@@ -338,7 +338,7 @@ class DiscordTests(unittest.TestCase):
         self.send()
         self.driver.lines = self.driver.lines + [
             'epicmouse used', 'fish', 'Virtual Fisher 3:22 PM', 'You must wait O.Is before fishing again.',
-            'Your cooldown: 2.7s', '@ Only you can see this • Dismiss message']
+            'Your cooldown: 2.7s', '@ Only you can see this â€¢ Dismiss message']
         replies = self.transport.poll() or self.transport.poll()
         self.assertEqual(len(replies), 1)
         self.assertIn('You must wait', replies[0].text)
@@ -761,3 +761,50 @@ class SellButtonTests(unittest.TestCase):
                                       b('Fish Again', 527, 822), b('Sell', 653, 822), b('Return', 730, 822)]}
         self.assertEqual(sell_point(capture), (683.0, 829.5))
         self.assertIsNone(sell_point({'original_boxes': [b('Sell', 653, 822)]}))   # not beside Return
+
+
+class AhkTransportTests(unittest.TestCase):
+    def setUp(self):
+        self.driver=Driver(); self.driver.requires_foreground=False; self.driver.foreground=False
+        self.transport=DiscordTransport(self.driver,42,'Virtual Fisher','epicmouse','epicmouse9925')
+
+    def test_inactive_ahk_inspect_poll_and_captcha_clear(self):
+        self.assertTrue(self.transport.inspect_context().ok)
+        self.transport.enable()
+        intent=ActionIntent('ahk-fish','fish',self.transport.context_id,datetime.now(timezone.utc).isoformat(),'fishing')
+        self.transport.send(intent)
+        self.assertEqual(self.transport.poll(),[])
+        self.assertIsNotNone(self.transport.pending)
+        self.driver.requires_foreground=True
+        from src.automation_models import NOT_FOREGROUND
+        self.assertEqual(self.transport.inspect_context().reason,NOT_FOREGROUND)
+
+    def test_lifecycle_hooks_cancel_without_sender_lock(self):
+        from unittest.mock import Mock
+        self.driver.enable_input=Mock(); self.driver.cancel_input=Mock(); self.driver.close=Mock()
+        self.transport.enable(); self.driver.enable_input.assert_called_once()
+        with self.transport.lock: self.transport.stop()
+        self.assertTrue(self.transport.cancelled.is_set()); self.assertFalse(self.transport.enabled)
+        self.driver.cancel_input.assert_called_once()
+        self.transport.close(); self.transport.close(); self.driver.close.assert_called_once()
+
+    def test_enable_failure_keeps_input_disabled(self):
+        def fail(): raise RuntimeError('worker unavailable')
+        self.driver.enable_input=fail
+        with self.assertRaises(RuntimeError): self.transport.enable()
+        self.assertFalse(self.transport.enabled)
+
+    def test_lost_button_ack_preserves_uncertain_pending(self):
+        self.transport.enable()
+        self.driver.lines += ['epicmouse used /fish','Virtual Fisher','You caught:','4 Salmon','+117 XP','Sell']
+        self.driver.buttons=[dict(left=300,right=400,top=850,bottom=880)]
+        def fail(point,cancelled): raise TransportError('lost button ack')
+        self.driver.click=fail
+        from src.actions import Action
+        intent=ActionIntent('sell','act',self.transport.context_id,datetime.now(timezone.utc).isoformat(),'action',arguments=(dict(act='sell'),))
+        # Force the existing chosen button point; no new slash command replaces it.
+        from unittest.mock import patch
+        with patch('src.automation_discord.sell_point',return_value=(350,865)):
+            with self.assertRaises(TransportError): self.transport.send(intent)
+        self.assertIsNotNone(self.transport.pending); self.assertIsNotNone(self.transport.blocked)
+        self.assertEqual(self.driver.sent,[])

@@ -60,7 +60,7 @@ def stable_frame(lines):
 
 COMMANDS = {'refresh_profile': '/profile', 'refresh_buffs': '/buffs', 'refresh_charms': '/charms', 'fish': '/fish',
             **{kind: read.command for kind, read in ACCOUNT_READS.items()},
-            # Page 2 of a paged read is a click on the → button, never typed.
+            # Page 2 of a paged read is a click on the â†’ button, never typed.
             **{kind: NEXT_PAGE for kind in PAGE_TWO}}
 # Identical reads of a fishing reply with problems before it is delivered as it is.
 FISHING_REREADS = 2
@@ -246,6 +246,7 @@ class DiscordTransport:
         self.local = local or (lambda: datetime.now().astimezone())  # Discord shows local send times
         self.sent_clock, self.sent_minute = None, None
         self.enabled = False
+        self.closed = False
         self.cancelled = threading.Event()
         self.pending = self.baseline = self.candidate = None
         self.blocked = None
@@ -269,6 +270,12 @@ class DiscordTransport:
         return fresh[1]
 
     def enable(self):
+        if self.closed:
+            raise TransportError('Live input has been closed.')
+        self.enabled = False
+        hook = getattr(self.driver, 'enable_input', None)
+        if hook is not None:
+            hook()
         self.cancelled.clear()
         self.enabled = True
 
@@ -276,6 +283,18 @@ class DiscordTransport:
         # No lock: cancellation must remain available during a slow capture/input operation.
         self.cancelled.set()
         self.enabled = False
+        hook = getattr(self.driver, 'cancel_input', None)
+        if hook is not None:
+            hook()
+
+    def close(self):
+        if self.closed:
+            return
+        self.closed = True
+        self.stop()
+        hook = getattr(self.driver, 'close', None)
+        if hook is not None:
+            hook()
 
     def _check(self, capture):
         context = capture.get('context') or {}
@@ -292,7 +311,7 @@ class DiscordTransport:
             return 'Window title unavailable.'
         if self.title is not None and title != self.title:
             return 'Discord window title changed; context must be checked again.'
-        if not self.driver.is_foreground():
+        if getattr(self.driver, 'requires_foreground', True) and not self.driver.is_foreground():
             return NOT_FOREGROUND
         # A captcha is not checked here: a new one at the bottom of the chat is delivered as a reply, and the
         # controller pauses until the person resumes. One already answered may stay on screen for a while.
@@ -333,6 +352,12 @@ class DiscordTransport:
             problem = self._check(before)
             if problem:
                 raise NotDispatched(problem)
+            prepare = getattr(self.driver, 'prepare_input', None)
+            if prepare is not None:
+                try:
+                    prepare(before, self.cancelled.is_set)
+                except TransportError as error:
+                    raise NotDispatched(str(error)) from error
             frame = stable_frame(before['lines'])
             self.last_frame = frame
             if self.cancelled.is_set():
@@ -362,7 +387,7 @@ class DiscordTransport:
                                                 self.cancelled.is_set, before=before)
                     return DispatchReceipt(intent.action_id, self.utc().isoformat(), 'Action command submitted')
                 self.driver.dispatch(COMMANDS[intent.kind], self.cancelled.is_set, before=before)
-                return DispatchReceipt(intent.action_id, self.utc().isoformat(), 'Native UI command submitted')
+                return DispatchReceipt(intent.action_id, self.utc().isoformat(), 'UI command submitted')
             except NotDispatched:
                 # Nothing was sent (the driver says so: interrupted, or refused before the final Enter).
                 self.pending = self.baseline = None
@@ -450,7 +475,7 @@ class DiscordTransport:
                     if (re.match(r'^' + re.escape(self.identity.display_name) + r' used\b', tail[0])
                             and re.search(r'\b' + re.escape(command) + r'\b', '\n'.join(tail[:2]))
                             and any(MESSAGE_HEADER.fullmatch(line) for line in tail[1:])
-                            and re.fullmatch(r'\W*Sending command(?:\.{3}|…)?\W*', tail[-1], re.I)):
+                            and re.fullmatch(r'\W*Sending command(?:\.{3}|â€¦)?\W*', tail[-1], re.I)):
                         self.sending_seen = True
                         self.candidate = None
                         self.last_issue = 'Discord shows Sending command; retrying reply capture without resending.'

@@ -139,6 +139,10 @@ class AhkDiscordDriver(WindowsDiscordDriver):
         self._primitive('select_all',cancelled)
         self._key(8,cancelled)
 
+    def prepare_input(self, frame, cancelled) -> None:
+        self.challenges = None
+        self._frame(cancelled, frame)
+
     def enable_input(self) -> None:
         self.bridge.start()
 
