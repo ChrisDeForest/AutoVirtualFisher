@@ -1,13 +1,56 @@
 # AutoVirtualFisher
 
-### Experimental Windows interaction adapter
+### Windows Discord input with AutoHotkey v2
 
-The native adapter supports `/profile`, `/buffs`, and `/fish` through Discord's
-visible command picker in a DM (server channels are not supported yet).
-It is disabled by default. A supervised live probe verified profile/buffs bootstrap
-and one fish submission; result reading was repaired against that existing reply.
-Live runs have since completed dozens of trips in a row. The web automation page
-starts live runs too (see Automation below); the command-line runner remains.
+Live CLI and web runs use targeted AutoHotkey input for the existing startup
+reads, fishing, action commands, and Sell/page buttons. Keep Discord open on
+the Virtual Fisher DM and not minimized. You can use other applications or
+another monitor while the run continues; Discord can also be the active app.
+Before every typed command, the sender locates and retargets the empty message
+box without moving the physical pointer or activating Discord. Server channels
+are not supported yet. Do not manually send VF commands during an automated run.
+
+Install the official **AutoHotkey 2.0.30 x64** interpreter for **all users**
+(Windows may request administrator approval for installation):
+
+```powershell
+winget install --id AutoHotkey.AutoHotkey --exact --version 2.0.30 --scope machine --architecture x64 --source winget
+```
+
+If WinGet is unavailable, use the [official installer](https://github.com/AutoHotkey/AutoHotkey/releases/tag/v2.0.30)
+and choose all users. Normal operation needs no administrator privileges and
+no separately launched AHK script. A newer stable v2 is accepted after its
+compatibility probe succeeds; v1, v3, prereleases, 32-bit, and UI Access
+interpreters are refused. The application never installs or upgrades AHK itself.
+
+Verify the interpreter without sending keys or clicks:
+
+```powershell
+.venv/Scripts/python.exe -c "from src.ahk_runtime import resolve_ahk; print(resolve_ahk())"
+```
+
+The ordinary interpreter is usually
+`C:/Program Files/AutoHotkey/v2/AutoHotkey64.exe`. Discovery tries an explicit
+`--ahk-exe PATH`, then `AVF_AHK_EXE`, the machine registry install directory,
+Program Files, and finally `AutoHotkey64.exe` on PATH. An invalid explicit
+or environment override fails clearly rather than silently choosing another
+interpreter. Both `src.automation_live` and `src.player_web` accept `--ahk-exe`.
+For example:
+
+```powershell
+.venv/Scripts/python.exe -m src.player_web --ahk-exe "C:/Program Files/AutoHotkey/v2/AutoHotkey64.exe"
+```
+
+Python and Windows OCR setup below remain required for live mode. Missing AHK
+disables live mode with setup guidance; simulation and the logbook still work.
+The app starts one hidden worker when live input is enabled and cancels it on
+Stop or terminal failure. If the worker fails, there is no native-input fallback
+and no automatic replay of a possibly submitted command. Keep Discord restored:
+minimized Discord is unavailable, and the app never restores it automatically.
+
+The migration has automated and no-input interpreter coverage. Supervised
+production-timing Discord acceptance is still pending; earlier portable AHK
+probes are evidence for the approach, not validation of the final adapter.
 
 Inspect the configured target without sending input (substitute your actual names):
 
@@ -15,7 +58,7 @@ Inspect the configured target without sending input (substitute your actual name
 .venv/Scripts/python.exe -m src.automation_live --channel "Virtual Fisher" --account "YOUR_PROFILE_NAME" --username "YOUR_DISCORD_USERNAME"
 ```
 
-The runner gives you five seconds to foreground Discord. Keep its composer empty
+The runner gives you a five-second preparation grace period. Keep its composer empty
 and a complete VF reply visible. `--window HANDLE` pins a particular window.
 Add `--live` to start fishing until stopped. Every launch first fetches fresh
 `/profile` and `/buffs` replies. Startup confirms the account name, balance, level
@@ -34,7 +77,7 @@ be undone. Do not manually invoke VF commands while it is running.
 The run is about progress, not a perfect logbook. A command whose outcome is
 unknown (no reply within 20 s, an unreadable result, a failed hand-over) is noted
 in Needs review without blocking; the run waits one full cooldown and carries on.
-Three unknown outcomes in a row stop the run. Verification prompts, a changed
+Three unknown reads or ten unknown fish outcomes in a row stop the run. Verification prompts, a changed
 window or channel, and a message box that is not empty (Discord hides its
 `Message @...` placeholder when it holds anything) stop or pause it. A typed
 command whose picker cannot be verified is cleared and never submitted. Live
@@ -53,7 +96,7 @@ The command-picker row is never clicked.
 If Discord renders those differently, the adapter stops before submission; the
 matcher needs a supervised capture-based adjustment.
 
-Native reply rereads use Tesseract when its executable is already on PATH, alongside
+Reply rereads use Tesseract when its executable is already on PATH, alongside
 Windows OCR. A missing required field (balance, level, fishing cooldown) is first
 reread from a crop of its own line, prepared several ways (inverted and thresholded
 for Tesseract); it is accepted only when every readable value agrees and either both
@@ -64,8 +107,8 @@ whose reply reads exactly like the previous one stops at once instead of resendi
 This repo contains my personal project of completely automating the Discord bot "Virtual Fisher".
 
 The current implementation collects commands and wiki pages, then exports game
-data as JSON. The web logbook supports simulation; the experimental native
-adapter above adds a live runner with optional limits that still needs end-to-end live verification.
+data as JSON. The logbook supports simulation, live OCR capture, planning and
+progress tracking; AHK supplies targeted input for live runs with optional limits.
 
 ## Player logbook: terminal and web
 
@@ -242,8 +285,8 @@ packages): `.venv/Scripts/python.exe -m src.player_web`. Open **Automation**
 (<http://127.0.0.1:8765/automation>), choose **Live** or **Simulation**, enter your
 Virtual Fisher name and Discord username (remembered for next time), and
 optionally a trip or minute limit; blank means run until **Stop now**. A live run
-waits until Discord is in front, so click **Start**, then switch to Discord. If
-Discord leaves the foreground, the run pauses and resumes when you come back.
+uses AHK targeted input. Discord must stay open on the Virtual Fisher DM and
+not minimized; switching to another application does not pause it.
 Keep the message box empty. Live data stays in `src/data/automation_live/`.
 
 While a run goes, the page shows your level with progress toward the next one,
@@ -260,7 +303,7 @@ and across all automation runs, and splits quest, chest and level-up rewards.
 Simulation runs the loop against a simulated Virtual Fisher.
 Each step is: choose the next action (refresh `/profile`, then `/buffs` for the
 cooldown, then fish), record it in the journal, send it, confirm the reply that
-answers it, update state, and wait out the verified cooldown plus a random 0-0.5 s (in 0.05 s steps).
+answers it, update state, and wait out the verified cooldown plus the configured jitter.
 
 - At most one command is unanswered at a time. Every command is journaled
   (`src/data/automation_sim/journal/`) before it is sent, and its hand-over and
@@ -268,7 +311,7 @@ answers it, update state, and wait out the verified cooldown plus a random 0-0.5
 - A command whose outcome is unknown (no reply within 20 s, a failed hand-over,
   a reply with no evidence of which command it answers, or an unreadable result)
   is noted in Needs review without blocking. The loop waits one cooldown and
-  carries on; three in a row stop the run.
+  carries on; three unknown reads or ten unknown fish outcomes in a row stop the run.
 - After a crash, the next start rebuilds the state from the journal. Commands
   that were never sent are dropped, unfinished logbook saves are redone (each
   trip is saved once, keyed by its command), and commands that may have been
