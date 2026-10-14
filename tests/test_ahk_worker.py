@@ -27,3 +27,12 @@ class WorkerTests(unittest.TestCase):
         process=self.bridge._process
         process.stdin.close()
         self.assertEqual(process.wait(timeout=2),0)
+
+    def test_real_worker_empty_success_reply_and_shutdown(self):
+        # Successful input acknowledgements use this same empty message payload.
+        # Shutdown exercises it without targeting a window or sending any input.
+        process = self.bridge._process
+        reply = self.bridge.request('shutdown',None,None,'',lambda:False)
+        self.assertEqual((reply.status,reply.code,reply.input_state,reply.message),
+                         ('ok','shutdown','not_started',''))
+        self.assertEqual(process.wait(timeout=2),0)

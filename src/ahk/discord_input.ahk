@@ -102,6 +102,9 @@ Reply(id, status, code, state, message) {
 }
 
 Encode(text) {
+    ; Empty messages are valid success acknowledgements and encode as empty base64.
+    if text = ""
+        return ""
     size := StrPut(text, "UTF-8") - 1
     bytes := Buffer(size + 1)
     StrPut(text, bytes, "UTF-8")
