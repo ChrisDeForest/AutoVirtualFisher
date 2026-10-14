@@ -20,6 +20,7 @@ FISH_EXTRA_ENTERS = 1
 
 
 class WindowsDiscordDriver:
+    requires_foreground = True
     def __init__(self, window, channel):
         import sys
         if sys.platform != 'win32':
