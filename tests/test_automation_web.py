@@ -290,8 +290,8 @@ class AutomationWebTests(unittest.TestCase):
                                     'rows': [{'fish': 'Fish', 'predicted': 0.84, 'measured': None}]},
                             'estimates': ['trips per hour: cooldown + 0.5 s until this run has a rate']}}
         html = render_panel(status, 'live')
-        self.assertIn('<nav class="tabs"><a href="#run">Run</a><a href="#model">Model</a><a href="#plan">Plan</a></nav>',
-                      html)
+        self.assertIn('<nav class="tabs"><a href="#run">Run</a><a href="#model">Model</a><a href="#plan">Plan</a>'
+                      '<a href="#progress">Progress</a></nav>', html)
         self.assertIn('data-tab="run"', html)
         self.assertIn('<section class="tab" data-tab="model" hidden>', html)
         self.assertIn('probably the official server bonus', html)
@@ -465,6 +465,90 @@ class AutomationWebTests(unittest.TestCase):
         html = render_panel(status)
         self.assertIn('href="#plan"', html)
         self.assertIn('data-tab="plan"', html)
+
+    @staticmethod
+    def minimal_status():
+        return {'running': True, 'phase': 'READY', 'reason': 'Fishing.', 'trips': 3, 'paused': False,
+                'config': {'max_trips': None}, 'dashboard': {}, 'account': None, 'model': None,
+                'plan': {'plan': None, 'updating': True, 'made_at': None, 'error': None}}
+
+    @staticmethod
+    def progress_view():
+        series = {'level': [('2026-10-13T12:00:00+00:00', 120), ('2026-10-14T12:00:00+00:00', 128)],
+                  'charms': [], 'xp_per_hour': [], 'trips': [], 'net_worth': []}
+        runs = [{'run_id': f'r{i}', 'start': '2026-10-14T10:00:00+00:00', 'end': '2026-10-14T11:00:00+00:00',
+                 'seconds': 3600, 'trips': 100, 'xp': 5000, 'chests': 3, 'charms': 1, 'stopped': 'Stopped by you.'}
+                for i in range(22)]
+        actions = [{'at': '2026-10-14T10:00:00+00:00', 'label': 'Buy Salesman 8 (Salesman 8)', 'result': 'done',
+                    'note': 'bought Salesman level 8', 'cost': '$25,000'}]
+        return {'countdown': {'reached': True, 'seconds': 90000, 'missing': [],
+                              'bars': [{'label': 'Level', 'now': 128, 'goal': 500},
+                                       {'label': 'Money', 'now': 1.5e6, 'goal': 1e9}],
+                              'milestones': [{'label': '2nd XP grind', 'seconds': 3600}]},
+                'charts': {'7': series, '30': series, 'all': series}, 'runs': runs, 'actions': actions,
+                'notes': ['1 trip records could not be read.']}
+
+    def test_progress_tab_sections(self):
+        from src.automation_web import render_progress_tab
+        view = self.progress_view()
+        html = render_progress_tab({'view': view, 'made_at': None, 'error': None})
+        for text in ('Prestige in about', '128 / 500', '$1,500,000 / $1,000,000,000', '2nd XP grind',
+                     'data-key="range-7"', 'Last 30 days', 'All time', 'Level', '2 more runs', '✓',
+                     'bought Salesman level 8', '$25,000', '1 trip records could not be read.'):
+            self.assertIn(text, html)
+        self.assertEqual(html.count('<details class="range"'), 3)
+        self.assertIn('Working out progress', render_progress_tab({'view': None, 'made_at': None, 'error': None}))
+        self.assertIn('boom', render_progress_tab({'view': None, 'made_at': None, 'error': 'boom'}))
+
+    def test_progress_tab_details(self):
+        from src.automation_web import render_progress_tab
+        view = self.progress_view()
+        view['countdown'] = {'reached': False, 'seconds': None, 'missing': ['level 500', '<b>money</b>'],
+                             'bars': [{'label': 'Level', 'now': 900, 'goal': 500}], 'milestones': []}
+        view['actions'] = [dict(view['actions'][0], result=result) for result in ('failed', 'unknown')] * 30
+        html = render_progress_tab({'view': view, 'made_at': None, 'error': None})
+        self.assertIn('Not reached in this plan. Missing: level 500, &lt;b&gt;money&lt;/b&gt;', html)
+        self.assertIn('style="width:100%"', html)          # a bar never runs past its end
+        self.assertIn('✗', html)
+        self.assertIn('?', html)
+        self.assertIn('data-key="actions-more"', html)
+        self.assertIn('10 more actions', html)
+        self.assertIn('data-key="runs-more"', html)
+        self.assertIn('<details class="range" data-key="range-7" open>', html)
+        self.assertNotIn('data-key="range-30" open', html)
+        self.assertEqual(html.count('Needs two full snapshots'), 12)  # four empty series in each of three ranges
+        # Times are shown in local time, YYYY-MM-DD HH:MM.
+        local = datetime(2026, 10, 14, 10, 0, tzinfo=timezone.utc).astimezone().strftime('%Y-%m-%d %H:%M')
+        self.assertIn(local, html)
+        z = render_progress_tab({'view': dict(view, runs=[dict(view['runs'][0], start='2026-10-14T10:00:00Z')]),
+                                 'made_at': None, 'error': None})
+        self.assertIn(local, z)
+
+    def test_a_broken_progress_view_never_breaks_the_page(self):
+        status = dict(self.minimal_status(), progress={'view': {'countdown': 5}, 'made_at': None, 'error': None})
+        html = render_panel(status)
+        self.assertIn('The Progress tab could not be shown', html)
+        self.assertIn('data-tab="run"', html)
+
+    def test_the_progress_tab_is_in_the_tab_row(self):
+        html = render_panel(self.minimal_status())
+        self.assertIn('<a href="#progress">Progress</a>', html)
+        self.assertIn('data-tab="progress"', html)
+        self.assertIn('Working out progress', html)       # no 'progress' key yet: its view is on its way
+
+    def test_progress_shows_before_any_run(self):
+        # No run since the server started: the page shows the account's progress from its files.
+        html = render_panel({'progress': {'view': self.progress_view(), 'made_at': None, 'error': None}})
+        self.assertIn('No run yet', html)
+        self.assertIn('<h2>Progress</h2>', html)
+        self.assertIn('Prestige in about', html)
+        self.assertLess(html.index('No run yet'), html.index('Prestige in about'))
+        from src.automation_web import render_automation
+        page = render_automation('<head></head>', {'progress': {'view': None, 'made_at': None, 'error': None}})
+        self.assertIn('Working out progress', page)
+        self.assertIn('name="action" value="start"', page)    # the start form, as before any run
+        self.assertNotIn('<h2>Progress</h2>', render_panel(None))
+        self.assertIn('No run yet', render_panel(None))
 
     def test_model_tab_shows_a_problem(self):
         from src.automation_web import render_model_tab

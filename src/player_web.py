@@ -27,9 +27,10 @@ from .live_web import render_live
 from .observation import DEFAULT_IDENTITY_PATH, Identity, load_identity, save_identity
 from .planner_web import planner_card
 from .player_charts import line_chart_svg
-from .player_snapshots import (DEFAULT_SNAPSHOT_ROOT, compare_latest, describe_changes, growth_series,
+from .player_snapshots import (DEFAULT_SNAPSHOT_ROOT, account_key, compare_latest, describe_changes, growth_series,
                                latest_full_snapshots, list_accounts, load_history, save_snapshot)
 from .player_state import display_value, parse_responses, quest_summary
+from .progress_store import view_from_disk
 from .screenshot_ocr import ocr_available, read_image
 from .review_queue import DEFAULT_REVIEW_ROOT, dismiss, list_items
 from .screenshot_web import INSTALL_COMMAND, MAX_UPLOAD_BYTES, read_screenshots, uploaded_files
@@ -38,6 +39,8 @@ TEMPLATE = Path(__file__).with_name('player_web.html')
 HISTORY_LIMIT = 10
 # Large enough for several hundred pasted fishing results.
 MAX_FORM_BYTES = 1_048_576
+# Part 6: the Progress view built from the account's files (no run going) is worked out at most this often.
+DISK_PROGRESS_SECONDS = 60.0
 GROWTH_CHARTS = (
     ('balance', 'Balance', lambda value: '$' + display_value(value)),
     ('level_progress', 'Level progress', lambda value: f'{value:,.2f}'),
@@ -291,6 +294,9 @@ class Handler(BaseHTTPRequestHandler):
     automation_live_root = DEFAULT_LIVE_ROOT
     automation_live_factory = staticmethod(build_live)
     automation_live_problem = staticmethod(live_problem)
+    # Part 6: (account, monotonic time, progress) of the last Progress view built from the live account's files.
+    disk_progress = None
+    disk_progress_lock = threading.Lock()   # held while one request builds it; the others do not wait
     # One live capture per server, shared by every request.
     live = None
     live_capture_function = staticmethod(capture_discord)
@@ -392,7 +398,7 @@ class Handler(BaseHTTPRequestHandler):
         template = TEMPLATE.read_text(encoding='utf-8')
         head = template[template.index('<head>'):template.index('</head>') + len('</head>')]
         cls = type(self)
-        status = cls.automation.status() if cls.automation else None
+        status = self.with_disk_progress(cls.automation.status() if cls.automation else None)
         nonce = secrets.token_urlsafe(16)
         self.send_content(render_automation(head, status, notice, cls.automation_live_problem(),
                                             self.live_settings(), cls.automation_mode, nonce), script_nonce=nonce)
@@ -416,6 +422,41 @@ class Handler(BaseHTTPRequestHandler):
             identity = load_identity(settings['account'], self.identity_path)
             settings['username'] = identity.username if identity else None
         return settings
+
+    def with_disk_progress(self, status):
+        """Part 6: a stopped run without a Progress view (none worked out, or no account folder) shows the live
+        account's view built from its files, worked out at most once a minute. A running run's view is its own
+        (Working out progress until the first one is made). With no run at all (None) it is {'progress': ...} only,
+        so the page shows progress before the first run. Never breaks the page."""
+        if status is not None and (not isinstance(status, dict) or status.get('running')
+                                   or (status.get('progress') or {}).get('view') is not None):
+            return status
+        base = status or {}
+        cls = type(self)
+        try:
+            account = self.live_settings().get('account')
+            if not account:
+                return status
+            cached = cls.disk_progress
+            if cached is None or cached[0] != account or time.monotonic() - cached[1] >= DISK_PROGRESS_SECONDS:
+                # One build at a time (it can take seconds): a poll meanwhile shows the last one, or none yet.
+                if not cls.disk_progress_lock.acquire(blocking=False):
+                    waiting = {'view': None, 'made_at': None, 'error': None}
+                    return {**base, 'progress': cached[2] if cached and cached[0] == account else waiting}
+                try:
+                    try:
+                        progress = {'view': view_from_disk(Path(cls.automation_live_root) / account_key(account)),
+                                    'made_at': None, 'error': None}
+                    except Exception as error:
+                        progress = {'view': None, 'made_at': None,
+                                    'error': f'Progress could not be worked out: {error}'}
+                    cached = cls.disk_progress = (account, time.monotonic(), progress)
+                finally:
+                    cls.disk_progress_lock.release()
+            return {**base, 'progress': cached[2]}
+        except Exception as error:   # Progress never breaks the page
+            return {**base, 'progress': {'view': None, 'made_at': None,
+                                         'error': f'Progress could not be worked out: {error}'}}
 
     def stop_automation(self):
         """Stop the current run; a live run also stops input and saves what it last saw."""
@@ -544,7 +585,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if url.path == '/automation/panel':
             cls = type(self)
-            status = cls.automation.status() if cls.automation else None
+            status = self.with_disk_progress(cls.automation.status() if cls.automation else None)
             self.send_content(render_panel(status, cls.automation_mode))
             return
         if url.path != '/':

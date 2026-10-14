@@ -50,11 +50,21 @@ def build_live(channel, account, username, root=DEFAULT_LIVE_ROOT, max_trips=Non
 
 
 def show_alert(message, title='AutoVirtualFisher: captcha'):
-    """A topmost Windows message box, shown from its own thread so the run is never held up by it."""
+    """A chime and topmost Windows popup, each on its own thread so neither holds up the run."""
+    def chime():
+        try:
+            import winsound
+            for frequency, duration in ((880, 180), (1175, 220), (880, 180)):
+                winsound.Beep(frequency, duration)
+        except (ImportError, OSError, RuntimeError):
+            # Audio being unavailable must not interfere with the captcha popup or pause.
+            pass
+
     def show():
         import ctypes
         # MB_OK | MB_ICONWARNING | MB_SYSTEMMODAL | MB_SETFOREGROUND | MB_TOPMOST
         ctypes.windll.user32.MessageBoxW(None, message, title, 0x0 | 0x30 | 0x1000 | 0x10000 | 0x40000)
+    threading.Thread(target=chime, daemon=True).start()
     threading.Thread(target=show, daemon=True).start()
 
 

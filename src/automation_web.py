@@ -2,12 +2,14 @@
 
 The page holds the start form; /automation/panel renders the live part (status, level line, and the profile, buffs,
 run, inventory and recent-trip boxes), which the page swaps in every two seconds."""
+from datetime import datetime, timezone
 from functools import cache
 from html import escape
 import json
 import re
 from .fishing_log import CHARM_NAMES
 from .game_model import round_half_up
+from .player_charts import line_chart_svg
 
 MAX_TRIPS, MAX_MINUTES = 1000, 600
 DEFAULT_CHANNEL = 'Virtual Fisher'
@@ -127,6 +129,28 @@ STYLE = """<style>
 .timeline .end { position:relative; padding:2px 0 0; }
 .timeline .end::before { content:''; position:absolute; left:-34px; width:24px; top:27px; bottom:-30px;
   background:#101e29; }
+/* The Progress tab: prestige bars and milestones, charts per time range, runs and actions. */
+.progress { display:grid; gap:30px; } .progress-alone { margin-top:26px; }
+.progress-alone > h2 { margin:0 0 16px; }
+.prestige-when { font:normal clamp(22px,3vw,30px)/1.2 Georgia,serif; margin:4px 0 14px; overflow-wrap:anywhere; }
+.goals { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(240px,100%),1fr)); gap:14px 34px;
+  margin:0 0 14px; }
+.goal-head { display:flex; flex-wrap:wrap; justify-content:space-between; gap:2px 12px; font-size:14px;
+  margin:0 0 5px; }
+.goal-count { color:var(--muted); font-variant-numeric:tabular-nums; }
+.bar { height:8px; background:var(--line); border-radius:4px; overflow:hidden; }
+.bar span { display:block; height:100%; background:var(--sea); }
+.milestones { margin:0; padding-left:20px; font-size:14px; color:var(--muted); }
+.progress .charts { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr)); gap:18px;
+  margin:12px 0 18px; }
+.range { border-bottom:1px solid #263d4a; padding:8px 0; }
+.range > summary, .more > summary { cursor:pointer; color:var(--sea); font-weight:600; }
+.more { margin-top:8px; } .more > summary { font-size:14px; font-weight:400; }
+.progress .scroll { max-height:none; overflow-y:visible; overflow-x:auto; }
+.progress-table th, .progress-table td { white-space:nowrap; }
+.progress-table .text { text-align:left; white-space:normal; min-width:260px; }
+.progress-table td.mark { text-align:center; } .progress-table td.done { color:var(--sea); }
+.progress-table td.failed { color:#ffda8b; }
 .toggles { display:grid; gap:10px; max-width:980px; }
 .toggle { border-top:1px solid var(--line); padding-top:10px; }
 .toggle > summary { cursor:pointer; color:var(--sea); font-size:17px; font-weight:650; }
@@ -837,11 +861,143 @@ def _plan_tab(view) -> str:
         return f'<p class="empty">The Plan tab could not be shown: {escape(repr(error))}</p>'
 
 
+PROGRESS_RANGES = (('7', 'Last 7 days'), ('30', 'Last 30 days'), ('all', 'All time'))
+PROGRESS_CHARTS = (('level', 'Level', False), ('charms', 'Charms found', False), ('xp_per_hour', 'XP per hour', False),
+                   ('trips', 'Trips per day', False), ('net_worth', 'Net worth', True))
+RESULT_MARKS = {'done': '✓', 'failed': '✗'}
+RUNS_SHOWN, ACTIONS_SHOWN = 20, 50
+
+
+def _local_time(value) -> str:
+    """A UTC ISO time (some end in Z) as local time, YYYY-MM-DD HH:MM; anything else as it came."""
+    try:
+        moment = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+    except ValueError:
+        return str(value or '')
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone().strftime('%Y-%m-%d %H:%M')
+
+
+def _amount(value, money=False) -> str:
+    if not isinstance(value, (int, float)):
+        return '?'
+    return f'${value:,.0f}' if money else f'{value:,.0f}'
+
+
+def _prestige_box(countdown) -> str:
+    missing = [str(item) for item in countdown.get('missing') or []]
+    if countdown.get('reached'):
+        lead = f'Prestige in about {_duration(countdown.get("seconds"))}'
+    elif missing == ['No plan yet.']:
+        lead = missing[0]
+    else:
+        lead = 'Not reached in this plan.' + (f' Missing: {", ".join(missing)}' if missing else '')
+    bars = ''
+    for bar in countdown.get('bars') or []:
+        now, goal, money = bar.get('now'), bar.get('goal'), bar.get('label') == 'Money'
+        share = (max(0.0, min(100.0, now / goal * 100))
+                 if isinstance(now, (int, float)) and isinstance(goal, (int, float)) and goal > 0 else 0.0)
+        bars += (f'<div class="goal"><div class="goal-head"><span>{escape(str(bar.get("label") or ""))}</span>'
+                 f'<span class="goal-count">{escape(_amount(now, money))} / {escape(_amount(goal, money))}</span></div>'
+                 f'<div class="bar"><span style="width:{share:.0f}%"></span></div></div>')
+    milestones = ''.join(
+        f'<li>{escape(str(item.get("label") or ""))}'
+        + (f' — in about {escape(_duration(item["seconds"]))}' if isinstance(item.get('seconds'), (int, float))
+           else '') + '</li>'
+        for item in countdown.get('milestones') or [])
+    return _box('Prestige', f'<p class="prestige-when">{escape(lead)}</p>'
+                + (f'<div class="goals">{bars}</div>' if bars else '')
+                + (f'<ul class="milestones">{milestones}</ul>' if milestones else ''))
+
+
+def _progress_charts(charts) -> str:
+    sections = ''
+    for key, title in PROGRESS_RANGES:
+        series = charts.get(key) or {}
+        figures = ''.join(
+            line_chart_svg(label, list(series.get(name) or []),
+                           (lambda v: f'${v:,.0f}') if money else (lambda v: f'{v:,.0f}'))
+            for name, label, money in PROGRESS_CHARTS)
+        sections += (f'<details class="range" data-key="range-{key}"{" open" if key == "7" else ""}>'
+                     f'<summary>{escape(title)}</summary><div class="charts">{figures}</div></details>')
+    return f'<section class="box progress-charts"><h2>Charts</h2>{sections}</section>'
+
+
+def _progress_table(label, head, rows, shown, key, more) -> str:
+    """A table of the first `shown` rows, the rest behind a toggle; each scrolls sideways on a narrow screen."""
+    def table(part):
+        return _scroll(label, f'<table class="mini progress-table"><thead><tr>{head}</tr></thead>'
+                              f'<tbody>{"".join(part)}</tbody></table>')
+    html = table(rows[:shown])
+    rest = rows[shown:]
+    if rest:
+        html += (f'<details class="more" data-key="{key}"><summary>{len(rest):,} more {more}</summary>'
+                 f'{table(rest)}</details>')
+    return html
+
+
+def _runs_box(runs) -> str:
+    if not runs:
+        return _box('Runs', '<p class="empty">No runs recorded yet.</p>')
+    head = (''.join(f'<th scope="col">{name}</th>' for name in
+                    ('Started', 'Length', 'Trips', 'XP', 'Chests', 'Charms'))
+            + '<th scope="col" class="text">Stopped</th>')
+    rows = [f'<tr><th scope="row">{escape(_local_time(run.get("start")))}</th>'
+            f'<td>{escape(_duration(run["seconds"])) if isinstance(run.get("seconds"), (int, float)) else ""}</td>'
+            + ''.join(f'<td>{escape(_amount(run.get(name)))}</td>' for name in ('trips', 'xp', 'chests', 'charms'))
+            + f'<td class="text">{escape(str(run.get("stopped") or ""))}</td></tr>' for run in runs]
+    return _box('Runs', _progress_table('Runs', head, rows, RUNS_SHOWN, 'runs-more', 'runs'))
+
+
+def _actions_box(actions) -> str:
+    if not actions:
+        return _box('Actions', '<p class="empty">No actions carried out yet.</p>')
+    head = ('<th scope="col">When</th><th scope="col" class="text">Step</th><th scope="col">Result</th>'
+            '<th scope="col" class="text">Note</th><th scope="col">Cost</th>')
+    rows = []
+    for action in actions:
+        result = str(action.get('result') or 'unknown')
+        rows.append(f'<tr><th scope="row">{escape(_local_time(action.get("at")))}</th>'
+                    f'<td class="text">{escape(str(action.get("label") or ""))}</td>'
+                    f'<td class="mark {escape(result)}" title="{escape(result)}">'
+                    f'{RESULT_MARKS.get(result, "?")}</td>'
+                    f'<td class="text">{escape(str(action.get("note") or ""))}</td>'
+                    f'<td>{escape(str(action.get("cost") or ""))}</td></tr>')
+    return _box('Actions', _progress_table('Actions', head, rows, ACTIONS_SHOWN, 'actions-more', 'actions'))
+
+
+def render_progress_tab(progress) -> str:
+    """Part 6: how far prestige is (bars and milestones), charts over 7 days / 30 days / all time, past runs and
+    the actions carried out."""
+    progress = progress or {}
+    view = progress.get('view')
+    if view is None:
+        if progress.get('error'):
+            return f'<p class="empty">{escape(str(progress["error"]))}</p>'
+        return '<p class="empty">Working out progress…</p>'
+    notes = ' '.join(str(note) for note in view.get('notes') or [])
+    return ('<div class="progress">'
+            f'{_prestige_box(view.get("countdown") or {})}{_progress_charts(view.get("charts") or {})}'
+            f'{_runs_box(view.get("runs") or [])}{_actions_box(view.get("actions") or [])}'
+            + (f'<p class="note">{escape(notes)}</p>' if notes else '') + '</div>')
+
+
+def _progress_tab(progress) -> str:
+    try:
+        return render_progress_tab(progress)
+    except Exception as error:
+        return f'<p class="empty">The Progress tab could not be shown: {escape(repr(error))}</p>'
+
+
 def render_panel(status, mode=None) -> str:
-    """The live part of the page: run status, level line, and the stat boxes."""
-    if not status:
+    """The live part of the page: run status, level line, and the stat boxes. With no run since the server started,
+    the Progress view from the account's files (when there is one) under the "No run yet" line."""
+    if not status or 'running' not in status:
+        progress = (f'<section class="progress-alone"><h2>Progress</h2>{_progress_tab(status.get("progress"))}'
+                    '</section>') if status else ''
         return ('<div data-running="0"><p class="empty">No run yet. Start one above; your profile, buffs and '
-                'inventory appear here once Virtual Fisher replies.</p></div>')
+                f'inventory appear here once Virtual Fisher replies.</p>{progress}</div>')
     running = status['running']
     label = state_label(status)
     buttons = ''
@@ -939,10 +1095,12 @@ def render_panel(status, mode=None) -> str:
                f'</div>{_pets_box(status.get("account"), profile)}{inventory_box}{trips_box}'
                f'{_account_box(status.get("account"))}</div>')
     return (f'<div data-running="{1 if running else 0}">{strip}'
-            '<nav class="tabs"><a href="#run">Run</a><a href="#model">Model</a><a href="#plan">Plan</a></nav>'
+            '<nav class="tabs"><a href="#run">Run</a><a href="#model">Model</a><a href="#plan">Plan</a>'
+            '<a href="#progress">Progress</a></nav>'
             f'<section class="tab" data-tab="run">{run_tab}</section>'
             f'<section class="tab" data-tab="model" hidden>{_model_tab(status.get("model"))}</section>'
-            f'<section class="tab" data-tab="plan" hidden>{_plan_tab({**(status.get('plan') or {}), 'queue': status.get('queue'), 'executor': status.get('executor'), 'action_log': status.get('action_log')})}</section></div>')
+            f'<section class="tab" data-tab="plan" hidden>{_plan_tab({**(status.get('plan') or {}), 'queue': status.get('queue'), 'executor': status.get('executor'), 'action_log': status.get('action_log')})}</section>'
+            f'<section class="tab" data-tab="progress" hidden>{_progress_tab(status.get("progress"))}</section></div>')
 
 
 def _field(name, label, value, hint=''):
@@ -955,7 +1113,7 @@ def render_automation(head, status, notice='', live_problem='', settings=None, m
     """Render the page. `status` is AutomationController.status(), or None before the first run; `mode` is the
     current run's mode; `settings` holds the last live account, username and channel."""
     settings = settings or {}
-    running = bool(status and status['running'])
+    running = bool(status and status.get('running'))
     head = head.replace('<title>Player logbook · AutoVirtualFisher</title>',
                         '<title>Automation · AutoVirtualFisher</title>').replace('</head>', STYLE + '</head>')
     notice_html = f'<p class="save-status">{escape(notice)}</p>' if notice else ''

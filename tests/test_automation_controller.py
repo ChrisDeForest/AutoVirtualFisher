@@ -1163,7 +1163,10 @@ class ControllerTests(unittest.TestCase):
 
     def test_status_has_a_plan_section(self):
         started = []
-        self.make(config=replace(CONFIG, capabilities=READS_CONFIG), plan_spawn=started.append).start()
+        # plan_spawn also starts the Progress view's runner (part 6): only the planner's work is counted here.
+        self.make(config=replace(CONFIG, capabilities=READS_CONFIG),
+                  plan_spawn=lambda work: started.append(work) if work.__self__ is self.controller.planner else None
+                  ).start()
         self.run_for(30)
         plan = self.controller.status()['plan']
         self.assertEqual(set(plan), {'plan', 'made_at', 'updating', 'error', 'request'})
@@ -1253,6 +1256,19 @@ class ControllerTests(unittest.TestCase):
         self.assertIsNone(runner.view()['plan'])
         self.assertEqual(runner.view()['error'], 'The planner failed: boom')
 
+    def test_a_runner_names_what_failed(self):
+        from src.automation_controller import PlanRunner
+        runner = PlanRunner(lambda inputs: 1 / 0, spawn=lambda work: work(), label='Progress view')
+        runner.request(1)
+        self.assertTrue(runner.view()['error'].startswith('The Progress view failed: '), runner.view()['error'])
+
+        def refuse(work):
+            raise RuntimeError('no threads')
+
+        refused = PlanRunner(lambda inputs: 1, spawn=refuse, label='Progress view')
+        refused.request(1)
+        self.assertEqual(refused.view()['error'], 'The Progress view could not start: no threads')
+
     def test_plan_requests_are_spaced_30_seconds_apart(self):
         from src.automation_controller import PlanRunner
         now, computed = [0.0], []
@@ -1313,6 +1329,53 @@ class ControllerTests(unittest.TestCase):
         self.make(config=replace(CONFIG, capabilities=READS_CONFIG))
         self.controller.charm_tallies = [{'finds': {'Haste Charm': 2}, 'chest_contents': {}, 'charm_levels': {}}]
         self.assertEqual(self.controller._plan_inputs()['charms_since'], {'Haste Charm': 2})
+
+    # --- part 6: progress ---
+
+    def test_profile_and_charms_reads_are_kept_in_the_history(self):
+        from src.progress_store import read_history
+        path = Path(self.temporary.name) / 'account' / 'account_state.json'
+        path.parent.mkdir()
+        self.make(config=replace(CONFIG, max_trips=1, capabilities=CHARMS_CONFIG), state_path=path).start()
+        self.run_for(40)
+        entries, bad = read_history(path.parent / 'profile_history.jsonl')
+        kinds = [entry['kind'] for entry in entries]
+        self.assertIn('profile', kinds)
+        self.assertIn('charms', kinds)
+        profile = next(entry for entry in entries if entry['kind'] == 'profile')
+        self.assertEqual((profile['level'], profile['balance']), (10, 1000))
+
+    def test_an_unwritable_history_never_stops_a_run(self):
+        path = Path(self.temporary.name) / 'account' / 'account_state.json'
+        (path.parent / 'profile_history.jsonl').mkdir(parents=True)     # a folder: appending raises OSError
+        self.make(config=replace(CONFIG, max_trips=2, capabilities=CHARMS_CONFIG), state_path=path).start()
+        self.run_for(40)
+        self.assertEqual(self.saved_trips(), 2)
+        self.assertIsNone(self.controller.failed)
+        reasons = [e.get('reason', '') for e in self.controller.journal.events()[0] if e['type'] == 'state_not_saved']
+        self.assertTrue(any(reason.startswith('Profile history:') for reason in reasons), reasons)
+
+    def test_an_action_journals_what_it_was_and_the_games_note(self):
+        from src.actions import Action
+        self.queue_after_first_fish(replace(CONFIG, max_trips=3))
+        # The simulator's balance is $1,000: a dearer step is skipped as not affordable before it is sent.
+        self.controller.queue_step('Salesman 8', [Action('buy', 'Salesman', level=8, shop='upgrades',
+                                                         price=500).to_dict()])
+        self.run_for(60)
+        events = self.controller.journal.events()[0]
+        intent = next(e for e in events if e['type'] == 'intent' and e['intent']['kind'] == 'act')
+        self.assertEqual(intent['intent']['arguments'][0]['price'], 500)
+        done = next(e for e in events if e['type'] == 'acknowledged' and e['action_id'] == intent['action_id'])
+        self.assertEqual(done['note'], 'bought Salesman level 8')
+
+    def test_progress_view_is_worked_out_in_the_background(self):
+        path = Path(self.temporary.name) / 'account' / 'account_state.json'
+        path.parent.mkdir()
+        self.make(config=replace(CONFIG, max_trips=2), state_path=path, plan_spawn=lambda work: work()).start()
+        self.run_for(60)
+        progress = self.controller.status()['progress']
+        self.assertIsNone(progress['error'])
+        self.assertEqual(progress['view']['runs'][0]['stopped'], 'Still running.')
 
 
 if __name__ == '__main__':

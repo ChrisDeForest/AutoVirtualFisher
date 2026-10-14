@@ -39,6 +39,9 @@ from .plan_setup import ModelContext
 from .plan_state import from_run
 from .planner import make_plan
 from .player_planner import load_level_increments
+from .player_state import parse_responses
+from .progress import progress_view
+from .progress_store import HISTORY, append_history, build_index, journal_events, read_history
 from .startup_fields import apply_startup, reply_problems, startup_problems
 from .fishing_log import parse_fishing
 from .fishing_sessions import save_session
@@ -129,8 +132,8 @@ class PlanRunner:
     is worked out at a time, and a new one starts at most every `spacing` seconds (the first at once): a request
     inside that window waits, folded with any later ones, until `poll` finds the window over."""
 
-    def __init__(self, compute, spawn=None, clock=time.monotonic, spacing=30.0):
-        self.compute = compute
+    def __init__(self, compute, spawn=None, clock=time.monotonic, spacing=30.0, label='planner'):
+        self.compute, self.label = compute, label    # label: what the error messages name ('The planner failed')
         self.spawn = spawn or (lambda work: threading.Thread(target=work, daemon=True).start())
         self.clock, self.spacing = clock, spacing
         self.lock = threading.Lock()
@@ -155,7 +158,7 @@ class PlanRunner:
         except Exception as failure:  # a thread that cannot start never stops a run
             with self.lock:
                 self.busy, self.pending = False, None
-                self.error = f'The planner could not start: {failure}'
+                self.error = f'The {self.label} could not start: {failure}'
 
     def _window_over(self):
         return self.started is None or self.clock() - self.started >= self.spacing
@@ -171,7 +174,7 @@ class PlanRunner:
             try:
                 plan, error = self.compute(inputs), None
             except Exception as failure:  # the planner never stops a run
-                plan, error = None, f'The planner failed: {failure}'
+                plan, error = None, f'The {self.label} failed: {failure}'
             if error is None and isinstance(plan, dict) and plan.get('error') and _good_plan(self.plan):
                 error = plan['error']       # a plan that could not be made keeps the last good one on the tab
             with self.lock:
@@ -226,6 +229,10 @@ class AutomationController:
             self.plan_data, plan_problem = None, str(error)
         self.planner = PlanRunner(self._compute_plan, plan_spawn, clock=monotonic)  # plan_spawn: tests only
         self.planner.error = plan_problem
+        # The Progress view (part 6): the same background runner, at most one view every 10 s. Never stops a run.
+        self.progress = PlanRunner(self._compute_progress, plan_spawn, clock=monotonic, spacing=10.0,
+                                   label='Progress view')
+        self.journal_cache = {}        # run folder -> (file count, events): finished runs are not read again
         # Follow the plan (part 5): kept per account beside the account state, so it outlives restarts.
         self.executor_path = self.state_path.parent / 'executor.json' if self.state_path else None
         self.follow_plan = _load_follow(self.executor_path)
@@ -363,6 +370,7 @@ class AutomationController:
             self.phase, self.reason = ('NEEDS_REVIEW', self._unresolved_text()) if self.unresolved else (
                 'BOOTSTRAPPING', 'Starting.')
             self._request_plan()
+            self._request_progress()
             generation, stop_event = self.generation, self.stop_event
         if thread:
             self.thread = threading.Thread(target=self._loop, args=(generation, stop_event), daemon=True)
@@ -426,8 +434,10 @@ class AutomationController:
     def status(self) -> dict:
         with self.lock:
             self._poll_plan()
+            self._poll_progress()
             dashboard = self._dashboard()
             pending = self.state.pending
+            progress = self.progress.view()
             return {'running': self.running, 'paused': self.paused, 'pause_id': self.pause_id,
                     'pending_kind': pending.kind if pending else None,
                     'mode': self.config.mode, 'phase': self.phase, 'reason': self.reason,
@@ -440,6 +450,8 @@ class AutomationController:
                         'max_trips': self.config.max_trips, 'max_seconds': self.config.max_seconds},
                     'dashboard': dashboard, 'account': self.account, 'model': self._model_status(dashboard),
                     'plan': self.planner.view(),
+                    'progress': {'view': progress['plan'], 'made_at': progress['made_at'],
+                                 'error': progress['error']},
                     'queue': [{'id': entry['id'], 'label': entry['label'], 'left': len(entry['actions'])}
                               for entry in self.queue],
                     'action_log': list(self.action_log),
@@ -464,6 +476,7 @@ class AutomationController:
             if not self.running or (generation is not None and generation != self.generation):
                 return
             self._poll_plan()
+            self._poll_progress()
             generation = self.generation
             if self.in_flight is not None:
                 # Another step is handing a command over right now; nothing else may be chosen or sent.
@@ -584,7 +597,9 @@ class AutomationController:
                 self._event('intent', intent.action_id, intent={'kind': intent.kind, 'context_id': intent.context_id,
                                                                 'created_at': intent.created_at,
                                                                 'expected_reply_kind': intent.expected_reply_kind,
-                                                                'preconditions': list(intent.preconditions)})
+                                                                'preconditions': list(intent.preconditions),
+                                                                **({'arguments': list(intent.arguments)}
+                                                                   if intent.kind == 'act' else {})})
                 self.state = replace(self.state, sequence=self.state.sequence + 1)
                 self._event('dispatching', intent.action_id)
             except OSError as error:
@@ -827,6 +842,7 @@ class AutomationController:
         due = tuple(kind for kind in reads_after(action) if kind in self.config.capabilities
                     and kind not in self.state.refresh_due)
         self.state = replace(self.state, refresh_due=self.state.refresh_due + due)
+        self._request_progress()
 
     def _captcha(self, observation):
         """The game asked for a captcha: the command it answers did not run. Pause, note it, and alert the person.
@@ -856,6 +872,7 @@ class AutomationController:
     def _acknowledge(self, action_id, kind, observation, this_run):
         wait = COOLDOWN_REPLY.search(observation.text)
         tally = None
+        note = None
         problems = []
         if kind in ACCOUNT_READS or kind in PAGE_TWO:
             parsed = ACCOUNT_PARSERS[observation.kind](observation.text)
@@ -900,7 +917,7 @@ class AutomationController:
                          blocks_actions=False)
         try:
             self._event('acknowledged', action_id, observation_id=observation.observation_id, result=result,
-                        tally=tally)
+                        tally=tally, **({'note': note} if note else {}))
         except OSError as error:
             self.unresolved[action_id] = 'Its reply was seen but could not be recorded.'
             self._sync_uncertain()
@@ -946,6 +963,7 @@ class AutomationController:
             if observation.kind == 'buffs' and self.synced['buffs']:
                 self.earlier_buffs = self._synced()['buffs']
             self.synced[observation.kind] = observation.text
+            self._keep_history(observation)
             self.synced_at[observation.kind] = observation.observed_at
             if observation.kind == 'profile':
                 self.sync_tallies, self.uncounted = [], 0
@@ -1113,6 +1131,54 @@ class AutomationController:
         except Exception as error:  # never stops a run
             self.planner.error = f'The plan could not be requested: {error}'
 
+    # --- progress (part 6): history kept as the run reads, the view worked out in its own PlanRunner ---
+
+    def _keep_history(self, observation):
+        """Part 6: each readable /profile and /charms read, one line in profile_history.jsonl. Never stops a run."""
+        if not self.state_path or observation.kind not in ('profile', 'charms'):
+            return
+        try:
+            if observation.kind == 'profile':
+                read = parse_responses(profile=observation.text)['profile']
+                entry = {'level': read.get('level'), 'prestige': read.get('prestige'), 'xp': read.get('xp_current'),
+                         'balance': read.get('balance'), 'fish_value': read.get('fish_value')}
+            else:
+                read = parse_charms(observation.text)
+                entry = {'found': read.get('found'), 'goal': read.get('goal')}
+            append_history(self.state_path.parent / HISTORY,
+                           {'at': observation.observed_at, 'kind': observation.kind, **entry})
+            self._request_progress()
+        except Exception as error:   # an unwritable file or an odd reply never stops a run
+            self._safe_event('state_not_saved', None, reason=f'Profile history: {error}')
+
+    def _request_progress(self):
+        try:
+            self.progress.request({'plan': (self.planner.view() or {}).get('plan'),
+                                   'profile': self._synced()['profile'],
+                                   'charms': parse_charms(self.synced['charms']) if self.synced['charms'] else None,
+                                   'running_id': self.state.run_id})
+        except Exception as error:   # never stops a run
+            self.progress.error = f'Progress could not be requested: {error}'
+
+    def _poll_progress(self):
+        """Start a progress request left waiting by its runner's spacing. Never blocks or stops the run."""
+        try:
+            self.progress.poll()
+        except Exception as error:
+            self.progress.error = f'Progress could not be started: {error}'
+
+    def _compute_progress(self, inputs):
+        if not self.state_path:
+            return None
+        folder = self.state_path.parent
+        index, bad_trips = build_index(folder)
+        history, bad_lines = read_history(folder / HISTORY)
+        events = journal_events(self.journal.root, self.journal_cache)
+        notes = [f'{count} {what} could not be read.' for count, what in
+                 ((bad_trips, 'trip records'), (bad_lines, 'profile history lines')) if count]
+        return progress_view(index, history, events, inputs['plan'], inputs['profile'], inputs['charms'],
+                             datetime.now(timezone.utc), inputs['running_id'], notes)
+
     def _project(self, action_id, tally):
         """Copy an acknowledged trip into the logbook. Idempotent: the session is keyed by the action id."""
         try:
@@ -1122,6 +1188,8 @@ class AutomationController:
             self._event('projected', action_id)
         except OSError as error:
             self._journal_failed(f'Could not save trip {action_id} to the logbook: {error}')
+            return
+        self._request_progress()
 
     # --- helpers (called with the lock held) ---
 
