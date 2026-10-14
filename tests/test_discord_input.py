@@ -106,12 +106,13 @@ class NativeDispatchTests(unittest.TestCase):
         driver.is_foreground = lambda: True
         driver.box_focused = True
         events = []
+        driver._click = lambda point, cancelled: events.append(('click', point))
         driver._text = lambda text, cancelled: events.append(('text', text))
         driver._key = lambda key, cancelled: events.append(('key', key))
         before = {'status': 'ok', 'context': context, 'lines': [], 'boxes': [],
                   'original_boxes': [box('Message @Virtual Fisher', 800)]}
         driver.dispatch('/fish', lambda: False, before=before)
-        self.assertEqual(events, [('text', '/fish'), ('key', 13), ('key', 13)])
+        self.assertEqual(events, [('click', (660.0, 810.0)), ('text', '/fish'), ('key', 13), ('key', 13)])
         self.assertEqual(calls, [{'light': True}, {'light': True}])     # picker check, then the box emptied
 
     def test_a_new_verification_prompt_is_seen_in_light_reads(self):
@@ -317,8 +318,8 @@ class NativeDispatchTests(unittest.TestCase):
             driver.events.append(('key', value))
             stopped[0] = True
         driver._key = key
-        # Stopped before the final Enter: nothing was sent.
-        with self.assertRaises(NotDispatched):
+        # The first Enter was attempted; preserve uncertainty even if the second is cancelled.
+        with self.assertRaises(TransportError):
             driver.dispatch('/fish', lambda: stopped[0])
         self.assertEqual([event for event in driver.events if event[0] == 'key'], [('key', 13)])
 
@@ -364,11 +365,11 @@ class FocusTests(unittest.TestCase):
         self.assertFalse(any(kind == 'key' for kind, _ in driver.events), 'never pressed Enter')
 
     @patch('src.discord_input.time.sleep')
-    def test_focus_lost_before_the_final_enter_is_an_interruption(self, sleep):
+    def test_focus_lost_after_first_enter_is_uncertain(self, sleep):
         from src.automation_models import Interrupted
         driver = self.driver(self.frames())
         self.lose_focus_at(driver, 'key', nth=2)
-        with self.assertRaises(Interrupted):
+        with self.assertRaises(TransportError):
             driver.dispatch('/fish', lambda: False)
 
     @patch('src.discord_input.time.sleep')
@@ -412,12 +413,12 @@ class ComposerClickTests(unittest.TestCase):
         driver.events.clear()
 
     @patch('src.discord_input.time.sleep')
-    def test_later_commands_type_without_clicking(self, sleep):
+    def test_later_commands_retarget_the_composer(self, sleep):
         driver = self.driver(self.frames())
         driver.dispatch('/fish', lambda: False)
         self.again(driver)
         driver.dispatch('/fish', lambda: False)
-        self.assertEqual(self.clicks(driver), [])
+        self.assertEqual(self.clicks(driver), [('click', (660.0, 810.0))])
         self.assertEqual(driver.events[-1], ('key', 13))
 
     @patch('src.discord_input.time.sleep')
@@ -467,3 +468,54 @@ class ComposerClickTests(unittest.TestCase):
         driver._click = lambda point, cancelled: moves.append(('click', point))
         driver.click((50, 60), lambda: False)
         self.assertEqual(moves, [('click', (50, 60)), (1700, 300)])
+
+
+class RetargetAndCertaintyTests(unittest.TestCase):
+    driver = NativeDispatchTests.driver
+    EMPTY = {'boxes':[box('Message @Virtual Fisher',800)]}
+    PICKER = {'boxes':[box('/profile',600),box('Virtual Fisher',620)]}
+
+    @patch('src.discord_input.time.sleep')
+    def test_two_commands_each_retarget_even_with_cached_focus(self,sleep):
+        driver=self.driver([self.EMPTY,self.PICKER,self.EMPTY,self.EMPTY,self.PICKER,self.EMPTY])
+        driver.box_focused=True
+        driver.dispatch('/profile',lambda:False); driver.dispatch('/profile',lambda:False)
+        self.assertEqual(len([e for e in driver.events if e[0]=='click']),2)
+
+    @patch('src.discord_input.time.sleep')
+    def test_first_enter_failure_is_uncertain(self,sleep):
+        driver=self.driver([self.EMPTY,self.PICKER])
+        def key(vk,cancelled): raise TransportError('lost ack')
+        driver._key=key
+        with self.assertRaises(TransportError) as error: driver.dispatch('/profile',lambda:False)
+        self.assertNotIsInstance(error.exception,NotDispatched)
+
+    @patch('src.discord_input.time.sleep')
+    def test_action_retargets_after_incidental_discord_click(self,sleep):
+        driver=self.driver([self.EMPTY,{'boxes':[box('/buy item magic bait amount 500',800)]},self.EMPTY])
+        driver.box_focused=True
+        driver.dispatch_action('/buy magic bait',500,lambda:False)
+        self.assertEqual(len([e for e in driver.events if e[0]=='click']),1)
+        self.assertEqual([e for e in driver.events if e[0]=='key'], [('key',9)]*3+[('key',13)])
+        self.assertEqual([c.args[0] for c in sleep.call_args_list].count(.6),4)
+
+    @patch('src.discord_input.time.sleep')
+    def test_action_first_enter_failure_is_uncertain(self,sleep):
+        driver=self.driver([self.EMPTY,{'boxes':[box('/buy item magic bait amount 500',800)]}])
+        def key(vk,cancelled):
+            if vk==13: raise TransportError('lost ack')
+        driver._key=key
+        with self.assertRaises(TransportError): driver.dispatch_action('/buy magic bait',500,lambda:False)
+
+    def test_unknown_manual_draft_is_never_cleared(self):
+        driver=self.driver([{'boxes':[box('manual draft',800)]}])
+        with self.assertRaises(NotDispatched): driver.dispatch('/profile',lambda:False)
+        self.assertEqual(driver.events,[])
+
+    @patch('src.discord_input.time.sleep')
+    def test_text_failure_is_definitely_unsent(self,sleep):
+        driver=self.driver([self.EMPTY])
+        def text(value,cancelled): raise TransportError('text failed')
+        driver._text=text
+        with self.assertRaises(NotDispatched): driver.dispatch('/profile',lambda:False)
+        self.assertFalse(any(e[0]=='key' for e in driver.events))

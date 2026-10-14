@@ -159,10 +159,11 @@ class WindowsDiscordDriver:
         self._key(0x08, cancelled)                                   # Backspace
 
     def dispatch(self, command, cancelled, before=None):
-        """Type a slash command and send it. Every step first checks that Discord is still the active window.
-        Until the final Enter nothing has reached the game: losing focus before it raises Interrupted, and the
-        next attempt clears what was left in the message box, at the spot it was typed, before retyping.
+        """Type a slash command using the selected adapter's guards and existing OCR workflow.
+        Before any Enter, failure is definitely unsent; after an Enter may have been posted it is uncertain.
+        Retarget the composer each command and recover only drafts owned by this driver.
         `before`: the transport's read from just now, used as the first frame instead of reading the window again."""
+        submission_possible = False
         self.challenges = None  # captcha text already on screen; only one appearing during entry stops it
         interrupted = (f'Typing {command} was interrupted when Discord stopped being the active window; it is '
                        'cleared and retyped once Discord is back.')
@@ -178,13 +179,10 @@ class WindowsDiscordDriver:
                 raise NotDispatched('The message box placeholder is not visible: it may hold a draft (even a space '
                                     'or new line). Click it, clear it (Ctrl+A, Delete), then start again. Read at '
                                     f'the bottom: {bottom_text(placeholder)}')
-            # From the first click, anything left in the box is this command's draft. Discord keeps the box focused
-            # between commands, so it is clicked only the first time and after focus loss, a pause or a failed
-            # entry: the pointer stays free in between.
+            # Retarget at every command boundary; internal Discord focus may have changed.
             self.draft_composer = composer_click(placeholder, self.channel)
-            if not getattr(self, 'box_focused', False):
-                self._click(self.draft_composer, cancelled)
-                self.box_focused = True
+            self._click(self.draft_composer, cancelled)
+            self.box_focused = True
             self._text(command, cancelled)
             # The picker is rendered asynchronously. No submit until an exact VF command row is seen.
             target = None
@@ -221,18 +219,24 @@ class WindowsDiscordDriver:
                 self.box_focused = False
                 raise NotDispatched(f'VF slash-command picker could not be verified; command not submitted ({note}).')
             # Keyboard selection followed by submission, as Discord's slash-command flow requires. Never click the
-            # picker command. The final Enter's key-down is the point of sending: before it, nothing was sent.
+            # picker command. Treat any Enter attempt conservatively as possible submission.
             # A command with options opens its option boxes on the first Enter; the sending Enter waits for them.
+            submission_possible = True  # Mark before posting: even the first Enter can submit.
             self._key(0x0D, cancelled)
             time.sleep(self._gap(command))
+            submission_possible = True  # Mark before posting: even the first Enter can submit.
             self._key(0x0D, cancelled)
         except NotDispatched:
             raise
         except FocusLost as error:
             self.box_focused = False
+            if submission_possible:
+                raise TransportError('Input interrupted after an Enter may have been sent.') from error
             raise Interrupted(interrupted) from error
         except TransportError as error:
             self.box_focused = False
+            if submission_possible:
+                raise
             raise NotDispatched(f'{error} {command} was not sent.') from error
         if self._left_the_box(command, cancelled):
             self.draft_composer = None
@@ -242,6 +246,8 @@ class WindowsDiscordDriver:
         list), reach the amount with AMOUNT_TABS Tabs when there is one, check the option box shows the value, then
         send. When the box does not show it, the draft is cleared and nothing is sent."""
         from .actions import AMOUNT_TABS
+        submission_possible = False
+        self.challenges = None
         value = line.partition(' ')[2]
         try:
             frame = self._frame(cancelled) if before is None else self._frame(cancelled, before)
@@ -255,9 +261,8 @@ class WindowsDiscordDriver:
                                     'clear it (Escape, Ctrl+A, Delete), then start again. Read at the bottom: '
                                     f'{bottom_text(placeholder)}')
             self.draft_composer = composer_click(placeholder, self.channel)
-            if not getattr(self, 'box_focused', False):
-                self._click(self.draft_composer, cancelled)
-                self.box_focused = True
+            self._click(self.draft_composer, cancelled)
+            self.box_focused = True
             self._text(line, cancelled)
             if amount:
                 for _ in range(AMOUNT_TABS):
@@ -280,15 +285,20 @@ class WindowsDiscordDriver:
                     pass
                 self.box_focused = False
                 raise NotDispatched(f'The option box did not show {value!r}; {line} was not sent.')
+            submission_possible = True  # Mark before posting: even the first Enter can submit.
             self._key(0x0D, cancelled)
         except NotDispatched:
             raise
         except FocusLost as error:
             self.box_focused = False
+            if submission_possible:
+                raise TransportError('Input interrupted after an Enter may have been sent.') from error
             raise Interrupted(f'Typing {line} was interrupted when Discord stopped being the active window; it is '
                               'cleared and retyped once Discord is back.') from error
         except TransportError as error:
             self.box_focused = False
+            if submission_possible:
+                raise
             raise NotDispatched(f'{error} {line} was not sent.') from error
         if self._left_the_box(line, cancelled):
             self.draft_composer = None
