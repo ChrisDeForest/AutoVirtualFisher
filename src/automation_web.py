@@ -2,8 +2,10 @@
 
 The page holds the start form; /automation/panel renders the live part (status, level line, and the profile, buffs,
 run, inventory and recent-trip boxes), which the page swaps in every two seconds."""
+from functools import cache
 from html import escape
 import json
+import re
 from .fishing_log import CHARM_NAMES
 from .game_model import round_half_up
 
@@ -130,6 +132,7 @@ STYLE = """<style>
 .toggle > summary { cursor:pointer; color:var(--sea); font-size:17px; font-weight:650; }
 .toggle .mini { margin-top:8px; } .toggle ul { font-size:14px; color:var(--muted); } .toggle form { margin:0; }
 .toggle .cannot { color:var(--muted); font-size:13px; white-space:nowrap; }
+.pets td:last-child { text-align:left; padding-left:24px; } .pets td:nth-child(2) { white-space:nowrap; }
 .model .cannot { color:var(--muted); font-size:13px; white-space:nowrap; }
 .model .where { display:block; color:var(--muted); font-size:12px; font-family:ui-monospace,Consolas,monospace; }
 .visually-hidden { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
@@ -513,6 +516,55 @@ def _account_rows(sections):
     return rows
 
 
+PET_STATS = (('fish_catch', 'Fish catch'), ('fish_quality', 'Fish quality'), ('treasure_chance', 'Treasure chance'),
+             ('treasure_quality', 'Treasure quality'), ('xp', 'XP'))
+
+
+@cache
+def _pet_tables():
+    """(each pet's stat weights from game_model.json, each pet's description from the wiki's pet.json); empty when
+    either cannot be read. Read once."""
+    from .game_model_data import load_game_data
+    from .player_state import _pet_reference
+    try:
+        weights = load_game_data()['pets']
+    except Exception:
+        weights = {}
+    reference = (_pet_reference() or {}).get('pets', {})
+    return weights, {name: pet.get('description') for name, pet in reference.items()}
+
+
+def _pets_box(account, profile):
+    """Every pet owned (from /pet), its level against the max, its effects at that level and what it does. The
+    effect is the game model's: weight × (0.1 + 0.0075 × level), checked against the game's pet screen (Dolphin 51:
+    36.19%); Support Bait raises it further, which this leaves out."""
+    sections = (account or {}).get('sections') or {}
+    values = (sections.get('pet') or {}).get('values') or {}
+    owned = values.get('owned') or {}
+    if not owned:
+        return _box('Pets', '<p class="empty">Not read yet: /pet is read at startup.</p>', wide=True)
+    helper = (((sections.get('shop_league') or {}).get('values') or {}).get('items') or {}).get('Pet Helper') or {}
+    top = 125 + 5 * (helper.get('level') or 0)
+    in_use = values.get('current') or re.sub(r'\s*\(.*$', '', profile.get('pet') or '')
+    weights, descriptions = _pet_tables()
+    rows = ''
+    for name, pet in sorted(owned.items(), key=lambda item: -(item[1].get('level') or 0)):
+        level = pet.get('level') or 0
+        effects = ', '.join(f'{label} +{weight * (0.1 + 0.0075 * level) * 100:.2f}%'
+                            for stat, label in PET_STATS if (weight := (weights.get(name) or {}).get(stat)))
+        xp = (f'{pet["xp_current"]:,} / {pet["xp_required"]:,} XP' if pet.get('xp_current') is not None
+              and pet.get('xp_required') else '')
+        rows += (f'<tr><th scope="row">{escape(name)}'
+                 + (' <span class="gain">in use</span>' if name == in_use else '')
+                 + (f'<span class="why">{escape(descriptions[name])}</span>' if descriptions.get(name) else '')
+                 + f'</th><td>{level} / {top}' + (f'<span class="why">{escape(xp)}</span>' if xp else '')
+                 + f'</td><td>{escape(effects or "not modelled")}</td></tr>')
+    table = ('<table class="mini model pets"><thead><tr><th scope="col">Pet</th><th scope="col">Level</th>'
+             f'<th scope="col">Effect at this level</th></tr></thead><tbody>{rows}</tbody></table>')
+    return _box('Pets', table, wide=True,
+                note='Max level 125, plus 5 per Pet Helper level. Effects are without Support Bait.')
+
+
 def _account_box(account):
     """The account as replies last showed it (part 1's read-only check)."""
     sections = (account or {}).get('sections') or {}
@@ -884,7 +936,8 @@ def render_panel(status, mode=None) -> str:
                f'<div class="boxes">{profile_box}{buffs_box}{run_box}'
                # Rewards takes a narrow share of its row so the finds tables (charms most of all) fit without scrolling.
                f'<div class="rewards-row">{rewards_box}{_finds_box(dashboard.get("finds") or {}, dashboard.get("charms"))}'
-               f'</div>{inventory_box}{trips_box}{_account_box(status.get("account"))}</div>')
+               f'</div>{_pets_box(status.get("account"), profile)}{inventory_box}{trips_box}'
+               f'{_account_box(status.get("account"))}</div>')
     return (f'<div data-running="{1 if running else 0}">{strip}'
             '<nav class="tabs"><a href="#run">Run</a><a href="#model">Model</a><a href="#plan">Plan</a></nav>'
             f'<section class="tab" data-tab="run">{run_tab}</section>'

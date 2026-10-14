@@ -523,6 +523,23 @@ class AutomationWebTests(unittest.TestCase):
         self.assertIn("sessionStorage.setItem('back'", SCRIPT)
         self.assertIn('window.scrollTo(0, back.y)', SCRIPT)
 
+    def test_pets_box_lists_each_pet_with_its_effects(self):
+        from src.automation_web import _pets_box
+        account = {'sections': {
+            'pet': {'values': {'current': 'Zebrafish', 'owned': {
+                'Dolphin': {'level': 51, 'xp_current': 1493, 'xp_required': 2600}, 'Zebrafish': {'level': 61}}}},
+            'shop_league': {'values': {'items': {'Pet Helper': {'level': 2}}}}}}
+        html = _pets_box(account, {})
+        # The game's own numbers: Dolphin 51 is 36.19% (its pet screen), Zebrafish 61 fish catch 13.94% (/pet).
+        self.assertIn('Treasure chance +36.19%, XP +36.19%', html)
+        self.assertIn('Fish catch +13.94%, Fish quality +55.75%', html)
+        self.assertIn('Zebrafish <span class="gain">in use</span>', html)
+        self.assertIn('51 / 135', html)                                 # 125 + 2 Pet Helper levels
+        self.assertIn('1,493 / 2,600 XP', html)
+        self.assertIn('Gives you bonus XP and leads you to more treasure.', html)   # from pet.json, not OCR
+        self.assertLess(html.index('Zebrafish'), html.index('Dolphin'))           # highest level first
+        self.assertIn('Not read yet', _pets_box({}, {}))
+
     def test_chests_are_listed_by_rarity(self):
         from src.automation_web import _finds_box
         chests = {'legendary crate': 1, 'uncommon chest': 90, 'rare chest': 50, 'common chest': 40, 'epic crate': 9,
