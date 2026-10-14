@@ -179,6 +179,31 @@ class DiscordTests(unittest.TestCase):
         self.assertEqual(self.transport.poll(), [])
         self.assertEqual([reply.kind for reply in self.transport.poll()], ['shop_upgrades'])
 
+    def test_a_shop_reply_that_reads_slightly_differently_each_time_is_taken(self):
+        # Live 2026-10-14: /shop upgrades never read the same twice in 15 s (a description letter, the AM/PM of its
+        # time), so it was never taken and page 2 never clicked. What the parser reads from it is what must agree.
+        from src import account_samples as sample
+        self.intent = ActionIntent('u1', 'refresh_upgrades', self.transport.context_id, self.now.isoformat(),
+                                   'shop_upgrades')
+        self.send()
+        base = list(self.driver.lines)
+        self.driver.lines = base + self.account('shop upgrades', sample.UPGRADES_PAGE_1)
+        self.assertEqual(self.transport.poll(), [])
+        flicker = sample.UPGRADES_PAGE_1.replace('Causes slightly better fish to bite.', 'Causes sllghtly better fish to bite.')
+        self.driver.lines = base + self.account('shop upgrades', flicker, stamp='11:42')
+        self.assertEqual([reply.kind for reply in self.transport.poll()], ['shop_upgrades'])
+
+    def test_a_shop_reply_whose_levels_differ_between_reads_waits(self):
+        from src import account_samples as sample
+        self.intent = ActionIntent('u1', 'refresh_upgrades', self.transport.context_id, self.now.isoformat(),
+                                   'shop_upgrades')
+        self.send()
+        base = list(self.driver.lines)
+        self.driver.lines = base + self.account('shop upgrades', sample.UPGRADES_PAGE_1)
+        self.assertEqual(self.transport.poll(), [])
+        self.driver.lines = base + self.account('shop upgrades', sample.UPGRADES_PAGE_1.replace('(7/21)', '(1/21)'))
+        self.assertEqual(self.transport.poll(), [])                 # a level read differently: read again
+
     def page_one_on_screen(self):
         from src import account_samples as sample
         self.driver.lines = self.driver.lines + self.account('shop upgrades', sample.UPGRADES_PAGE_1)

@@ -380,12 +380,13 @@ def parse_responses(profile='', buffs='', prestige_shop='', pet='', quests=''):
         if re.fullmatch(r'You have no pets!.*', line, re.I):
             result['pets']['status'] = 'No pets'
             continue
-        owned = re.fullmatch(r'(.+?)\s*\(Lvl\s*(\d+)\)', line, re.I)
+        # "Axolotl(Lvl 60)"; OCR may read the l of Lvl as 1, I or |, an O in the level, or lose the ")".
+        owned = re.fullmatch(r'(.+?)\s*\(\s*L[vV][l1I|]\s*([\dOo]+)\s*\)?', line)
         if owned:
-            name = _name(owned[1])
+            name = known_pet(_name(owned[1]))
             if name:
                 result['pets']['owned'] = result['pets']['owned'] or {}
-                result['pets']['owned'][name] = {'level': int(owned[2]), 'description': None,
+                result['pets']['owned'][name] = {'level': int(re.sub('[Oo]', '0', owned[2])), 'description': None,
                                                   'xp_current': None, 'xp_required': None,
                                                   'xp_to_next_level': None}
                 current_owned_pet = name

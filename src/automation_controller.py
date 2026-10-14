@@ -492,7 +492,8 @@ class AutomationController:
                 self.focus_lost_at = None
             if self.state.pending is not None:
                 sending_seen = getattr(self.transport, 'sending_seen', False)
-                timeout = max(self.config.reply_timeout, 60) if sending_seen else self.config.reply_timeout
+                base = self.config.reply_timeout if self.state.pending.kind == 'fish' else self.config.read_timeout
+                timeout = max(base, 60) if sending_seen else base
                 if sending_seen and self.state.pending.action_id not in self.delivery_wait_logged:
                     self.delivery_wait_logged.add(self.state.pending.action_id)
                     self._safe_event('delivery_wait', self.state.pending.action_id,

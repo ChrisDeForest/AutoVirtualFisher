@@ -101,6 +101,22 @@ UNLOCKED AT PRESTIGE 5: Virtual Fisher - 40% more high quality fish.''')
         for read in ('Mystery Rod', 'Rod'):                   # close to no rod, or to several: kept as read
             self.assertEqual(known_rod(read), read)
 
+    def test_misread_pet_lines_still_name_the_pet(self):
+        # Live 2026-10-14: Axolotl went missing from /pet (5 pets owned, 4 read).
+        pet = ('Current pet: Zebrafish.\nV Puffer(Lvl 34)\nDolphin(LvI 52)\nZebrafish(Lv1 61)\nAxolotl (Lvl 6O\n'
+               'Tuna(Lvl 14)')
+        owned = parse_responses(pet=pet)['pets']['owned']
+        self.assertEqual({name: data['level'] for name, data in owned.items()},
+                         {'Puffer': 34, 'Dolphin': 52, 'Zebrafish': 61, 'Axolotl': 60, 'Tuna': 14})
+
+    def test_a_pet_read_that_misses_a_pet_keeps_it(self):
+        from src.account_replies import PARSERS
+        from src.account_state import apply_read, empty_state
+        state = apply_read(empty_state(), 'pet', PARSERS['pet']('Axolotl(Lvl 60)\nTuna(Lvl 14)'), 'a')
+        state = apply_read(state, 'pet', PARSERS['pet']('Tuna(Lvl 15)'), 'b')
+        owned = state['sections']['pet']['values']['owned']
+        self.assertEqual({name: data['level'] for name, data in owned.items()}, {'Axolotl': 60, 'Tuna': 15})
+
     def test_pet_response_records_no_pet_state_and_average_xp(self):
         result = parse_responses(pet='''Pets are permanent, they are not lost when you prestige. They increase in effectiveness as you level them up.
 

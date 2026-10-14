@@ -209,8 +209,21 @@ class ControllerTests(unittest.TestCase):
         self.run_for(40)
         kinds = [intent.kind for _, intent in self.sim.sent]
         self.assertEqual(kinds[:3], ['refresh_profile', 'refresh_profile', 'refresh_buffs'])
-        self.assertGreaterEqual(self.sim.sent[1][0] - self.sim.sent[0][0], CONFIG.reply_timeout)
+        # A read waits 20 s for its reply (fishing 15 s, below).
+        self.assertGreaterEqual(self.sim.sent[1][0] - self.sim.sent[0][0], CONFIG.read_timeout)
+        self.assertEqual(CONFIG.read_timeout, 20)
         self.assertEqual(self.saved_trips(), 1)
+
+    def test_a_missing_catch_waits_the_fishing_timeout(self):
+        self.make(config=replace(CONFIG, max_trips=2)).start()
+        while self.kinds().count('fish') < 1:
+            self.run_for(STEP)
+        self.sim.script = {len(self.sim.sent): 'missing'}
+        self.run_for(60)
+        fish = [at for at, intent in self.sim.sent if intent.kind == 'fish']
+        self.assertGreaterEqual(fish[2] - fish[1], CONFIG.reply_timeout)
+        self.assertLess(fish[2] - fish[1], CONFIG.read_timeout)
+        self.assertEqual(CONFIG.reply_timeout, 15)
 
     def test_discord_sending_wait_is_bounded_and_never_resends(self):
         self.sim.script = {0: 'missing'}

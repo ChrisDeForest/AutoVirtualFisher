@@ -14,7 +14,7 @@ import time
 from secrets import token_hex
 
 from .account_reads import ACCOUNT_READS, NEXT_PAGE, PAGE_TWO
-from .account_replies import PAGE
+from .account_replies import PAGE, PARSERS as ACCOUNT_PARSERS
 from .automation_models import (CapabilityError, ContextStatus, DispatchReceipt, NOT_FOREGROUND, NotDispatched,
                                 TransportError)
 from .live_capture import capture_frame, channel_matches
@@ -108,6 +108,22 @@ def _minute_of_day(sent):
         return (int(match[1]) % 12) * 60 + int(match[2]), 720
     hour = int(match[1]) % 12 + (12 if match[3].upper() == 'P' else 0)
     return hour * 60 + int(match[2]), 1440
+
+
+def _evidence(message):
+    """What two reads of a reply must agree on to take it. A shop, /rod, /pet, etc.: what its parser reads from it
+    (its items and their levels and prices, the page), not every line: live, a long /shop upgrades reply never
+    read twice the same in 15 s (a description letter, the AM/PM of its time), so page 2 was never clicked
+    (2026-10-14). The send time counts by the minute."""
+    minute = _minute_of_day(message.get('sent'))
+    minute = None if minute is None else minute[0] % 720     # "9:06 AM" and "9:06" are one minute
+    if message['kind'] in ('profile', 'buffs'):
+        return message['key'], message.get('invoked_by'), minute
+    if message['kind'] in ACCOUNT_PARSERS:
+        parsed = ACCOUNT_PARSERS[message['kind']]('\n'.join(message['lines']))
+        return (message['kind'], json.dumps([parsed['values'], parsed.get('page')], sort_keys=True, default=str),
+                message.get('invoked_by'), minute)
+    return message['key'], tuple(message['lines']), minute
 
 
 def _same_time(sent, other):
@@ -495,8 +511,7 @@ class DiscordTransport:
                 if message['kind'] == 'fishing' and not cooldown:
                     from .live_capture import fishing_problems
                     problems = fishing_problems('\n'.join(message['lines']))
-                evidence = (message['key'], message.get('invoked_by'), message.get('sent')) if message['kind'] in ('profile', 'buffs') else (
-                    message['key'], tuple(message['lines']), message.get('sent'))
+                evidence = _evidence(message)
                 # A fishing result that reads cleanly (one trip, known fish, its XP) is complete when first seen:
                 # it is taken from one read. Other replies, and results with problems, must read the same twice.
                 clean_catch = message['kind'] == 'fishing' and not cooldown and not problems

@@ -68,6 +68,9 @@ def apply_read(state: dict, kind: str, parsed: dict, observed_at: str) -> dict:
     values = _merge(old.get('values', {}), parsed['values'])
     if kind in WHOLE_REPLIES and not parsed.get('unread'):
         values = dict(parsed['values'])   # a whole reply's None is a reading ("Current bait: NONE"), not a gap
+    if kind == 'pet' and parsed['values'].get('owned'):
+        # Pets are permanent: a /pet read that missed a pet's line (Axolotl, live 2026-10-14) never loses it.
+        values['owned'] = {**(old.get('values', {}).get('owned') or {}), **parsed['values']['owned']}
     page, _ = parsed.get('page') or (None, None)
     pages = dict(old.get('pages', {}))
     pages[str(page or 1)] = observed_at
