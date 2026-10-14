@@ -25,12 +25,20 @@ BUFFS = (('sell_price', 'Sell price'), ('fish_catch', 'Fish catch'), ('fish_qual
          ('treasure_chance', 'Treasure chance'), ('treasure_quality', 'Treasure quality'),
          ('xp_multiplier', 'XP multiplier'))
 CATEGORIES = (('fish', 'Fish'), ('exotic_fish', 'Exotic fish'), ('special', 'Special'))
+PHASE_INTRO = {
+    'xp_grind_1': 'Levelling on the money setup, buying what pays for itself, until the charm grind rod.',
+    'charm_grind_1': 'Fishing the charm setup for charms until the first exit.',
+    'xp_grind_2': 'Back to levelling and money, up to level 250.',
+    'charm_grind_2': 'Level 250: the second charm grind, up to the charm exit.',
+    'xp_grind_3': 'The last stretch: the level and money prestige needs.',
+    'prestige': 'The requirements are met: prestige by hand.',
+}
 STYLE = """<style>
 .strip { display:flex; flex-wrap:wrap; align-items:center; gap:10px 18px; padding:12px 16px; border:1px solid var(--line);
   border-radius:6px; margin:0 0 28px; }
 .strip .actions { margin:0 0 0 auto; } .strip form { margin:0; }
-.phase { font-weight:650; } .phase::before { content:''; display:inline-block; width:9px; height:9px; border-radius:50%;
-  margin-right:9px; background:var(--muted); vertical-align:1px; }
+.strip .phase { font-weight:650; } .strip .phase::before { content:''; display:inline-block; width:9px; height:9px;
+  border-radius:50%; margin-right:9px; background:var(--muted); vertical-align:1px; }
 .on .phase::before { background:var(--sea); } .halted .phase::before { background:#ffda8b; }
 .why { color:var(--muted); font-size:14px; flex:1 1 280px; }
 .level { margin:0 0 34px; }
@@ -79,6 +87,49 @@ STYLE = """<style>
 .model td.bad { color:#ffda8b; } .model td.good { color:var(--sea); }
 .model .why { display:block; color:var(--muted); font-size:13px; }
 .queue li { display:flex; align-items:center; gap:10px; } .queue form { margin:0; }
+/* The Plan tab: where the account is, the boxes that act now, then the route as a line down the page. */
+.plan-head { margin:0 0 22px; max-width:760px; }
+.plan-now { font:normal clamp(26px,3.6vw,38px)/1.15 Georgia,serif; margin:0 0 6px; }
+.plan-intro { color:var(--muted); margin:0 0 4px; } .plan-head .note { margin:0; }
+.plan-boxes { margin:0 0 34px; } .plan-boxes .next { margin:0; overflow-wrap:anywhere; }
+.timeline { position:relative; padding-left:34px; margin:0 0 30px; }
+.timeline::before { content:''; position:absolute; left:10px; top:12px; bottom:14px; border-left:2px solid var(--line); }
+.timeline .node { position:absolute; width:10px; height:10px; border-radius:50%; left:-28px; top:15px;
+  background:var(--sea); }
+.timeline .node.big { width:20px; height:20px; left:-33px; top:7px; background:#101e29;
+  border:2px solid var(--muted); box-shadow:0 0 0 4px #101e29; }
+.timeline .node.big.now { background:var(--sea); border-color:var(--sea); }
+.timeline .node.big.reached { border-color:var(--sea); }
+.timeline .node.ready { background:var(--sea); } .timeline .node.cannot_afford { background:var(--muted); }
+.timeline .node.later { background:var(--line); }
+.timeline .node.none { background:#101e29; border:2px solid var(--muted); }
+.timeline details.phase { margin:0 0 18px; }
+.timeline details.phase > summary { position:relative; display:flex; flex-wrap:wrap; align-items:baseline;
+  gap:2px 14px; list-style:none; cursor:pointer; padding:2px 0 8px; }
+.timeline details.phase > summary::-webkit-details-marker { display:none; }
+.timeline .phase-title { font-size:19px; font-weight:650; color:var(--ink); margin:0; }
+.timeline .phase-when { color:var(--sea); font-size:14px; }
+.timeline .phase-count { color:var(--muted); font-size:13px; }
+.timeline details.phase > summary .phase-count::after { content:' ▸'; }
+.timeline details.phase[open] > summary .phase-count::after { content:' ▾'; }
+.timeline .phase-intro { flex:1 0 100%; color:var(--muted); font-size:14px; }
+.timeline .steps { list-style:none; margin:0; padding:0; }
+.timeline .step { position:relative; display:flex; flex-wrap:wrap; align-items:center; gap:4px 16px; padding:7px 0;
+  border-bottom:1px solid #263d4a; }
+.timeline .step-text { flex:1 1 300px; min-width:0; overflow-wrap:anywhere; }
+.timeline .step-text strong { display:block; font-weight:600; }
+.timeline .meta { display:block; color:var(--muted); font-size:13px; margin:0; overflow-wrap:anywhere; }
+.timeline .step-do { flex:0 0 auto; } .timeline .step-do form { margin:0; }
+.timeline .step-do button { padding:4px 12px; font-size:14px; }
+.timeline .cannot { color:var(--muted); font-size:13px; white-space:nowrap; }
+.timeline .end { position:relative; padding:2px 0 0; }
+.timeline .end::before { content:''; position:absolute; left:-34px; width:24px; top:27px; bottom:-30px;
+  background:#101e29; }
+.toggles { display:grid; gap:10px; max-width:980px; }
+.toggle { border-top:1px solid var(--line); padding-top:10px; }
+.toggle > summary { cursor:pointer; color:var(--sea); font-size:17px; font-weight:650; }
+.toggle .mini { margin-top:8px; } .toggle ul { font-size:14px; color:var(--muted); } .toggle form { margin:0; }
+.toggle .cannot { color:var(--muted); font-size:13px; white-space:nowrap; }
 .model .cannot { color:var(--muted); font-size:13px; white-space:nowrap; }
 .model .where { display:block; color:var(--muted); font-size:12px; font-family:ui-monospace,Consolas,monospace; }
 .visually-hidden { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
@@ -158,10 +209,20 @@ SCRIPT = """<script nonce="{nonce}">
       panel.querySelectorAll('.scroll').forEach(function (el, i) {
         kept[(el.getAttribute('aria-label') || '') + '#' + i] = [el.scrollTop, el.scrollLeft];
       });
+      // ... and which toggles (phases, League, Assumptions) were open; one not seen before keeps its default.
+      var open = {};
+      panel.querySelectorAll('details[data-key]').forEach(function (d) {
+        open[d.getAttribute('data-key')] = d.open;
+      });
       panel.innerHTML = html;
       showTab();
       syncCountdown();
       moveLine(performance.now());
+      // Toggles first: opening one moves what is below it, so scrolling is set back after.
+      panel.querySelectorAll('details[data-key]').forEach(function (d) {
+        var key = d.getAttribute('data-key');
+        if (key in open) d.open = open[key];
+      });
       panel.querySelectorAll('.scroll').forEach(function (el, i) {
         var at = kept[(el.getAttribute('aria-label') || '') + '#' + i];
         if (at) { el.scrollTop = at[0]; el.scrollLeft = at[1]; }
@@ -270,6 +331,8 @@ def state_label(status) -> str:
         return 'Waiting for Discord'
     if phase == 'CAPTCHA':
         return 'Captcha: solve it, then Resume'
+    if phase == 'READY_TO_PRESTIGE':
+        return 'Ready to prestige'
     if status.get('paused') or phase in ('PAUSED', 'PAUSED_BY_YOU'):
         return 'Paused'
     if phase == 'NEEDS_REVIEW':
@@ -522,7 +585,8 @@ def _cost(step) -> str:
 
 
 def render_plan_tab(view) -> str:
-    """The Plan tab: next action, the route by phase, prestige, assumptions (progression part 3)."""
+    """The Plan tab: which phase the account is in, the boxes that act now (Ready to prestige, Queue, Next), the
+    route as a timeline of phases down to prestige, and League and Assumptions as toggles under it."""
     view = view or {}
     plan = view.get('plan')
     # Queued steps stay in view even while there is no plan to show.
@@ -539,36 +603,78 @@ def render_plan_tab(view) -> str:
                   f'{escape(view.get("made_at") or "earlier")}.</p>')
     made = f'Made {view.get("made_at") or ""}' + (' · updating' if view.get('updating') else '')
     step = plan.get('next')
-    when = lambda item: 'now' if _when(item['seconds']) == 'now' else f'in about {_duration(item["seconds"])}'
     next_box = _box('Next', '<p class="next">' + (escape(
         (f'Sell ${step["sell"]:,.0f} of fish, then ' if step.get('sell') else '') + step['action']
         + (f' in {step["where"]}' if step.get('where') else '')
-        + (f' ({_cost(step)})' if _cost(step) else '') + f' — {when(step)}')
-        if step else 'Nothing to do.') + '</p>', note=made + (f' · {step["why"]}' if step and step.get('why') else ''))
-    rows, last = [], None
+        + (f' ({_cost(step)})' if _cost(step) else '') + f' — {_in_about(step)}')
+        if step else 'Nothing to do.') + '</p>', note=(step.get('why') or '') if step else '')
+    # The route by phase, in route order; a step from before the phase keys counts its label as its phase.
+    phases = {}
     for item in plan.get('steps', []):
-        if item['phase_label'] != last:
-            rows.append(f'<tr><th colspan="6">{escape(item["phase_label"])}</th></tr>')
-            last = item['phase_label']
-        sell = f' · sell ${item["sell"]:,.0f}' if item.get('sell') else ''
-        where = f'<span class="where">{escape(item["where"])}</span>' if item.get('where') else ''
-        # Do it queues the step's actions (part 4); a step with nothing to send has no button, and one that what is
-        # on hand cannot pay for yet (after the steps above it) says so instead.
-        if item.get('do') and item.get('affordable') is False:
-            do = '<span class="cannot">Cannot afford</span>'
-        elif item.get('do'):
-            do = _button('queue', 'Do it', secondary=True,
-                         extra={'label': item['action'], 'actions': json.dumps(item['do'])})
-        else:
-            do = ''
-        rows.append(f'<tr><td>{escape(item["action"])}{where}</td><td>{escape(_cost(item) + sell)}</td>'
-                    f'<td>{escape(_trips(item.get("trips")))}</td><td>{escape(_when(item["seconds"]))}</td>'
-                    f'<td>{escape(item.get("why") or "")}</td><td>{do}</td></tr>')
-    route_box = _box('Route', _scroll('Route', '<table class="mini model"><thead><tr><th>Step</th><th>Cost</th>'
-                                      '<th>Trips</th><th>In</th><th>Why</th><th></th></tr></thead>'
-                                      f'<tbody>{"".join(rows)}</tbody></table>'), wide=True,
-                     note='Plan cut short.' if plan.get('cut_short') else
-                     'Trips: fished before the step. In: fishing time from now.')
+        phases.setdefault(item.get('phase') or item.get('phase_label'), []).append(item)
+    names = list(phases)
+    now = plan.get('phase_now')
+    # At prestige no phase is current (the Prestige end node is); a plan from before phase_now: the first phase.
+    at = names.index(now) if now in names else -1 if now == 'prestige' else 0
+    if now in phases:
+        label = phases[now][0]['phase_label']
+    elif now == 'prestige':
+        label = 'prestige phase'
+    else:   # a plan from before phase_now: the first step's phase
+        label = phases[names[0]][0]['phase_label'] if names and now is None else None
+    head = ('<div class="plan-head">'
+            + (f'<p class="plan-now">You are in the {escape(label)}</p>' if label else '')
+            + (f'<p class="plan-intro">{escape(PHASE_INTRO[now])}</p>' if now in PHASE_INTRO else '')
+            + f'<p class="note">{escape(made)}</p></div>')
+    sections = ''.join(_phase_section(name, phases[name], index == at, index == at + 1)
+                       for index, name in enumerate(names))
+    timeline = f'<div class="timeline">{sections}{_prestige_node(plan)}</div>'
+    notes = ''.join(f'<li>{escape(line)}</li>' for line in plan.get('assumptions', []))
+    toggles = (f'<div class="toggles">{_league_box(plan)}<details class="toggle" data-key="assumptions">'
+               f'<summary>Assumptions and estimates '
+               f'({len(plan.get("assumptions", [])):,})</summary>'
+               + (f'<ul>{notes}</ul>' if notes else '<p class="empty">None.</p>') + '</details></div>')
+    return (f'{failed}{head}<div class="boxes plan-boxes">{_prestige_ready_box(plan)}{_queue_box(view)}{next_box}'
+            f'</div>{timeline}{toggles}')
+
+
+def _in_about(item) -> str:
+    return 'now' if _when(item.get('seconds')) == 'now' else f'in about {_duration(item["seconds"])}'
+
+
+def _phase_section(phase, steps, is_now, is_next):
+    """One phase on the timeline: a heading node (filled for the phase the account is in), then its steps.
+    The current phase and the next one start open."""
+    ready = sum(1 for item in steps if item.get('do') and item.get('status', 'ready') == 'ready')
+    count = f'{len(steps):,} step{"" if len(steps) == 1 else "s"} · {ready:,} ready'
+    intro = PHASE_INTRO.get(phase)
+    summary = (f'<summary><span class="node big{" now" if is_now else ""}"></span>'
+               f'<span class="phase-title">{escape(steps[0]["phase_label"])}</span>'
+               f'<span class="phase-when">{escape(_in_about(steps[0]))}</span>'
+               f'<span class="phase-count">{escape(count)}</span>'
+               + (f'<span class="phase-intro">{escape(intro)}</span>' if intro else '') + '</summary>')
+    # data-key: the panel refresh keeps each phase open or closed as the person left it.
+    return (f'<details class="phase"{" open" if is_now or is_next else ""} data-key="{escape(str(phase))}">'
+            f'{summary}<ol class="steps">'
+            + ''.join(_step_node(item) for item in steps) + '</ol></details>')
+
+
+def _step_node(item):
+    """A step: a small node coloured by its mark, the action, one muted line about it, and Do it (or why not)."""
+    status = item.get('status', 'ready') if item.get('do') else 'none'
+    when, trips = _when(item.get('seconds')), _trips(item.get('trips'))
+    meta = [item.get('where') or '', _cost(item), f'sell ${item["sell"]:,.0f}' if item.get('sell') else '',
+            f'{trips} trip{"" if trips == "1" else "s"}' if trips else '',
+            when if when == 'now' else f'in {when}', item.get('why') or '']
+    do = _do_cell(item)
+    return (f'<li class="step"><span class="node {escape(status)}"></span><div class="step-text">'
+            f'<strong>{escape(item["action"])}</strong>'
+            f'<span class="meta">{escape(" · ".join(part for part in meta if part))}</span></div>'
+            + (f'<div class="step-do">{do}</div>' if do else '') + '</li>')
+
+
+def _prestige_node(plan):
+    """The end of the line: when prestige comes and what to buy then, or what is still missing."""
     prestige = plan.get('prestige') or {}
     if prestige.get('reached'):
         text = f'Prestige in about {_duration(prestige["seconds"])}.'
@@ -576,10 +682,47 @@ def render_plan_tab(view) -> str:
             text += ' Then buy ' + ', '.join(prestige['shop']) + ' in /prestige shop.'
     else:
         text = 'Not reached in this plan. Missing: ' + ', '.join(prestige.get('missing') or ['?']) + '.'
-    prestige_box = _box('Prestige', f'<p>{escape(text)}</p>')
-    notes = ''.join(f'<li>{escape(line)}</li>' for line in plan.get('assumptions', []))
-    notes_box = _box('Assumptions and estimates', f'<ul>{notes}</ul>' if notes else '<p class="empty">None.</p>')
-    return f'{failed}<div class="boxes">{_queue_box(view)}{next_box}{route_box}{prestige_box}{notes_box}</div>'
+    if plan.get('cut_short'):
+        text += ' Plan cut short.'
+    now = ' now' if plan.get('phase_now') == 'prestige' else ''    # filled: the account is at prestige
+    return (f'<div class="end"><span class="node big{" reached" if prestige.get("reached") else ""}{now}"></span>'
+            f'<p class="phase-title">Prestige</p><p class="meta">{escape(text)}</p></div>')
+
+
+def _do_cell(item):
+    """A step's last cell: Do it when it is ready (part 5's mark; a step from before the marks counts as ready),
+    else why not. A step with nothing to send has none."""
+    if not item.get('do'):
+        return ''
+    status = item.get('status', 'ready')
+    if status == 'ready':
+        return _button('queue', 'Do it', secondary=True,
+                       extra={'label': item['action'], 'actions': json.dumps(item['do'])})
+    return f'<span class="cannot">{"Later phase" if status == "later" else "Cannot afford"}</span>'
+
+
+def _league_box(plan):
+    """The league track, as a toggle under the timeline: bought with Hooks, which come rarely, so it never holds
+    the main route up. It starts open when a league step is ready."""
+    league = plan.get('league') or []
+    rows = ''.join(f'<tr><td>{escape(item["action"])}</td><td>{escape(_cost(item))}</td>'
+                   f'<td>{escape(item.get("why") or "")}</td><td>{_do_cell(item)}</td></tr>'
+                   for item in league)
+    body = (f'<table class="mini model"><tbody>{rows}</tbody></table>' if rows
+            else '<p class="empty">Nothing to buy in /shop league.</p>')
+    ready = any(item.get('do') and item.get('status', 'ready') == 'ready' for item in league)
+    return (f'<details class="toggle"{" open" if ready else ""} data-key="league">'
+            f'<summary>League (Hooks: {plan.get("hooks", 0):,})</summary>{body}</details>')
+
+
+def _prestige_ready_box(plan):
+    """Shown once the account meets the prestige requirements; prestiging is done by hand."""
+    if plan.get('phase_now') != 'prestige':
+        return ''
+    shop = (plan.get('prestige') or {}).get('shop') or []
+    text = 'The requirements are met. Prestige by hand' + (
+        f', then buy {", ".join(shop)} in /prestige shop.' if shop else '.')
+    return _box('Ready to prestige', f'<p>{escape(text)}</p>')
 
 
 def _queue_box(view):
@@ -593,7 +736,15 @@ def _queue_box(view):
                       for r in view.get('action_log') or [])
     body = (f'<ul class="queue">{waiting}</ul>' if waiting
             else '<p class="empty">Nothing queued. Press Do it on a step to carry it out between trips.</p>')
-    return _box('Queue', body + (f'<ul class="note">{results}</ul>' if results else ''))
+    executor = view.get('executor') or {}
+    following = executor.get('follow')
+    toggle = (_button('follow', 'Stop following', secondary=True, extra={'on': '0'}) if following
+              else _button('follow', 'Follow the plan', extra={'on': '1'}))
+    held = ''.join(f'<li>{escape(entry["label"])} held back until trip {entry["until"]:,}</li>'
+                   for entry in executor.get('held') or [])
+    lead = ('<p class="note">Following the plan: ready steps are queued by themselves.</p>' if following else '')
+    return _box('Queue', toggle + lead + body + (f'<ul class="note">{held}</ul>' if held else '')
+                + (f'<ul class="note">{results}</ul>' if results else ''))
 
 
 def _plan_tab(view) -> str:
@@ -707,7 +858,7 @@ def render_panel(status, mode=None) -> str:
             '<nav class="tabs"><a href="#run">Run</a><a href="#model">Model</a><a href="#plan">Plan</a></nav>'
             f'<section class="tab" data-tab="run">{run_tab}</section>'
             f'<section class="tab" data-tab="model" hidden>{_model_tab(status.get("model"))}</section>'
-            f'<section class="tab" data-tab="plan" hidden>{_plan_tab({**(status.get('plan') or {}), 'queue': status.get('queue'), 'action_log': status.get('action_log')})}</section></div>')
+            f'<section class="tab" data-tab="plan" hidden>{_plan_tab({**(status.get('plan') or {}), 'queue': status.get('queue'), 'executor': status.get('executor'), 'action_log': status.get('action_log')})}</section></div>')
 
 
 def _field(name, label, value, hint=''):

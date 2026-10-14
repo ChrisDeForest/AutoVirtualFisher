@@ -12,7 +12,7 @@ from urllib.parse import urlencode
 from urllib.request import urlopen
 
 from src.automation_transport import SimulationTransport
-from src.automation_web import render_panel
+from src.automation_web import PHASE_INTRO, render_panel
 from src.fishing_sessions import load_sessions
 from src.player_web import Handler
 
@@ -219,6 +219,26 @@ class AutomationWebTests(unittest.TestCase):
         self.post(action='unqueue', id=str(queue[0]['id']))
         self.assertEqual(self.handler.automation.status()['queue'], [])
 
+    def test_follow_the_plan_toggle(self):
+        self.post(action='start', mode='simulation', max_trips='1000', max_minutes='5')
+        self.handler.automation.pause()
+        self.post(action='follow', on='1')
+        self.assertTrue(self.handler.automation.status()['executor']['follow'])
+        self.post(action='follow', on='0')
+        self.assertFalse(self.handler.automation.status()['executor']['follow'])
+
+    def test_queue_box_has_the_follow_toggle_and_held_steps(self):
+        from src.automation_web import render_plan_tab
+        plan = {'error': None, 'cut_short': False, 'assumptions': [], 'next': None, 'steps': [], 'league': [],
+                'prestige': {'reached': False, 'missing': []}}
+        off = render_plan_tab({'plan': plan, 'executor': {'follow': False, 'held': [], 'prestige_ready': False}})
+        self.assertIn('value="follow"', off)
+        self.assertIn('Follow the plan', off)
+        on = render_plan_tab({'plan': plan, 'executor': {
+            'follow': True, 'prestige_ready': False, 'held': [{'label': 'Salesman 8', 'until': 140}]}})
+        self.assertIn('Stop following', on)
+        self.assertIn('Salesman 8 held back until trip 140', on)
+
     def test_a_stale_resume_never_ends_a_newer_pause(self):
         # A resume sent again later (a reload, a restored tab) belongs to an earlier pause: the run stays paused.
         self.post(action='start', mode='simulation', max_trips='1000', max_minutes='5')
@@ -303,7 +323,7 @@ class AutomationWebTests(unittest.TestCase):
                          'steps': [step, {**step, 'kind': 'switch', 'action': 'Switch: rod Golden Rod', 'where': ''}],
                          'prestige': {'reached': True, 'seconds': 10, 'shop': ['International Ties']}}}
         html = render_plan_tab(view)
-        self.assertIn('Salesman 8<span class="where">/shop upgrades</span>', html)
+        self.assertEqual(html.count('/shop upgrades'), 2)                       # the Next box and the step
         self.assertIn('Salesman 8 in /shop upgrades', html)                     # the Next box
         self.assertIn('Then buy International Ties in /prestige shop.', html)
 
@@ -331,16 +351,69 @@ class AutomationWebTests(unittest.TestCase):
         self.assertIn('✗ Bait Helper 2: can&#x27;t afford it', html)
         self.assertIn('<h2>Queue</h2>', render_plan_tab({'plan': view['plan']}))   # shown empty too
 
-    def test_a_step_that_cannot_be_paid_for_yet_has_no_do_it(self):
+    def test_plan_marks_league_box_and_ready_to_prestige(self):
         from src.automation_web import render_plan_tab
         action = {'act': 'buy', 'name': 'Bait Lover', 'level': 3, 'shop': 'special', 'price': 25}
         step = {'phase_label': '1st XP grind', 'kind': 'special', 'action': 'Bait Lover 3 (25 Diamond Fish)',
                 'cost': 25, 'currency': 'Diamond Fish', 'sell': 0, 'trips': 0, 'seconds': 0, 'why': '',
-                'where': '/shop special', 'do': [action], 'affordable': False}
-        html = render_plan_tab({'plan': {'error': None, 'cut_short': False, 'assumptions': [], 'next': step,
-                                         'steps': [step], 'prestige': {'reached': False, 'missing': []}}})
+                'where': '/shop special', 'do': [action], 'status': 'cannot_afford'}
+        later = {**step, 'action': 'Bait Lover 4 (50 Diamond Fish)', 'status': 'later'}
+        crates = {**step, 'kind': 'league', 'action': 'Super Crates 3', 'cost': 150, 'currency': 'Hooks',
+                  'where': '/shop league', 'status': 'ready'}
+        plan = {'error': None, 'cut_short': False, 'assumptions': [], 'next': step, 'steps': [step, later],
+                'league': [crates], 'hooks': 160, 'phase_now': 'xp_grind_1',
+                'prestige': {'reached': False, 'missing': []}}
+        html = render_plan_tab({'plan': plan})
         self.assertIn('Cannot afford', html)
-        self.assertNotIn('value="queue"', html)
+        self.assertIn('Later phase', html)
+        self.assertIn('<details class="toggle" open data-key="league"><summary>League (Hooks: 160)</summary>',
+                      html)  # a step is ready
+        self.assertIn('Super Crates 3', html)
+        self.assertEqual(html.count('value="queue"'), 1)                 # only the ready league step
+        self.assertNotIn('Ready to prestige', html)
+        ready = render_plan_tab({'plan': {**plan, 'phase_now': 'prestige',
+                                          'prestige': {'reached': True, 'seconds': 0, 'shop': ['International Ties']}}})
+        self.assertIn('<h2>Ready to prestige</h2>', ready)
+        self.assertIn('International Ties', ready)
+
+    def test_plan_tab_is_a_timeline_by_phase(self):
+        from src.automation_web import render_plan_tab
+        step = lambda phase, label, action, status, seconds: {
+            'phase': phase, 'phase_label': label, 'kind': 'buy', 'action': action, 'cost': 100, 'currency': '$',
+            'sell': 0, 'trips': 3, 'seconds': seconds, 'why': 'because', 'where': '/shop upgrades',
+            'do': [{'act': 'buy', 'name': action}], 'status': status}
+        steps = [step('xp_grind_1', '1st XP grind', 'Salesman 8', 'ready', 0),
+                 step('xp_grind_1', '1st XP grind', 'Golden Rod', 'cannot_afford', 600),
+                 step('charm_grind_1', '1st charm grind', 'Better Chests 5', 'later', 7200),
+                 step('xp_grind_2', '2nd XP grind', 'Yacht', 'later', 90000)]
+        plan = {'error': None, 'cut_short': False, 'assumptions': ['an estimate'], 'next': steps[0], 'steps': steps,
+                'league': [], 'hooks': 3, 'phase_now': 'xp_grind_1',
+                'prestige': {'reached': True, 'seconds': 200000, 'shop': ['International Ties']}}
+        html = render_plan_tab({'plan': plan, 'made_at': 'x'})
+        self.assertIn('You are in the 1st XP grind', html)
+        self.assertIn(PHASE_INTRO['xp_grind_1'], html)
+        self.assertEqual(html.count('<details class="phase"'), 3)
+        self.assertEqual(html.count('<details class="phase" open'), 2)     # this phase and the next
+        self.assertIn('2 steps · 1 ready', html)
+        self.assertLess(html.index('Salesman 8'), html.index('Better Chests 5'))
+        self.assertLess(html.index('Better Chests 5'), html.index('Prestige in about'))
+        self.assertIn('Assumptions and estimates (1)', html)
+        self.assertIn('League (Hooks: 3)', html)
+        # Each toggle has a key, so the 2-second refresh keeps it open or closed as the person left it.
+        for key in ('xp_grind_1', 'charm_grind_1', 'xp_grind_2', 'league', 'assumptions'):
+            self.assertIn(f'data-key="{key}"', html)
+        self.assertNotIn('class="node big reached now"', html)
+
+    def test_at_prestige_the_prestige_node_is_current_not_a_phase(self):
+        from src.automation_web import render_plan_tab
+        step = {'phase': 'xp_grind_2', 'phase_label': '2nd XP grind', 'kind': 'buy', 'action': 'Yacht', 'cost': 1,
+                'currency': '$', 'sell': 0, 'trips': 3, 'seconds': 10, 'why': '', 'where': '', 'do': [],
+                'status': 'later'}
+        plan = {'error': None, 'cut_short': False, 'assumptions': [], 'next': None, 'steps': [step], 'league': [],
+                'hooks': 0, 'phase_now': 'prestige', 'prestige': {'reached': True, 'seconds': 0, 'shop': []}}
+        html = render_plan_tab({'plan': plan})
+        self.assertNotIn('class="node big now"', html)
+        self.assertIn('<span class="node big reached now"></span><p class="phase-title">Prestige</p>', html)
 
     def test_plan_tab_trips_column_and_now(self):
         from src.automation_web import render_plan_tab
@@ -352,9 +425,9 @@ class AutomationWebTests(unittest.TestCase):
             'prestige': {'reached': False, 'missing': ['level 500 (the plan reaches 52)', '829 more charms']}}})
         self.assertIn('Switch: rod Supporter Rod — now', html)
         self.assertNotIn('about 1 min', html)
-        self.assertIn('<th>Trips</th>', html)
-        self.assertIn('<td>312</td><td>1.3 h</td>', html)
-        self.assertIn('<td></td><td>now</td>', html)
+        self.assertIn('312 trips · in 1.3 h', html)
+        self.assertIn('now · best setup for money', html)                  # no trips before it
+        self.assertNotIn('0 trips', html)
         self.assertIn('Missing: level 500 (the plan reaches 52), 829 more charms.', html)
 
     def test_plan_tab_shows_a_later_error_above_the_last_good_plan(self):
@@ -449,6 +522,13 @@ class AutomationWebTests(unittest.TestCase):
         # the 2-second refresh keeps each scrolling list's and the page's position
         self.assertIn('el.scrollTop = at[0]', SCRIPT)
         self.assertIn('window.scrollTo(x, y)', SCRIPT)
+        # ... and which toggles were open: each details[data-key] is recorded before and set back after.
+        self.assertIn("querySelectorAll('details[data-key]')", SCRIPT)
+        self.assertIn('open[d.getAttribute(\'data-key\')] = d.open', SCRIPT)
+        self.assertIn('d.open = open[key]', SCRIPT)
+        self.assertLess(SCRIPT.index('= d.open'), SCRIPT.index('panel.innerHTML = html'))
+        self.assertLess(SCRIPT.index('panel.innerHTML = html'), SCRIPT.index('d.open = open[key]'))
+        self.assertLess(SCRIPT.index('d.open = open[key]'), SCRIPT.index('window.scrollTo(x, y)'))
         # A run starting or stopping loads the page afresh: reloading a page a press answered would resend it (a
         # tab left on an old Stop page stopped the next run a second after it started).
         self.assertNotIn('location.reload', SCRIPT)

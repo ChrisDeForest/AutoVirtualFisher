@@ -415,6 +415,182 @@ class ControllerTests(unittest.TestCase):
                          {'label': 'Rod', 'result': 'skipped', 'note': f'already using {rod}'})
         self.assertNotIn('act', self.kinds())
 
+    # --- part 5: Follow the plan ---
+
+    def follow(self, plan_for, config, state_path=None):
+        """A run whose plans come from `plan_for(sent)` (sent: the act intents so far), following them."""
+        self.make(config=replace(config, capabilities=self.ACT), plan_spawn=lambda work: work(),
+                  state_path=state_path)
+        acts = lambda: [intent for _, intent in self.sim.sent if intent.kind == 'act']
+        self.controller.planner.compute = lambda inputs: plan_for(acts())
+        self.controller.set_follow(True)
+        self.controller.start()
+
+    @staticmethod
+    def plan_of(*steps, league=(), phase_now='xp_grind_1'):
+        return {'error': None, 'phase_now': phase_now, 'steps': list(steps), 'league': list(league), 'next': None,
+                'prestige': {}, 'assumptions': [], 'cut_short': False}
+
+    @staticmethod
+    def step(label, action, status='ready'):
+        return {'action': label, 'kind': 'buy', 'status': status, 'do': [action.to_dict()]}
+
+    def test_follow_the_plan_queues_ready_steps_and_keeps_fishing(self):
+        from src.actions import Action
+        salesman = Action('buy', 'Salesman', level=8, shop='upgrades')
+        rod = Action('buy', 'Alloy Rod', shop='rods', price=10 ** 9)
+        self.follow(lambda acts: self.plan_of(
+            *([self.step('Salesman 8', salesman)] if not acts else []),
+            self.step('Alloy Rod', rod, 'cannot_afford')), replace(CONFIG, max_trips=20))
+        # The first plan made after the startup reads comes once the planner's 30 s spacing is over.
+        self.run_for(120)
+        acts = [intent.arguments[0]['name'] for _, intent in self.sim.sent if intent.kind == 'act']
+        self.assertEqual(acts, ['Salesman'])                      # once: the next plan no longer lists it
+        self.assertEqual(self.saved_trips(), 20)
+
+    def test_follow_the_plan_pauses_at_ready_to_prestige(self):
+        self.follow(lambda acts: self.plan_of(phase_now='prestige'), replace(CONFIG, max_trips=20))
+        self.run_for(120)
+        status = self.controller.status()
+        self.assertTrue(status['paused'])
+        self.assertTrue(status['executor']['prestige_ready'])
+        fished = self.kinds().count('fish')
+        self.controller.resume(status['pause_id'])                # prestiged by hand, then Resume
+        self.run_for(40)
+        self.assertFalse(self.controller.status()['paused'])      # not paused again for the same prestige
+        self.assertGreater(self.kinds().count('fish'), fished)
+
+    def test_a_pause_after_ready_to_prestige_is_the_users_own(self):
+        self.follow(lambda acts: self.plan_of(phase_now='prestige'), replace(CONFIG, max_trips=20))
+        self.run_for(120)
+        status = self.controller.status()
+        self.assertTrue(status['executor']['prestige_ready'])
+        self.controller.resume(status['pause_id'])
+        self.assertFalse(self.controller.status()['executor']['prestige_ready'])
+        self.controller.pause()
+        status = self.controller.status()
+        self.assertEqual(status['phase'], 'PAUSED_BY_YOU')
+        self.assertFalse(status['executor']['prestige_ready'])
+
+    def test_nothing_is_queued_from_a_plan_older_than_the_last_action(self):
+        from src.actions import Action
+        salesman = Action('buy', 'Salesman', level=8, shop='upgrades')
+        # The plan never drops the step, so it is bought again whenever a plan is fresh: between any two buys the
+        # first one's reads must have come back (and a plan been made after them). A step carried out is left
+        # for HOLD_BACK_TRIPS trips; one trip here, so it comes up again within the run.
+        from unittest.mock import patch
+        self.follow(lambda acts: self.plan_of(self.step('Salesman 8', salesman)), replace(CONFIG, max_trips=30))
+        with patch('src.automation_controller.HOLD_BACK_TRIPS', 1):
+            self.run_for(150)
+        kinds = self.kinds()
+        acts = [index for index, kind in enumerate(kinds) if kind == 'act']
+        self.assertGreaterEqual(len(acts), 2)
+        for first, second in zip(acts, acts[1:]):
+            between = kinds[first + 1:second]
+            self.assertIn('refresh_upgrades', between)
+            self.assertIn('refresh_profile', between)
+
+    def test_a_failed_step_is_held_back(self):
+        from src.actions import Action
+        salesman = Action('buy', 'Salesman', level=8, shop='upgrades')
+
+        def plan_for(acts):
+            if not acts:     # the act is the next send once a fresh plan lists it
+                self.sim.script = {len(self.sim.sent): 'act_fail'}
+            return self.plan_of(self.step('Salesman 8', salesman))
+
+        self.follow(plan_for, replace(CONFIG, max_trips=30))
+        self.run_for(150)
+        acts = [intent for _, intent in self.sim.sent if intent.kind == 'act']
+        self.assertEqual(len(acts), 1)
+        held = self.controller.status()['executor']['held']
+        self.assertEqual([entry['label'] for entry in held], ['Salesman 8'])
+        self.assertGreaterEqual(held[0]['until'], 50)
+
+    def test_a_step_carried_out_is_not_queued_again_for_a_while(self):
+        # A bait batch has no level check: a plan that still lists it after the buy (its read missed the bought
+        # line, or came back unreadable) must not buy one batch per plan.
+        from src.actions import Action
+        bait = Action('buy', 'Worms', shop='bait', price=1)
+        self.follow(lambda acts: self.plan_of(self.step('Worms', bait)), replace(CONFIG, max_trips=40))
+        self.run_for(200)
+        self.assertEqual(self.kinds().count('act'), 1)
+        self.assertEqual(self.controller.status()['executor']['held'], [])     # not shown as held back
+
+    def test_follow_waits_for_page_two_of_a_paged_read(self):
+        # After a /shop special buy, page 1 applied leaves page 2 due: Follow waits for it too.
+        from src.actions import Action
+        salesman = Action('buy', 'Salesman', level=8, shop='upgrades')
+        self.follow(lambda acts: self.plan_of(self.step('Salesman 8', salesman)), replace(CONFIG, max_trips=30))
+        while self.controller.state.pending is not None or not self.kinds().count('fish'):
+            self.run_for(STEP)
+        controller = self.controller
+        controller.queue.clear()
+        controller.awaiting_reads = {'refresh_special'}
+        controller.state = replace(controller.state, refresh_due=('refresh_special_page2',))
+        controller.planner.plan = self.plan_of(self.step('Salesman 8', salesman))
+        controller.planner.plan_request = controller.planner.requested
+        controller._follow()
+        self.assertEqual(controller.queue, [])
+        self.assertEqual(controller.awaiting_reads, {'refresh_special'})
+
+    def test_follow_asks_for_a_plan_every_few_trips(self):
+        # Something can become affordable while fishing, with no read to ask for a new plan.
+        from src import automation_controller
+        every = getattr(automation_controller, 'FOLLOW_PLAN_TRIPS', 10)
+        self.ACT = CONFIG.capabilities + ('act',)     # no account read missing a field (each read asks for a plan)
+        self.follow(lambda acts: self.plan_of(), replace(CONFIG, max_trips=45, resync_trips=100))
+        while self.kinds().count('fish') < 2:
+            self.run_for(STEP)
+        before = self.controller.planner.requested
+        self.run_for(200)
+        self.assertEqual(self.saved_trips(), 45)
+        self.assertGreaterEqual(self.controller.planner.requested - before, 40 // every)
+
+    def test_resume_after_ready_to_prestige_reads_the_profile_again(self):
+        # The plan stays 'prestige' until /profile shows the prestige done.
+        self.ACT = self.ACT + ('refresh_prestige_shop',)
+        self.follow(lambda acts: self.plan_of(phase_now='prestige'), replace(CONFIG, max_trips=20))
+        self.run_for(120)
+        status = self.controller.status()
+        self.assertTrue(status['executor']['prestige_ready'])
+        self.controller.state = replace(self.controller.state, refresh_due=('refresh_profile',))
+        self.controller.resume(status['pause_id'])
+        self.assertEqual(self.controller.state.refresh_due, ('refresh_profile', 'refresh_prestige_shop'))
+
+    def test_a_captcha_clearing_during_ready_to_prestige_stays_paused(self):
+        self.follow(lambda acts: self.plan_of(phase_now='prestige'), replace(CONFIG, max_trips=20))
+        self.run_for(120)
+        self.assertTrue(self.controller.status()['executor']['prestige_ready'])
+        self.controller.captcha = 'Please complete this captcha to continue fishing.'
+        self.sim.solve_captcha()
+        fished = self.kinds().count('fish')
+        self.run_for(20)
+        status = self.controller.status()
+        self.assertTrue(status['paused'])
+        self.assertTrue(status['executor']['prestige_ready'])
+        self.assertEqual(status['phase'], 'READY_TO_PRESTIGE')
+        self.assertIsNone(self.controller.captcha)
+        self.assertEqual(self.kinds().count('fish'), fished)
+
+    def test_follow_the_plan_is_remembered(self):
+        path = Path(self.temporary.name) / 'account' / 'account_state.json'
+        path.parent.mkdir()
+        self.make(state_path=path).set_follow(True)
+        self.assertTrue(self.make(state_path=path).follow_plan)
+        self.make(state_path=path).set_follow(False)
+        self.assertFalse(self.make(state_path=path).follow_plan)
+        self.assertFalse(self.make().follow_plan)                  # no state path: off
+
+    def test_a_plan_view_says_which_request_it_answers(self):
+        from src.automation_controller import PlanRunner
+        runner = PlanRunner(lambda inputs: {'error': None, 'made': inputs}, spawn=lambda work: work(),
+                            clock=lambda: 0.0, spacing=0)
+        self.assertEqual(runner.view()['request'], 0)
+        runner.request('a')
+        runner.request('b')
+        self.assertEqual((runner.requested, runner.view()['request']), (2, 2))
+
     def test_unreadable_resync_never_stops_fishing(self):
         self.sim.script = {5: 'unreadable_fixed', 6: 'unreadable_fixed'}
         self.make(config=replace(CONFIG, max_trips=5, resync_trips=3)).start()
@@ -956,7 +1132,7 @@ class ControllerTests(unittest.TestCase):
         self.make(config=replace(CONFIG, capabilities=READS_CONFIG), plan_spawn=started.append).start()
         self.run_for(30)
         plan = self.controller.status()['plan']
-        self.assertEqual(set(plan), {'plan', 'made_at', 'updating', 'error'})
+        self.assertEqual(set(plan), {'plan', 'made_at', 'updating', 'error', 'request'})
         self.assertEqual(len(started), 1)            # one plan at a time: the rest wait for it
         self.assertEqual((plan['plan'], plan['made_at'], plan['updating']), (None, None, True))
         started[0]()                                 # the thread runs: a plan, not an error
@@ -974,7 +1150,8 @@ class ControllerTests(unittest.TestCase):
         view = self.controller.status()['plan']
         self.assertFalse(view['updating'])
         self.assertIsNone(view['error'])
-        self.assertEqual(set(view['plan']), {'error', 'next', 'steps', 'prestige', 'assumptions', 'cut_short'})
+        self.assertEqual(set(view['plan']), {'error', 'next', 'steps', 'prestige', 'assumptions', 'cut_short',
+                                             'phase_now', 'hooks', 'league'})
         self.assertIsNotNone(view['made_at'])
 
     def test_a_plan_that_cannot_be_requested_never_stops_the_run(self):

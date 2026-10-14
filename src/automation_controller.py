@@ -12,6 +12,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 import copy
+import json
 import random
 import re
 import threading
@@ -43,7 +44,7 @@ from .fishing_log import parse_fishing
 from .fishing_sessions import save_session
 from .live_capture import fishing_core_problems, fishing_problems
 from .observation import VERIFIED
-from .player_snapshots import new_record_id
+from .player_snapshots import new_record_id, write_json_atomically
 from .review_queue import add_item
 
 # The game writes "You must wait 0.1s before fishing again." (live, Oct 13; OCR read "O.Is"); "2.5 seconds" too.
@@ -67,8 +68,15 @@ UNCOUNTED_RESYNC = 3
 CAPTCHA_REASON = ('Virtual Fisher asked for a captcha. Type /captcha with the code from the image in Discord '
                   '(exact case). Fishing carries on by itself once Virtual Fisher replies to anything again; '
                   'Resume also works.')
+PRESTIGE_REASON = 'Ready to prestige: the requirements are met. Prestige by hand, then Resume.'
 # After a refusal before any input (Discord not in front, message box not empty), the wait before trying again.
 REFUSAL_RETRY_DELAY = 2.0
+# Follow the plan (part 5): a step whose action failed or whose outcome is unknown is not queued again for this many
+# trips (Do it can still queue it).
+HOLD_BACK_TRIPS = 50
+# Follow the plan: plans are otherwise only asked for after a read, so something that became affordable while
+# fishing would wait for the next resync (100 trips). PlanRunner's 30 s spacing still applies.
+FOLLOW_PLAN_TRIPS = 10
 
 
 _REFERENCES = []
@@ -123,10 +131,12 @@ class PlanRunner:
         self.lock = threading.Lock()
         self.pending, self.busy, self.started = None, False, None
         self.plan, self.made_at, self.error = None, None, None
+        self.requested, self.plan_request = 0, 0
 
     def request(self, inputs):
         with self.lock:
-            self.pending = inputs
+            self.requested += 1
+            self.pending = (self.requested, inputs)    # numbered: the executor tells a fresh plan from a stale one
         self.poll()
 
     def poll(self):
@@ -151,7 +161,7 @@ class PlanRunner:
                 if self.pending is None or not self._window_over():
                     self.busy = False   # a request left waiting is started by a later poll
                     return
-                inputs, self.pending = self.pending, None
+                (number, inputs), self.pending = self.pending, None
                 self.started = self.clock()
             try:
                 plan, error = self.compute(inputs), None
@@ -165,17 +175,25 @@ class PlanRunner:
                     if not _good_plan(self.plan):
                         self.plan = None    # a plan that could not be made never stays up beside a newer failure
                 else:
-                    self.plan, self.error = plan, None
+                    self.plan, self.error, self.plan_request = plan, None, number
                     self.made_at = datetime.now(timezone.utc).isoformat(timespec='seconds')
 
     def view(self):
         with self.lock:
             return {'plan': self.plan, 'made_at': self.made_at, 'error': self.error,
-                    'updating': self.busy or self.pending is not None}
+                    'updating': self.busy or self.pending is not None, 'request': self.plan_request}
 
 
 def _good_plan(plan):
     return isinstance(plan, dict) and not plan.get('error')
+
+
+def _load_follow(path):
+    """Whether Follow the plan was left on for this account; off when never set or unreadable."""
+    try:
+        return bool(json.loads(Path(path).read_text(encoding='utf-8')).get('follow_plan')) if path else False
+    except (OSError, ValueError, AttributeError):
+        return False
 
 
 class AutomationController:
@@ -203,6 +221,18 @@ class AutomationController:
             self.plan_data, plan_problem = None, str(error)
         self.planner = PlanRunner(self._compute_plan, plan_spawn, clock=monotonic)  # plan_spawn: tests only
         self.planner.error = plan_problem
+        # Follow the plan (part 5): kept per account beside the account state, so it outlives restarts.
+        self.executor_path = self.state_path.parent / 'executor.json' if self.state_path else None
+        self.follow_plan = _load_follow(self.executor_path)
+        self.held = {}                 # step label -> the trip from which Follow the plan may queue it again
+        # step label -> the trip its queued action last ran at (any result): a read that misses a buy leaves the
+        # step ready in the next plan, and a bait batch has no level check, so it is not queued again for a while.
+        self.recent = {}
+        self.awaiting_reads = None     # the reads the last action queued, until all are applied
+        self.settled_request = 0       # the plan request made once they were: plans from it on are fresh
+        self.prestige_ready = False    # paused at Ready to prestige
+        self.prestige_seen = False     # this prestige already paused once; cleared when the plan leaves prestige
+        self.queued_from = -1          # the plan request steps were last queued from: each plan is followed once
         self.model_boosted = None  # whether the latest trip was under a global boost (None: no trip yet)
         self.roots = {'fishing': Path(fishing_root), 'review': Path(review_root)}
         self.monotonic = monotonic
@@ -286,13 +316,16 @@ class AutomationController:
             self.startup_failures, self.startup_problems, self.startup_texts = {}, {}, {}
             self.unknown_streak = 0
             self.refused_until, self.refused_reason = float('-inf'), ''
-            self.paused, self.captcha = False, None
+            self.paused, self.captcha, self.prestige_ready, self.prestige_seen = False, None, False, False
+            self.recent = {}               # trips count from 0 again
             self.jitter, self.jitters = 0.0, []
             self.focus_note, self.focus_lost_at = None, None
             self._reset_stats()
             # Read once the profile and cooldown are known, before the first fish.
             self.state = replace(self.state, refresh_due=tuple(
                 kind for kind in ('refresh_charms', *self._account_reads()) if kind in self.config.capabilities))
+            # Follow the plan waits for these too: a plan from the account saved last run is not followed.
+            self.awaiting_reads = set(self.state.refresh_due)
             self.startup_retry_at = float('-inf')
             self.acknowledged = {action for action, info in recovered['actions'].items()
                                  if info['status'] in ('acknowledged', 'projected')}
@@ -358,7 +391,12 @@ class AutomationController:
         with self.lock:
             if not (self.paused and (pause_id is None or pause_id == self.pause_id)):
                 return False
-            self.paused, self.captcha = False, None
+            if self.prestige_ready:
+                # Prestiged by hand: the plan stays at prestige until /profile (and the prestige shop) are read.
+                self.state = replace(self.state, refresh_due=self.state.refresh_due + tuple(
+                    kind for kind in ('refresh_profile', 'refresh_prestige_shop')
+                    if kind in self.config.capabilities and kind not in self.state.refresh_due))
+            self.paused, self.captcha, self.prestige_ready = False, None, False
             self._safe_event('resumed', None)
             self.phase, self.reason = 'READY', 'Resuming.'
             refocus = getattr(self.transport, 'refocus', None)
@@ -400,6 +438,9 @@ class AutomationController:
                     'queue': [{'id': entry['id'], 'label': entry['label'], 'left': len(entry['actions'])}
                               for entry in self.queue],
                     'action_log': list(self.action_log),
+                    'executor': {'follow': self.follow_plan, 'prestige_ready': self.prestige_ready,
+                                 'held': [{'label': label, 'until': until} for label, until in self.held.items()
+                                          if until > self.state.trips]},
                     'startup': {'failures': dict(self.startup_failures),
                                 'problems': dict(self.startup_problems),
                                 'confirmed_fields': dict(self.state.startup_observed_at)}}
@@ -472,12 +513,17 @@ class AutomationController:
                 self.phase, self.reason = 'NEEDS_REVIEW', self._unresolved_text()
                 return
             if self.paused and self.captcha and self._captcha_cleared():
-                # The bot answers nothing else until a captcha is solved: a newer reply means it was.
-                self.paused, self.captcha = False, None
+                # The bot answers nothing else until a captcha is solved: a newer reply means it was. At Ready to
+                # prestige the run stays paused there: only Resume (after prestiging by hand) carries on.
+                self.captcha = None
+                if not self.prestige_ready:
+                    self.paused = False
                 self._safe_event('captcha_solved', None)
             if self.paused:
                 if self.captcha:
                     self.phase, self.reason = 'CAPTCHA', CAPTCHA_REASON
+                elif self.prestige_ready:
+                    self.phase, self.reason = 'READY_TO_PRESTIGE', PRESTIGE_REASON
                 else:
                     self.phase, self.reason = 'PAUSED_BY_YOU', 'Paused. Resume to carry on fishing.'
                 return
@@ -503,6 +549,12 @@ class AutomationController:
             if now < self.startup_retry_at:
                 self.phase = 'RETRYING_STARTUP'
                 self.reason = f'Retrying startup read in {self.startup_retry_at - now:.1f} s.'
+                return
+            try:
+                self._follow()
+            except Exception as error:   # following the plan never stops a run
+                self.planner.error = f'Follow the plan failed: {error}'
+            if self.paused:
                 return
             # A queued action goes in the gap between trips, without waiting for the fishing cooldown; after one
             # that changes the balance (a sell, a buy) /profile is read first, so the next is checked against it.
@@ -658,12 +710,57 @@ class AutomationController:
 
     def queue_step(self, label, actions):
         """Queue a plan step's actions (Do it). They run one per gap between trips; the queue is lost on restart."""
-        from .actions import Action
         with self.lock:
-            self.queue_ids += 1
-            self.queue.append({'id': self.queue_ids, 'label': label, 'checked': False,
-                               'actions': [Action.from_dict(item) for item in actions]})
-            return self.queue_ids
+            return self._enqueue(label, actions)
+
+    def _enqueue(self, label, actions):
+        from .actions import Action
+        self.queue_ids += 1
+        self.queue.append({'id': self.queue_ids, 'label': label, 'checked': False,
+                           'actions': [Action.from_dict(item) for item in actions]})
+        return self.queue_ids
+
+    def set_follow(self, on):
+        """Turn Follow the plan on or off; saved for this account. Steps already queued stay queued."""
+        with self.lock:
+            self.follow_plan = bool(on)
+            if self.executor_path:
+                try:
+                    write_json_atomically(self.executor_path.parent, self.executor_path.stem,
+                                          {'follow_plan': self.follow_plan})
+                except OSError as error:
+                    self._safe_event('state_not_saved', None, reason=str(error))
+
+    def _follow(self):
+        """Follow the plan (part 5): with nothing queued or waiting, queue every ready step of a plan made after the
+        last action's reads (or the run's startup reads) came back, once per plan. Held-back steps are left out."""
+        if not self.follow_plan or self.queue or self.state.pending is not None or self.state.uncertain:
+            return
+        if startup_problems(self.state, 'profile') or startup_problems(self.state, 'buffs'):
+            return    # the run's /profile and /buffs come first (start() also waits for its account reads)
+        if self.awaiting_reads is not None:
+            # Page 2 of a paged read (refresh_special_page2) still belongs to its read.
+            if self.awaiting_reads & {read_of(kind) for kind in self.state.refresh_due}:
+                return
+            self.awaiting_reads, self.settled_request = None, self.planner.requested
+        view = self.planner.view()
+        plan = view['plan']
+        if not _good_plan(plan) or view['request'] < self.settled_request or view['request'] <= self.queued_from:
+            return
+        if plan.get('phase_now') == 'prestige':
+            if not self.prestige_seen:     # once per prestige: Resume (after prestiging by hand) carries on
+                self.prestige_seen = self.prestige_ready = self.paused = True
+                self.pause_id += 1
+                self._safe_event('paused', None, reason='ready to prestige')
+                self.phase, self.reason = 'READY_TO_PRESTIGE', PRESTIGE_REASON
+            return
+        self.prestige_seen = False
+        self.queued_from = view['request']
+        for step in list(plan.get('steps') or []) + list(plan.get('league') or []):
+            label = step.get('action')
+            if step.get('status') == 'ready' and step.get('do') and self.held.get(label, 0) <= self.state.trips \
+                    and (label not in self.recent or self.state.trips - self.recent[label] >= HOLD_BACK_TRIPS):
+                self._enqueue(label, step['do'])
 
     def unqueue(self, queue_id):
         """Remove a queued step; False when it is no longer queued."""
@@ -713,7 +810,13 @@ class AutomationController:
             # A sell whose reply was not read still goes on to its buy: the buy is checked against the new /profile.
             if (result != 'done' and action.act != 'sell') or not entry['actions']:
                 self.queue.pop(0)
-        self._log_action(entry['label'] if entry else action.label(), result, note)
+        label = entry['label'] if entry else action.label()
+        self._log_action(label, result, note)
+        self.recent[label] = self.state.trips     # Follow the plan leaves it a while, whatever the reads show
+        if result in ('failed', 'unknown') and action.act != 'sell':
+            self.held[label] = self.state.trips + HOLD_BACK_TRIPS    # Follow the plan leaves it for a while
+        # Follow the plan waits for these reads, then for a plan made after them.
+        self.awaiting_reads = {kind for kind in reads_after(action) if kind in self.config.capabilities}
         self.pending_action = None
         due = tuple(kind for kind in reads_after(action) if kind in self.config.capabilities
                     and kind not in self.state.refresh_due)
@@ -864,6 +967,7 @@ class AutomationController:
             self.last_trip_at = self.sent_at[0] if this_run else now
             if this_run:
                 self.state = replace(self.state, trips=self.state.trips + 1)
+                self._follow_replan()
             self._count_retries()
         elif result == 'trip':
             self.total_trips += 1
@@ -887,6 +991,15 @@ class AutomationController:
             self._count_retries()
             self._project(action_id, tally)
             self._model_observe(tally)
+            if this_run:
+                self._follow_replan()     # after the trip is counted, so the plan starts from it
+
+    def _follow_replan(self):
+        """While following the plan, ask for one every FOLLOW_PLAN_TRIPS trips. Not while an action's reads are
+        awaited or steps are queued: a plan asked for then is never taken as fresh (see _follow)."""
+        if self.follow_plan and self.state.trips % FOLLOW_PLAN_TRIPS == 0 and self.awaiting_reads is None \
+                and not self.queue and self.pending_action is None:
+            self._request_plan()
 
     def _model_observe(self, tally):
         """Let the model watch one new trip with the setup it was fished with."""

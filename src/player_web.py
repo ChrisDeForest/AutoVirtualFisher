@@ -484,6 +484,8 @@ class Handler(BaseHTTPRequestHandler):
                     current.queue_step(fields.get('label', ['step'])[0][:120], actions)
                 else:
                     notice = 'That step has nothing the run can do.'
+            elif action == 'follow' and current:
+                current.set_follow(fields.get('on', ['0'])[0] == '1')
             elif action == 'unqueue' and current:
                 token = fields.get('id', [''])[0]
                 if not (token.isdigit() and current.unqueue(int(token))):

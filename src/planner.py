@@ -148,14 +148,13 @@ def make_plan(state, ctx, plan_data, limits=(3000, 2.0), clock=time.monotonic):
     labels = route['phase_labels']
     requirement = prestige_requirements(state.account.prestige)
     plan = {'error': None, 'next': None, 'steps': [], 'prestige': {'reached': False, 'trips': 0, 'seconds': 0,
-            'missing': [], 'shop': []}, 'assumptions': set(route.get('estimates', [])), 'cut_short': False}
+            'missing': [], 'shop': []}, 'assumptions': set(route.get('estimates', [])), 'cut_short': False,
+            'phase_now': phase(state, route), 'hooks': state.hooks, 'league': []}
     if requirement is None:
         plan['error'] = f'P{state.account.prestige} requirements are not known'
         return _finish(plan)
+    now = state                                         # the account as read; `state` below is simulated forward
     state = state.copy()
-    # What can be paid now, by currency as steps show it: money, Hooks, and each exotic fish ('Lava Fish').
-    on_hand = {'$': state.money(), 'Hooks': state.hooks,
-               **{f'{currency} Fish': count for currency, count in state.exotic.items()}}
     started, trips, seconds = clock(), 0.0, 0.0
     stop_levels = set(prices['biome_unlock'].values()) | set(prices['bait_unlock'].values()) \
         | {route['phase_steps']['charm_grind_2']['level']}
@@ -216,11 +215,6 @@ def make_plan(state, ctx, plan_data, limits=(3000, 2.0), clock=time.monotonic):
             plan['error'] = f'not planned: {m}'
             break
         plan['assumptions'].update(m['why'])
-        switch = _switch_text(state.setup, setup)
-        if switch:
-            changes = tuple(Action(field, getattr(setup, field) or '') for field in ('rod', 'biome', 'bait', 'pet')
-                            if getattr(state.setup, field) != getattr(setup, field))
-            add('switch', switch, why='best setup for ' + ', '.join(sorted(needs)), do=changes)
         if setup.bait != bait_step['bait']:
             close_bait()
             bait_step.update(bait=setup.bait, step=None)
@@ -234,6 +228,12 @@ def make_plan(state, ctx, plan_data, limits=(3000, 2.0), clock=time.monotonic):
                     do=() if stock else (Action('buy', setup.bait, amount=batch, shop='bait',
                                                 price=math.ceil(price * batch)),))
                 bait_step.update(step=steps[-1], price=price, stock=stock, **{'from': trips})
+        # After the bait it switches to is bought, so the switch is never sent before the bait is on hand.
+        switch = _switch_text(state.setup, setup)
+        if switch:
+            changes = tuple(Action(field, getattr(setup, field) or '') for field in ('rod', 'biome', 'bait', 'pet')
+                            if getattr(state.setup, field) != getattr(setup, field))
+            add('switch', switch, why='best setup for ' + ', '.join(sorted(needs)), do=changes)
         state.setup = setup
         all_boosts = current in route['boosts']['always_from']
         cache = {}
@@ -286,24 +286,59 @@ def make_plan(state, ctx, plan_data, limits=(3000, 2.0), clock=time.monotonic):
         if state.charm_total() < charms:
             missing.append(f'{math.ceil(charms - state.charm_total() - 1e-9)} more charms')
         plan['prestige']['missing'] = missing
-    _mark_affordable(steps, on_hand)
+    plan['league'] = [step for step in steps if step['kind'] == 'league']
+    plan['steps'] = [step for step in steps if step['kind'] != 'league']
+    _mark_ready(plan, now, prices)
     return _finish(plan)
 
 
-def _mark_affordable(steps, on_hand):
-    """Mark each step that has actions `affordable` or not with what is on hand now (money: cash and fish, which a
-    buy sells), going down the route: each affordable step's cost is taken off before the next. The first step a
-    currency cannot pay ends that currency's run, so later levels are never bought before earlier ones."""
-    left, short = dict(on_hand), set()
-    for step in steps:
+def _owned(action, now, rods, baits, prices):
+    """Whether what a switch switches to is on hand: the rod owned, the biome unlocked at this level, the bait in
+    stock (or none), the pet owned."""
+    if action.act == 'rod':
+        return action.name in rods
+    if action.act == 'biome':
+        return prices['biome_unlock'].get(action.name, float('inf')) <= now.level
+    if action.act == 'bait':
+        return not action.name or action.name in baits
+    if action.act == 'pet':
+        return action.name in now.account.pets
+    return True
+
+
+def _mark_ready(plan, now, prices):
+    """Mark each step with actions 'ready', 'cannot_afford' or 'later' (part 5): Follow the plan and Do it act on
+    'ready' only. Only the phase the account is in can be ready. Down the route, a buy is ready when what is on hand
+    (money: cash and fish, which a buy sells first; each exotic fish apart) covers it after the ready steps above
+    it; the first one short blocks its currency for the rest. A switch is ready when everything it switches to is
+    owned, counting what ready buys above it get. The league track spends the Hooks the same way."""
+    left = {'$': now.money(), **{f'{currency} Fish': count for currency, count in now.exotic.items()}}
+    blocked = set()
+    rods, baits = set(now.rods), {name for name, count in now.bait_stock.items() if count}
+    for step in plan['steps']:
         if not step['do']:
             continue
-        cost, currency = step['cost'] or 0, step['currency']
-        step['affordable'] = bool(not cost or (currency not in short and left.get(currency, 0) >= cost))
-        if step['affordable']:
-            left[currency] = left.get(currency, 0) - cost
+        actions = [Action.from_dict(item) for item in step['do']]
+        if step['phase'] != plan['phase_now']:
+            step['status'] = 'later'
+        elif step['kind'] == 'switch':
+            step['status'] = 'ready' if all(_owned(a, now, rods, baits, prices) for a in actions) else 'cannot_afford'
+        elif step['currency'] not in blocked and left.get(step['currency'], 0) >= (step['cost'] or 0):
+            step['status'] = 'ready'
+            left[step['currency']] = left.get(step['currency'], 0) - (step['cost'] or 0)
+            rods |= {a.name for a in actions if a.shop == 'rods'}
+            baits |= {a.name for a in actions if a.shop == 'bait'}
         else:
-            short.add(currency)
+            step['status'] = 'cannot_afford'
+            blocked.add(step['currency'])
+    hooks, short = now.hooks, False
+    for step in plan['league']:
+        if not step['do']:
+            continue
+        short = short or hooks < (step['cost'] or 0)
+        step['status'] = 'cannot_afford' if short else 'ready'
+        if not short:
+            hooks -= step['cost'] or 0
 
 
 def _finish(plan):

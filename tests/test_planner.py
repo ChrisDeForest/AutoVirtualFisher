@@ -131,8 +131,7 @@ class PlannerTests(unittest.TestCase):
         s = state()
         s.league_prices['Super Crates'] = None
         plan = make_plan(s, ModelContext(DATA), PLAN, limits=(5, 2.0))
-        league = [x for x in plan['steps'] if x['kind'] == 'league']
-        self.assertEqual([x['action'] for x in league], ['Bait Helper 2'])
+        self.assertEqual([x['action'] for x in plan['league']], ['Bait Helper 2'])
         self.assertTrue(any('Super Crates' in note and 'price' in note for note in plan['assumptions']))
 
     def test_missing_says_how_much_is_left(self):
@@ -178,17 +177,88 @@ class PlannerTests(unittest.TestCase):
 
     def test_league_step_waits_for_hooks(self):
         plan = make_plan(state(), ModelContext(DATA), PLAN)
-        league = [s for s in plan['steps'] if s['kind'] == 'league']
+        league = plan['league']
         self.assertEqual([s['action'] for s in league[:1]], ['Super Crates 3'])
         self.assertEqual(league[0]['cost'], 150)
         self.assertIn('waiting', league[0]['why'])
 
-    def test_a_league_step_waiting_for_hooks_cannot_be_afforded(self):
+    def test_league_steps_are_their_own_track(self):
         plan = make_plan(state(), ModelContext(DATA), PLAN)
-        league = next(s for s in plan['steps'] if s['kind'] == 'league')
-        self.assertFalse(league['affordable'])
-        switch = next(s for s in plan['steps'] if s['kind'] == 'switch')
-        self.assertTrue(switch['affordable'])
+        self.assertFalse([s for s in plan['steps'] if s['kind'] == 'league'])
+        self.assertEqual([s['action'] for s in plan['league']][:1], ['Super Crates 3'])
+        self.assertEqual(plan['league'][0]['status'], 'cannot_afford')     # 11 Hooks of 150
+        self.assertEqual(plan['hooks'], 11)
+
+    def test_the_phase_the_account_is_in(self):
+        plan = make_plan(state(), ModelContext(DATA), PLAN)
+        self.assertEqual(plan['phase_now'], plan['steps'][0]['phase'])
+        later = [s for s in plan['steps'] if s['do'] and s['phase'] != plan['phase_now']]
+        self.assertTrue(later)
+        self.assertEqual({s['status'] for s in later}, {'later'})
+
+    def test_a_bait_buy_comes_before_the_switch_to_it(self):
+        from src.actions import Action
+        plan = make_plan(state(), ModelContext(DATA), PLAN)
+        bought = []
+        for step in plan['steps']:
+            actions = [Action.from_dict(item) for item in step['do']]
+            if step['kind'] == 'bait' and actions:
+                bought.append(actions[0].name)
+            if step['kind'] == 'switch':
+                # A bait switched to, if it is bought at all, was bought already.
+                for action in actions:
+                    if action.act == 'bait' and action.name and any(
+                            s['kind'] == 'bait' and s['do'] and s['do'][0]['name'] == action.name
+                            for s in plan['steps']):
+                        self.assertIn(action.name, bought, step)
+
+    def test_ready_marks(self):
+        from src.actions import Action
+        from src.plan_state import from_run
+        from tests.plan_fixtures import CHARMS, account_state, synced
+        now = from_run(account_state(), synced(), CHARMS)
+        now.cash, now.fish_value, now.hooks = 100.0, 0.0, 30
+        now.exotic = {'Gold': 0, 'Emerald': 0, 'Lava': 0, 'Diamond': 30}
+        now.rods = {'Steel Rod'}
+        now.bait_stock = {}
+        buy = lambda name, cost, currency='$', shop='upgrades', **kw: {
+            'phase': 'xp_grind_1', 'kind': 'buy', 'cost': cost, 'currency': currency,
+            'do': [Action('buy', name, shop=shop, price=cost, **kw).to_dict()]}
+        switch = lambda *actions: {'phase': 'xp_grind_1', 'kind': 'switch', 'cost': 0, 'currency': '$',
+                                   'do': [a.to_dict() for a in actions]}
+        steps = [buy('Bait Lover', 10, 'Diamond Fish', 'special'), buy('Salesman', 60),
+                 buy('Golden Rod', 50, shop='rods'),                      # 40 left of 100: cannot afford
+                 switch(Action('rod', 'Golden Rod')),                     # not owned, its buy not ready
+                 buy('Boost Booster', 25, 'Diamond Fish', 'special'),     # 20 left: cannot afford
+                 buy('Fish Ovens', 5, 'Diamond Fish', 'special'),         # Diamond Fish blocked after it
+                 buy('Magic Bait', 30, shop='bait', amount=100),          # money blocked by Golden Rod
+                 switch(Action('rod', 'Steel Rod'), Action('pet', 'Dolphin')),
+                 switch(Action('biome', 'Sky')),                          # unlocked at 250, level is lower
+                 {**buy('Better Fish', 1), 'phase': 'charm_grind_1'},
+                 {'phase': 'xp_grind_1', 'kind': 'bait', 'cost': 0, 'currency': '$', 'do': []}]
+        league = [{'kind': 'league', 'cost': 25, 'currency': 'Hooks', 'do': [{'act': 'buy'}]},
+                  {'kind': 'league', 'cost': 10, 'currency': 'Hooks', 'do': [{'act': 'buy'}]}]
+        plan = {'phase_now': 'xp_grind_1', 'steps': steps, 'league': league}
+        planner._mark_ready(plan, now, PLAN['prices'])
+        self.assertEqual([s.get('status') for s in steps],
+                         ['ready', 'ready', 'cannot_afford', 'cannot_afford', 'cannot_afford', 'cannot_afford',
+                          'cannot_afford', 'ready', 'cannot_afford', 'later', None])
+        self.assertEqual([s['status'] for s in league], ['ready', 'cannot_afford'])   # 5 Hooks left
+
+    def test_a_switch_to_a_rod_a_ready_buy_gets_is_ready(self):
+        from src.actions import Action
+        from src.plan_state import from_run
+        from tests.plan_fixtures import CHARMS, account_state, synced
+        now = from_run(account_state(), synced(), CHARMS)
+        now.cash, now.fish_value, now.rods, now.bait_stock = 1000.0, 0.0, {'Steel Rod'}, {}
+        steps = [{'phase': 'p', 'kind': 'buy', 'cost': 500, 'currency': '$',
+                  'do': [Action('buy', 'Golden Rod', shop='rods', price=500).to_dict()]},
+                 {'phase': 'p', 'kind': 'bait', 'cost': 100, 'currency': '$',
+                  'do': [Action('buy', 'Magic Bait', shop='bait', amount=100, price=100).to_dict()]},
+                 {'phase': 'p', 'kind': 'switch', 'cost': 0, 'currency': '$',
+                  'do': [Action('rod', 'Golden Rod').to_dict(), Action('bait', 'Magic Bait').to_dict()]}]
+        planner._mark_ready({'phase_now': 'p', 'steps': steps, 'league': []}, now, PLAN['prices'])
+        self.assertEqual([s['status'] for s in steps], ['ready', 'ready', 'ready'])
 
     def test_special_steps_carry_their_exotic_fish_price(self):
         plan = make_plan(state(), ModelContext(DATA), PLAN)
@@ -196,15 +266,6 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(special['currency'].endswith(' Fish'), special)
         self.assertIn(f'({special["cost"]} {special["currency"]})', special['action'])
         self.assertEqual(special['do'][0]['price'], special['cost'])
-
-    def test_what_is_on_hand_is_spent_down_the_route(self):
-        def step(cost, currency):
-            return {'cost': cost, 'currency': currency, 'do': [{'act': 'buy'}]}
-        steps = [step(10, 'Diamond Fish'), step(0, '$'), step(25, 'Diamond Fish'), step(5, 'Diamond Fish'),
-                 step(50, 'Lava Fish'), step(100, '$'), {'cost': 0, 'currency': '$', 'do': []}]
-        planner._mark_affordable(steps, {'$': 100, 'Diamond Fish': 30, 'Lava Fish': 0})
-        # 10 of 30 Diamond Fish leaves 20: 25 is too many, and the 5 after it waits its turn.
-        self.assertEqual([s.get('affordable') for s in steps], [True, True, False, False, False, True, None])
 
     def test_an_upgrade_the_game_said_is_maxed_is_never_planned_past_it(self):
         from tests.plan_fixtures import CHARMS, account_state, synced
