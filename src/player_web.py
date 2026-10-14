@@ -471,6 +471,23 @@ class Handler(BaseHTTPRequestHandler):
                 token = fields.get('pause_id', [''])[0]
                 if (not token.isdigit() or not current.resume(int(token))) and current.status()['paused']:
                     notice = 'That Resume belonged to an earlier pause; the run is still paused.'
+            elif action == 'queue' and current:
+                # Do it on a Plan tab step: its actions, as the page received them, checked to be actions.
+                from .actions import COMMAND
+                try:
+                    actions = json.loads(fields.get('actions', ['[]'])[0])
+                    valid = isinstance(actions, list) and bool(actions) and all(
+                        isinstance(item, dict) and item.get('act') in COMMAND for item in actions)
+                except ValueError:
+                    valid = False
+                if valid:
+                    current.queue_step(fields.get('label', ['step'])[0][:120], actions)
+                else:
+                    notice = 'That step has nothing the run can do.'
+            elif action == 'unqueue' and current:
+                token = fields.get('id', [''])[0]
+                if not (token.isdigit() and current.unqueue(int(token))):
+                    notice = 'That step was no longer queued.'
             elif action == 'resolve' and current:
                 outcome = fields.get('outcome', [''])[0]
                 if outcome not in ('happened', 'not_sent') or not current.resolve(fields.get('id', [''])[0], outcome):

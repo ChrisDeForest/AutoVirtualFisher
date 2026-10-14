@@ -205,6 +205,20 @@ class AutomationWebTests(unittest.TestCase):
         self.post(action='resume', pause_id=token)
         self.assertFalse(self.handler.automation.status()['paused'])
 
+    def test_do_it_queues_a_step_and_remove_takes_it_off(self):
+        import json
+        self.post(action='start', mode='simulation', max_trips='1000', max_minutes='5')
+        self.handler.automation.pause()               # nothing runs while queued steps are checked
+        self.post(action='queue', label='Switch: rod Steel Rod', actions=json.dumps([{'act': 'rod', 'name': 'Steel Rod'}]))
+        queue = self.handler.automation.status()['queue']
+        self.assertEqual([entry['label'] for entry in queue], ['Switch: rod Steel Rod'])
+        page = self.post(action='queue', label='bad', actions=json.dumps([{'act': 'prestige'}]))   # never an action
+        self.assertIn('That step has nothing the run can do.', page)
+        self.post(action='queue', label='worse', actions='not json')
+        self.assertEqual(len(self.handler.automation.status()['queue']), 1)
+        self.post(action='unqueue', id=str(queue[0]['id']))
+        self.assertEqual(self.handler.automation.status()['queue'], [])
+
     def test_a_stale_resume_never_ends_a_newer_pause(self):
         # A resume sent again later (a reload, a restored tab) belongs to an earlier pause: the run stays paused.
         self.post(action='start', mode='simulation', max_trips='1000', max_minutes='5')
@@ -292,6 +306,30 @@ class AutomationWebTests(unittest.TestCase):
         self.assertIn('Salesman 8<span class="where">/shop upgrades</span>', html)
         self.assertIn('Salesman 8 in /shop upgrades', html)                     # the Next box
         self.assertIn('Then buy International Ties in /prestige shop.', html)
+
+    def test_plan_steps_have_do_it_buttons_and_a_queue_box(self):
+        import json
+        from html import escape
+        from src.automation_web import render_plan_tab
+        action = {'act': 'buy', 'name': 'Salesman', 'amount': None, 'level': 8, 'shop': 'upgrades', 'price': 25000}
+        step = {'phase_label': '1st XP grind', 'kind': 'buy', 'action': 'Salesman 8', 'cost': 25000, 'currency': '$',
+                'sell': 0, 'trips': 0, 'seconds': 0, 'why': '', 'where': '/shop upgrades', 'do': [action]}
+        view = {'plan': {'error': None, 'cut_short': False, 'assumptions': [], 'next': step,
+                         'steps': [step, {**step, 'action': 'price not read', 'do': []}],
+                         'prestige': {'reached': False, 'missing': []}},
+                'queue': [{'id': 3, 'label': 'Better Fish 9', 'left': 1}],
+                'action_log': [{'label': 'Rod', 'result': 'skipped', 'note': 'already using Lava Rod'},
+                               {'label': 'Salesman 7', 'result': 'done', 'note': 'bought Salesman level 7'},
+                               {'label': 'Bait Helper 2', 'result': 'failed', 'note': "can't afford it"}]}
+        html = render_plan_tab(view)
+        self.assertEqual(html.count('name="action" value="queue"'), 1)       # only the step with actions
+        self.assertIn(escape(json.dumps([action])), html)
+        self.assertIn('Better Fish 9', html)
+        self.assertIn('name="action" value="unqueue"', html)
+        self.assertIn('Rod skipped: already using Lava Rod', html)
+        self.assertIn('✓ Salesman 7: bought Salesman level 7', html)
+        self.assertIn('✗ Bait Helper 2: can&#x27;t afford it', html)
+        self.assertIn('<h2>Queue</h2>', render_plan_tab({'plan': view['plan']}))   # shown empty too
 
     def test_plan_tab_trips_column_and_now(self):
         from src.automation_web import render_plan_tab

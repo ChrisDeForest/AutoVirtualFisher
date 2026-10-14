@@ -145,7 +145,9 @@ class WindowsDiscordDriver:
         return frame
 
     def _clear(self, cancelled):
-        """Select all of the focused message box and delete it. Never presses Enter."""
+        """Clear the focused message box: Escape (live, Ctrl+A and Backspace left a picked command and its option
+        boxes), then select all and delete. Never presses Enter."""
+        self._key(0x1B, cancelled)                                   # Escape
         self._event(1, (0x11, 0, 0), cancelled)                      # Ctrl down
         try:
             self._event(1, (0x41, 0, 0), cancelled)                  # A
@@ -230,6 +232,57 @@ class WindowsDiscordDriver:
             self.box_focused = False
             raise NotDispatched(f'{error} {command} was not sent.') from error
         if self._left_the_box(command, cancelled):
+            self.draft_composer = None
+
+    def dispatch_action(self, line, amount, cancelled, before=None):
+        """Type an action's whole line (live: Discord picks the command and fills its first option, with no command
+        list), reach the amount with AMOUNT_TABS Tabs when there is one, check the option box shows the value, then
+        send. When the box does not show it, the draft is cleared and nothing is sent."""
+        from .actions import AMOUNT_TABS
+        value = line.partition(' ')[2]
+        try:
+            frame = self._frame(cancelled) if before is None else self._frame(cancelled, before)
+            placeholder = frame.get('original_boxes', frame.get('boxes', []))
+            if composer_target(placeholder, self.channel) is None:
+                raise NotDispatched('The message box placeholder is not visible: it may hold a draft. Click it, '
+                                    'clear it (Escape, Ctrl+A, Delete), then start again.')
+            self.draft_composer = composer_click(placeholder, self.channel)
+            if not getattr(self, 'box_focused', False):
+                self._click(self.draft_composer, cancelled)
+                self.box_focused = True
+            self._text(line, cancelled)
+            if amount:
+                for _ in range(AMOUNT_TABS):
+                    time.sleep(0.6)
+                    self._key(0x09, cancelled)
+                time.sleep(0.6)
+                self._text(str(amount), cancelled)
+            filled = False
+            for _ in range(5):
+                time.sleep(0.3)
+                shown = ' '.join(b['text'] for b in self._frame(cancelled).get('boxes', [])).casefold()
+                filled = value.casefold() in shown and (not amount or str(amount) in shown)
+                if filled:
+                    break
+            if not filled:
+                try:
+                    self._clear(cancelled)
+                    self.draft_composer = None
+                except TransportError:
+                    pass
+                self.box_focused = False
+                raise NotDispatched(f'The option box did not show {value!r}; {line} was not sent.')
+            self._key(0x0D, cancelled)
+        except NotDispatched:
+            raise
+        except FocusLost as error:
+            self.box_focused = False
+            raise Interrupted(f'Typing {line} was interrupted when Discord stopped being the active window; it is '
+                              'cleared and retyped once Discord is back.') from error
+        except TransportError as error:
+            self.box_focused = False
+            raise NotDispatched(f'{error} {line} was not sent.') from error
+        if self._left_the_box(line, cancelled):
             self.draft_composer = None
 
     @staticmethod

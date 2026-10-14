@@ -21,7 +21,8 @@ from .observation import Identity, Observation, check_identity, recipients
 #   no evidence of which action it answers), send_error (the hand-over fails), partial (one field lost to OCR),
 #   captcha, xp_unread (the profile's XP numbers lost), no_button (page 2's arrow not found; nothing sent),
 #   interrupted (Discord lost focus while typing; nothing sent; out of focus until focus()), level_bonus (the trip
-#   levels up with a bonus to the multipliers, as at milestone levels).
+#   levels up with a bonus to the multipliers, as at milestone levels), act_fail (an action's buy is refused:
+#   "can't afford").
 OUTCOMES = ('ok', 'unreadable', 'unreadable_fixed', 'noisy', 'missing', 'duplicate', 'other_player_first', 'uncorrelated', 'send_error')
 FISH = ('Salmon', 'Cod')
 # A real /charms reply (11 charms found).
@@ -58,7 +59,7 @@ class Transport(Protocol):
 class SimulationTransport:
     """A simulated player in a Virtual Fisher DM. `poll()` returns the replies currently "on screen" (the most
     recent ones, oldest first), so a restarted controller sees what the previous one may have missed."""
-    capabilities = ('refresh_profile', 'refresh_buffs', 'refresh_charms', *ALL_READS, 'fish')
+    capabilities = ('refresh_profile', 'refresh_buffs', 'refresh_charms', *ALL_READS, 'fish', 'act')
 
     def __init__(self, monotonic, utc, display_name='sim', username='sim0001', context_id='sim:dm', cooldown=3.5,
                  latency=0.4, seed=1, script=None):
@@ -101,6 +102,8 @@ class SimulationTransport:
             self.context = ContextStatus(False, self.context.context_id, NOT_FOREGROUND)
             raise Interrupted(f'Typing {intent.kind} was interrupted when Discord stopped being the active window.')
         text, kind = self._play(intent, now)
+        if outcome == 'act_fail' and kind == 'action':
+            text = "x You can't afford that upgrade."
         if outcome == 'level_bonus' and kind == 'fishing':
             text += ('\n:fish: LEVEL UP! :fish: You are now level 75.\n$120,000 received for leveling up.\n'
                      '10% INCREASED SELLING PRICE FOR LEVELING UP!')
@@ -151,6 +154,22 @@ class SimulationTransport:
         del self.history[:-VISIBLE_REPLIES]
         return list(self.history)
 
+    def _act(self, intent):
+        """The game's reply to an action, in the wording recorded live on 2026-10-13 (emoji read as letters)."""
+        from .actions import Action
+        action = Action.from_dict(intent.arguments[0])
+        if action.act == 'buy':
+            return f'v You just bought {action.name}' + (f' level {action.level}!' if action.level else '!')
+        if action.act == 'sell':
+            return f'{self.identity.username}\nv You sold your entire inventory for $1,000.\nYou now have $2,000!'
+        if action.act == 'rod':
+            return f'v You switched to the {action.name}.'
+        if action.act == 'biome':
+            return f'You are now fishing in the {action.name} biome.'
+        if action.act == 'bait':
+            return f'You are now using {action.name} (10 remaining)' if action.name else 'You are no longer using any bait.'
+        return f'v You set your active pet to your level 5 {action.name}.'
+
     def _play(self, intent, now):
         """What the game does with the command, and its reply text."""
         name, username = self.identity.display_name, self.identity.username
@@ -160,6 +179,8 @@ class SimulationTransport:
                     'Fish Value: $500', 'profile')
         if intent.kind == 'refresh_charms':
             return SIM_CHARMS, 'charms'
+        if intent.kind == 'act':
+            return self._act(intent), 'action'
         if intent.kind in SIM_ACCOUNT:
             return SIM_ACCOUNT[intent.kind], reply_of(intent.kind)
         if intent.kind == 'refresh_buffs':

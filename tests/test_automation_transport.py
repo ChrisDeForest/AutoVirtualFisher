@@ -53,6 +53,21 @@ class SimulationTransportTests(unittest.TestCase):
         self.assertIn('You caught:', reply.text)
         self.assertEqual(sim.totals['trips'], 1)
 
+    def test_actions_are_answered(self):
+        from src.actions import Action, outcome
+        sim = self.transport(latency=0)
+        for number, action in enumerate((Action('buy', 'Salesman', level=8, shop='upgrades'), Action('sell'),
+                                         Action('rod', 'Lava Rod'), Action('biome', 'River'),
+                                         Action('bait', 'Fish'), Action('bait', ''), Action('pet', 'Zebrafish'))):
+            sim.send(ActionIntent(f'a{number}', 'act', 'sim:dm', self.clock.utc().isoformat(), 'action',
+                                  arguments=(action.to_dict(),)))
+            reply = sim.poll()[-1]
+            self.assertEqual((reply.correlation, outcome(action, reply.text)[0]), (f'a{number}', 'done'), reply.text)
+        sim.script = {len(sim.sent): 'act_fail'}
+        action = Action('buy', 'Better Fish', level=9, shop='upgrades')
+        sim.send(ActionIntent('f', 'act', 'sim:dm', self.clock.utc().isoformat(), 'action', arguments=(action.to_dict(),)))
+        self.assertEqual(outcome(action, sim.poll()[-1].text), ('failed', "can't afford it"))
+
     def test_fishing_during_cooldown_gets_a_cooldown_reply(self):
         sim = self.transport(cooldown=3.5, latency=0)
         sim.send(intent(1))

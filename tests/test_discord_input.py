@@ -171,6 +171,48 @@ class NativeDispatchTests(unittest.TestCase):
         self.assertEqual(driver.deep[1:3], [False, True])   # zoomed in only after a miss
 
     @patch('src.discord_input.time.sleep')
+    def test_an_action_line_fills_its_option_and_is_sent(self, sleep):
+        # Live (Oct 13): typing '/buy salesman' picks /buy and fills its item option: no command list.
+        driver = self.driver([
+            {'boxes': [box('Message @Virtual Fisher', 800)]},
+            {'boxes': [box('[buy item salesman', 800)]},
+            {'boxes': [box('Message @Virtual Fisher', 800)]},
+        ])
+        driver.dispatch_action('/buy salesman', None, lambda: False)
+        self.assertEqual([e for e in driver.events if e[0] != 'click'], [('text', '/buy salesman'), ('key', 13)])
+
+    @patch('src.discord_input.time.sleep')
+    def test_an_amount_is_reached_with_three_tabs(self, sleep):
+        # User (Oct 13): after '/buy magic bait', Tab three times with a pause between, then type the amount.
+        driver = self.driver([
+            {'boxes': [box('Message @Virtual Fisher', 800)]},
+            {'boxes': [box('[buy item magic bait amount 500', 800)]},
+            {'boxes': [box('Message @Virtual Fisher', 800)]},
+        ])
+        driver.dispatch_action('/buy magic bait', 500, lambda: False)
+        self.assertEqual([e for e in driver.events if e[0] != 'click'],
+                         [('text', '/buy magic bait'), ('key', 9), ('key', 9), ('key', 9), ('text', '500'), ('key', 13)])
+
+    @patch('src.discord_input.time.sleep')
+    def test_an_unfilled_option_is_cleared_and_never_sent(self, sleep):
+        driver = self.driver([{'boxes': [box('Message @Virtual Fisher', 800)]}] + [{'boxes': [box('/buy', 800)]}] * 5)
+        with self.assertRaises(NotDispatched): driver.dispatch_action('/buy salesman', None, lambda: False)
+        self.assertNotIn(('key', 13), driver.events)
+        self.assertEqual(driver.events[-1], ('clear', None))
+
+    def test_clearing_a_draft_presses_escape_first(self):
+        # Live (Oct 13): Ctrl+A, Backspace clears an option's text but leaves the command; Escape first clears it.
+        driver = WindowsDiscordDriver.__new__(WindowsDiscordDriver)
+        keys = []
+        driver._event = lambda kind, payload, cancelled, release=False: keys.append((payload[0], payload[2]))
+        driver._key = lambda vk, cancelled: keys.append((vk, 'tap'))
+        driver._clear(lambda: False)
+        self.assertEqual(keys[0], (0x1B, 'tap'))                      # Escape
+        self.assertIn((0x41, 0), keys)                                # A, with Ctrl down
+        self.assertEqual(keys[-1], (0x08, 'tap'))                     # Backspace
+        self.assertNotIn((0x0D, 'tap'), keys)                         # never Enter
+
+    @patch('src.discord_input.time.sleep')
     def test_missing_picker_never_presses_enter(self, sleep):
         driver = self.driver([{'boxes': [box('Message @Virtual Fisher', 800)]}] + [{'boxes': []}] * 5)
         # Enter was never pressed, so nothing reached the game; the typed draft is cleared for the next run.

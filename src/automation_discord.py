@@ -121,6 +121,23 @@ def _center(box):
     return ((box['left'] + box['right']) / 2, (box['top'] + box['bottom']) / 2)
 
 
+def _command(intent):
+    """The command an intent types: its read or fishing command, or an action's line."""
+    if intent.kind == 'act':
+        from .actions import Action, command_line
+        return command_line(Action.from_dict(intent.arguments[0]))
+    return COMMANDS[intent.kind]
+
+
+def sell_point(capture):
+    """Where to click Sell: the lowest 'Sell' box with a 'Return' level with it (the buttons under a catch)."""
+    boxes = capture.get('original_boxes') or capture.get('boxes') or []
+    returns = [box for box in boxes if box['text'].strip() == 'Return']
+    sells = [box for box in boxes if box['text'].strip() == 'Sell'
+             and any(abs(_center(box)[1] - _center(other)[1]) <= box['bottom'] - box['top'] for other in returns)]
+    return _center(max(sells, key=lambda box: box['top'])) if sells else None
+
+
 def composer_box(boxes, channel):
     """The empty message box's "Message @channel" placeholder. The blinking caret sits on its M, so OCR may
     read it without one, or read the caret in front of it as I, | or l."""
@@ -180,7 +197,7 @@ def command_text(text):
 
 
 class DiscordTransport:
-    capabilities = tuple(COMMANDS)
+    capabilities = tuple(COMMANDS) + ('act',)
 
     def __init__(self, driver, window, channel, account, username, utc=None, monotonic=None, local=None):
         if not channel or not account or not username:
@@ -264,7 +281,7 @@ class DiscordTransport:
     def send(self, intent):
         if not self.enabled or self.cancelled.is_set():
             raise CapabilityError('Live dispatch is disabled or stopped.')
-        if intent.kind not in COMMANDS:
+        if intent.kind not in COMMANDS and intent.kind != 'act':
             raise CapabilityError(f'Unsupported action: {intent.kind}')
         with self.lock:
             if self.pending is not None or self.blocked:
@@ -284,7 +301,7 @@ class DiscordTransport:
             self.last_frame = frame
             if self.cancelled.is_set():
                 raise NotDispatched('Stopped before input.')
-            point = self._next_page_point(intent, before, frame) if COMMANDS[intent.kind] == NEXT_PAGE else None
+            point = self._next_page_point(intent, before, frame) if COMMANDS.get(intent.kind) == NEXT_PAGE else None
             try:
                 # Only the bottom of the chat matters: what was newest before sending.
                 self.baseline, self.pending = _bottom(frame['messages']), intent
@@ -297,6 +314,17 @@ class DiscordTransport:
                 if point is not None:
                     self.driver.click(point, self.cancelled.is_set)
                     return DispatchReceipt(intent.action_id, self.utc().isoformat(), 'Next-page button clicked')
+                if intent.kind == 'act':
+                    from .actions import Action, command_line
+                    action = Action.from_dict(intent.arguments[0])
+                    # Selling clicks the Sell button under the newest catch (it sells all); typed when there is none.
+                    target = sell_point(before) if action.act == 'sell' else None
+                    if target is not None:
+                        self.driver.click(target, self.cancelled.is_set)
+                        return DispatchReceipt(intent.action_id, self.utc().isoformat(), 'Sell button clicked')
+                    self.driver.dispatch_action(command_line(action), action.amount if action.act == 'buy' else None,
+                                                self.cancelled.is_set, before=before)
+                    return DispatchReceipt(intent.action_id, self.utc().isoformat(), 'Action command submitted')
                 self.driver.dispatch(COMMANDS[intent.kind], self.cancelled.is_set, before=before)
                 return DispatchReceipt(intent.action_id, self.utc().isoformat(), 'Native UI command submitted')
             except NotDispatched:
@@ -379,10 +407,10 @@ class DiscordTransport:
                     return []
                 lines = capture['lines']
                 invocations = [index for index, line in enumerate(lines) if re.match(r'^\S+ used\b', line)]
-                if invocations and COMMANDS[self.pending.kind] != NEXT_PAGE:
+                if invocations and _command(self.pending) != NEXT_PAGE:
                     tail = lines[invocations[-1]:]
                     from .ocr_cleanup import MESSAGE_HEADER
-                    command = COMMANDS[self.pending.kind].lstrip('/')
+                    command = _command(self.pending).lstrip('/').split(' ')[0]
                     if (re.match(r'^' + re.escape(self.identity.display_name) + r' used\b', tail[0])
                             and re.search(r'\b' + re.escape(command) + r'\b', '\n'.join(tail[:2]))
                             and any(MESSAGE_HEADER.fullmatch(line) for line in tail[1:])
@@ -399,7 +427,7 @@ class DiscordTransport:
                 bottom = _bottom(frame['messages'])
                 if not _is_new(bottom, self.baseline) and not self._identical_refresh(frame['messages']):
                     self.candidate = None
-                    self.last_issue = f'Waiting for the reply to {COMMANDS[self.pending.kind]}.'
+                    self.last_issue = f'Waiting for the reply to {_command(self.pending)}.'
                     return []
                 message = frame['messages'][-1]
                 status, recipient, reason = check_identity(self.identity, recipients(
@@ -418,7 +446,9 @@ class DiscordTransport:
                     self.captcha_bottom = _bottom(frame['messages'])
                     self.last_issue = 'Virtual Fisher asked for a captcha.'
                     return [observation]
-                expected = message['kind'] == self.pending.expected_reply_kind
+                # An action's reply is the new own message at the bottom, whatever it is (a Sell click edits the
+                # catch in place, which changes the bottom message); the run reads what it says.
+                expected = message['kind'] == self.pending.expected_reply_kind or self.pending.kind == 'act'
                 if expected and self.pending.kind in PAGE_TWO:
                     # Page 2 replaces page 1 in the same message; only a later page answers the click.
                     page = PAGE.search('\n'.join(message['lines']))

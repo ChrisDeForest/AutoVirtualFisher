@@ -158,6 +158,24 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(bought)
         self.assertTrue(set(bought.values()) <= {'/shop upgrades', '/shop rods', '/shop boats'}, bought)
 
+    def test_steps_carry_their_actions(self):
+        from src.actions import Action
+        plan = make_plan(state(balance=0, fish_value=10_000), ModelContext(DATA), PLAN)
+        for step in plan['steps']:
+            actions = [Action.from_dict(item) for item in step['do']]
+            if step['kind'] == 'buy':
+                self.assertEqual([a.act for a in actions], ['buy'], step)
+                self.assertTrue(step['action'].startswith(actions[0].name), step)
+            if step['kind'] == 'switch':
+                self.assertTrue(actions and {a.act for a in actions} <= {'rod', 'biome', 'bait', 'pet'}, step)
+            if step['kind'] == 'league' and step['cost']:
+                self.assertEqual(actions[0].shop, 'league', step)
+        bought = [s for s in plan['steps'] if s['kind'] == 'buy']
+        self.assertTrue(bought)
+        first = Action.from_dict(bought[0]['do'][0])
+        self.assertEqual(first.price, bought[0]['cost'])
+        self.assertIn(first.shop, ('upgrades', 'rods', 'boats'))
+
     def test_league_step_waits_for_hooks(self):
         plan = make_plan(state(), ModelContext(DATA), PLAN)
         league = [s for s in plan['steps'] if s['kind'] == 'league']

@@ -21,8 +21,8 @@ from .account_reads import ACCOUNT_READS, PAGE_TWO, read_of
 from .account_replies import PARSERS as ACCOUNT_PARSERS
 from .account_state import apply_read, empty_state, load_state, save_state
 from .automation_journal import AutomationJournal
-from .automation_models import (AutomationConfig, CapabilityError, Interrupted, NOT_FOREGROUND, NotDispatched,
-                                TransportError)
+from .automation_models import (ActionIntent, AutomationConfig, CapabilityError, Interrupted, NOT_FOREGROUND,
+                                NotDispatched, TransportError)
 from .automation_policy import next_action
 from .automation_state import AutomationState, apply_observation
 from .catch_check import load_fish_reference
@@ -250,6 +250,11 @@ class AutomationController:
         # Live stats: the last readable /profile and /buffs replies, the trips since the profile was read, and
         # every trip this run (for rates).
         self.synced = {'profile': '', 'buffs': '', 'charms': ''}
+        # Part 4: plan steps queued with Do it, carried out one action per gap; lost on restart, so nothing stale acts.
+        self.queue = []                # {'id', 'label', 'actions': [Action], 'checked'}
+        self.queue_ids = 0
+        self.action_log = []           # the last results, newest first: {'label', 'result', 'note'}
+        self.pending_action = None     # the action (as a dict) of the act intent being sent or answered
         self.synced_at = {}
         self.sync_tallies, self.run_tallies = [], []
         self.uncounted = 0             # trips since /profile was read whose outcome is unknown (not counted)
@@ -392,6 +397,9 @@ class AutomationController:
                         'max_trips': self.config.max_trips, 'max_seconds': self.config.max_seconds},
                     'dashboard': dashboard, 'account': self.account, 'model': self._model_status(dashboard),
                     'plan': self.planner.view(),
+                    'queue': [{'id': entry['id'], 'label': entry['label'], 'left': len(entry['actions'])}
+                              for entry in self.queue],
+                    'action_log': list(self.action_log),
                     'startup': {'failures': dict(self.startup_failures),
                                 'problems': dict(self.startup_problems),
                                 'confirmed_fields': dict(self.state.startup_observed_at)}}
@@ -496,17 +504,23 @@ class AutomationController:
                 self.phase = 'RETRYING_STARTUP'
                 self.reason = f'Retrying startup read in {self.startup_retry_at - now:.1f} s.'
                 return
-            if self.last_trip_at is not None and self.state.cooldown_seconds is not None:
-                # Also covers a trip reconciled after a restart, before this run had seen /buffs.
-                self.ready_at = max(self.ready_at, self.last_trip_at + self.state.cooldown_seconds
-                                    + self.config.cooldown_margin + self.jitter)
-            if now < self.ready_at:
-                self.phase, self.reason = 'WAITING_COOLDOWN', f'Next fish in {self.ready_at - now:.1f} s.'
-                return
-            intent = self.policy(self.state, self.config, self.utc())
+            # A queued action goes in the gap between trips, without waiting for the fishing cooldown.
+            intent = None
+            if self.queue and 'act' in self.config.capabilities and self.state.pending is None \
+                    and not self.state.uncertain:
+                intent = self._action_intent()
             if intent is None:
-                self.phase, self.reason = 'READY', 'Nothing to do.'
-                return
+                if self.last_trip_at is not None and self.state.cooldown_seconds is not None:
+                    # Also covers a trip reconciled after a restart, before this run had seen /buffs.
+                    self.ready_at = max(self.ready_at, self.last_trip_at + self.state.cooldown_seconds
+                                        + self.config.cooldown_margin + self.jitter)
+                if now < self.ready_at:
+                    self.phase, self.reason = 'WAITING_COOLDOWN', f'Next fish in {self.ready_at - now:.1f} s.'
+                    return
+                intent = self.policy(self.state, self.config, self.utc())
+                if intent is None:
+                    self.phase, self.reason = 'READY', 'Nothing to do.'
+                    return
             try:
                 self._event('intent', intent.action_id, intent={'kind': intent.kind, 'context_id': intent.context_id,
                                                                 'created_at': intent.created_at,
@@ -518,6 +532,9 @@ class AutomationController:
                 return self._journal_failed(f'Could not record the {intent.kind} command, so it was not sent: {error}')
             # Reserved before the lock is released: a concurrent step sees it and sends nothing.
             self.in_flight = intent
+            self.pending_action = intent.arguments[0] if intent.kind == 'act' else None
+            if intent.kind == 'act':
+                self.phase, self.reason = 'SENDING', intent.preconditions[0]
             self.state = replace(self.state, pending=intent)
         # The hand-over happens outside the lock so stop() is never blocked behind it; it is recorded either way.
         try:
@@ -554,6 +571,11 @@ class AutomationController:
                 self.state = replace(self.state, refresh_due=tuple(k for k in self.state.refresh_due
                                                                    if k != intent.kind))
                 self.unread[read], self.unread_trips[read] = [f'Page 2 ({failure[1]})'], 0
+                return
+            if failure and failure[0] == 'refused' and intent.kind == 'act' and 'option box' in failure[1]:
+                # Nothing was sent, and typing it again would only repeat it: the step is given up.
+                self._safe_event('abandoned', intent.action_id, reason=failure[1])
+                self._finish_action(intent.arguments[0], 'failed', failure[1])
                 return
             if failure and failure[0] == 'refused':
                 # Nothing was typed: pause and try again once Discord is ready. The run is not over.
@@ -619,7 +641,7 @@ class AutomationController:
         if pending is not None and correlation == pending.action_id:
             if observation.observed_at < self.sent_at[1]:
                 return  # seen before this command was sent: cannot be its reply
-            if observation.kind != pending.expected_reply_kind and not (
+            if observation.kind != pending.expected_reply_kind and pending.kind != 'act' and not (
                     pending.kind == 'fish' and COOLDOWN_REPLY.search(observation.text)):
                 return
             self.state = apply_startup(self.state, observation) if observation.kind in ('profile', 'buffs') else apply_observation(self.state, observation)
@@ -632,6 +654,68 @@ class AutomationController:
             self.carried.pop(correlation, None)
             self._acknowledge(correlation, kind, observation, this_run=False)
             self._sync_uncertain()
+
+    def queue_step(self, label, actions):
+        """Queue a plan step's actions (Do it). They run one per gap between trips; the queue is lost on restart."""
+        from .actions import Action
+        with self.lock:
+            self.queue_ids += 1
+            self.queue.append({'id': self.queue_ids, 'label': label, 'checked': False,
+                               'actions': [Action.from_dict(item) for item in actions]})
+            return self.queue_ids
+
+    def unqueue(self, queue_id):
+        """Remove a queued step; False when it is no longer queued."""
+        with self.lock:
+            kept = [entry for entry in self.queue if entry['id'] != queue_id]
+            removed, self.queue = len(kept) != len(self.queue), kept
+            return removed
+
+    def _log_action(self, label, result, note):
+        self.action_log = ([{'label': label, 'result': result, 'note': note}] + self.action_log)[:6]
+
+    def _action_intent(self):
+        """The next queued action as an intent, after the check against the latest reads; None when nothing is to
+        be sent now. A buy short of cash, with enough fish to cover it, gets a Sell first."""
+        from .actions import Action, check
+        profile = self._synced()['profile']
+        while self.queue:
+            entry = self.queue[0]
+            if not entry['actions']:
+                self.queue.pop(0)
+                continue
+            action = entry['actions'][0]
+            why = check(action, self.account.get('sections'), profile)
+            if why and why.startswith('not enough money') and not entry['checked'] and \
+                    (profile.get('balance') or 0) + (profile.get('fish_value') or 0) >= action.price:
+                entry['actions'].insert(0, Action('sell'))
+                action, why = entry['actions'][0], None
+            if why:
+                self._log_action(entry['label'], 'skipped', why)
+                self.queue.pop(0)
+                continue
+            entry['checked'] = True
+            return ActionIntent(action_id=f'{self.state.run_id}-{self.state.sequence + 1:05d}-act', kind='act',
+                                context_id=self.state.context_id, created_at=self.utc().isoformat(),
+                                expected_reply_kind='action', arguments=(action.to_dict(),),
+                                preconditions=(f'{action.label()} ({entry["label"]})',))
+        return None
+
+    def _finish_action(self, action, result, note):
+        """Record an action's result, move its step on (a step whose action did not succeed is given up), and queue
+        the reads it changes."""
+        from .actions import Action, reads_after
+        action = Action.from_dict(action or {'act': 'sell'})
+        entry = self.queue[0] if self.queue else None
+        if entry is not None and entry['actions'] and entry['actions'][0] == action:
+            entry['actions'].pop(0)
+            if result != 'done' or not entry['actions']:
+                self.queue.pop(0)
+        self._log_action(entry['label'] if entry else action.label(), result, note)
+        self.pending_action = None
+        due = tuple(kind for kind in reads_after(action) if kind in self.config.capabilities
+                    and kind not in self.state.refresh_due)
+        self.state = replace(self.state, refresh_due=self.state.refresh_due + due)
 
     def _captcha(self, observation):
         """The game asked for a captcha: the command it answers did not run. Pause, note it, and alert the person.
@@ -670,6 +754,10 @@ class AutomationController:
             # Any charm line read is worth keeping; a reply missing one is read again soon (see unread_fields).
             problems = [] if parse_charms(observation.text)['charms'] else ['No charm line could be read.']
             result = 'unreadable' if problems else 'refreshed'
+        elif kind == 'act':
+            from .actions import Action, outcome
+            result, note = outcome(Action.from_dict(self.pending_action or {'act': 'sell'}), observation.text)
+            self._finish_action(self.pending_action, 'done' if result == 'done' else 'failed', note)
         elif kind != 'fish':
             # A resync or retry must read on its own; at startup, fields read across replies add up.
             problems = (reply_problems(observation.kind, observation.text) if kind in self.state.refresh_due
@@ -923,6 +1011,9 @@ class AutomationController:
         if forget is not None:
             forget()
         self._safe_event('resolved', intent.action_id, outcome='unknown', reason=reason)
+        if intent.kind == 'act':
+            # It may have happened: never sent again; the reads it changes (and /profile) are done again.
+            self._finish_action(intent.arguments[0], 'unknown', reason)
         add_item(self.roots['review'], self.config.account, 'automation', f'{intent.kind}: {reason}',
                  [f'This {intent.kind} may or may not have reached the game; the run carried on.', reason],
                  blocks_actions=False)

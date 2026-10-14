@@ -3,6 +3,7 @@
 The page holds the start form; /automation/panel renders the live part (status, level line, and the profile, buffs,
 run, inventory and recent-trip boxes), which the page swaps in every two seconds."""
 from html import escape
+import json
 from .fishing_log import CHARM_NAMES
 from .game_model import round_half_up
 
@@ -77,6 +78,7 @@ STYLE = """<style>
 .tabs a.current { color:var(--ink); border-bottom-color:var(--sea); }
 .model td.bad { color:#ffda8b; } .model td.good { color:var(--sea); }
 .model .why { display:block; color:var(--muted); font-size:13px; }
+.queue li { display:flex; align-items:center; gap:10px; } .queue form { margin:0; }
 .model .where { display:block; color:var(--muted); font-size:12px; font-family:ui-monospace,Consolas,monospace; }
 .visually-hidden { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
 @media(max-width:900px) { .finds { grid-template-columns:minmax(0,1fr); } }
@@ -523,11 +525,13 @@ def render_plan_tab(view) -> str:
     """The Plan tab: next action, the route by phase, prestige, assumptions (progression part 3)."""
     view = view or {}
     plan = view.get('plan')
+    # Queued steps stay in view even while there is no plan to show.
+    queue = _queue_box(view) if view.get('queue') or view.get('action_log') else ''
     if plan is None:
         text = view.get('error') or ('Working out the plan…' if view.get('updating') else 'No plan yet.')
-        return f'<p class="empty">{escape(text)}</p>'
+        return f'<p class="empty">{escape(text)}</p>' + (f'<div class="boxes">{queue}</div>' if queue else '')
     if plan.get('error'):
-        return f'<p class="empty">{escape(plan["error"])}</p>'
+        return f'<p class="empty">{escape(plan["error"])}</p>' + (f'<div class="boxes">{queue}</div>' if queue else '')
     failed = ''
     if view.get('error'):
         # the plan below is the last one that worked: say so, and when it was made
@@ -544,15 +548,18 @@ def render_plan_tab(view) -> str:
     rows, last = [], None
     for item in plan.get('steps', []):
         if item['phase_label'] != last:
-            rows.append(f'<tr><th colspan="5">{escape(item["phase_label"])}</th></tr>')
+            rows.append(f'<tr><th colspan="6">{escape(item["phase_label"])}</th></tr>')
             last = item['phase_label']
         sell = f' · sell ${item["sell"]:,.0f}' if item.get('sell') else ''
         where = f'<span class="where">{escape(item["where"])}</span>' if item.get('where') else ''
+        # Do it queues the step's actions (part 4); a step with nothing to send has no button.
+        do = _button('queue', 'Do it', secondary=True, extra={'label': item['action'], 'actions': json.dumps(item['do'])}
+                     ) if item.get('do') else ''
         rows.append(f'<tr><td>{escape(item["action"])}{where}</td><td>{escape(_cost(item) + sell)}</td>'
                     f'<td>{escape(_trips(item.get("trips")))}</td><td>{escape(_when(item["seconds"]))}</td>'
-                    f'<td>{escape(item.get("why") or "")}</td></tr>')
+                    f'<td>{escape(item.get("why") or "")}</td><td>{do}</td></tr>')
     route_box = _box('Route', _scroll('Route', '<table class="mini model"><thead><tr><th>Step</th><th>Cost</th>'
-                                      '<th>Trips</th><th>In</th><th>Why</th></tr></thead>'
+                                      '<th>Trips</th><th>In</th><th>Why</th><th></th></tr></thead>'
                                       f'<tbody>{"".join(rows)}</tbody></table>'), wide=True,
                      note='Plan cut short.' if plan.get('cut_short') else
                      'Trips: fished before the step. In: fishing time from now.')
@@ -566,7 +573,21 @@ def render_plan_tab(view) -> str:
     prestige_box = _box('Prestige', f'<p>{escape(text)}</p>')
     notes = ''.join(f'<li>{escape(line)}</li>' for line in plan.get('assumptions', []))
     notes_box = _box('Assumptions and estimates', f'<ul>{notes}</ul>' if notes else '<p class="empty">None.</p>')
-    return f'{failed}<div class="boxes">{next_box}{route_box}{prestige_box}{notes_box}</div>'
+    return f'{failed}<div class="boxes">{_queue_box(view)}{next_box}{route_box}{prestige_box}{notes_box}</div>'
+
+
+def _queue_box(view):
+    """The steps queued with Do it (each with remove) and the last results, newest first."""
+    waiting = ''.join(f'<li>{escape(entry["label"])} '
+                      + _button('unqueue', '✕', secondary=True, extra={'id': entry['id']}) + '</li>'
+                      for entry in view.get('queue') or [])
+    marks = {'done': '✓', 'failed': '✗', 'unknown': '?'}
+    results = ''.join(f'<li>{escape(r["label"])} skipped: {escape(r["note"])}</li>' if r['result'] == 'skipped'
+                      else f'<li>{marks.get(r["result"], "")} {escape(r["label"])}: {escape(r["note"])}</li>'
+                      for r in view.get('action_log') or [])
+    body = (f'<ul class="queue">{waiting}</ul>' if waiting
+            else '<p class="empty">Nothing queued. Press Do it on a step to carry it out between trips.</p>')
+    return _box('Queue', body + (f'<ul class="note">{results}</ul>' if results else ''))
 
 
 def _plan_tab(view) -> str:
@@ -680,7 +701,7 @@ def render_panel(status, mode=None) -> str:
             '<nav class="tabs"><a href="#run">Run</a><a href="#model">Model</a><a href="#plan">Plan</a></nav>'
             f'<section class="tab" data-tab="run">{run_tab}</section>'
             f'<section class="tab" data-tab="model" hidden>{_model_tab(status.get("model"))}</section>'
-            f'<section class="tab" data-tab="plan" hidden>{_plan_tab(status.get("plan"))}</section></div>')
+            f'<section class="tab" data-tab="plan" hidden>{_plan_tab({**(status.get('plan') or {}), 'queue': status.get('queue'), 'action_log': status.get('action_log')})}</section></div>')
 
 
 def _field(name, label, value, hint=''):

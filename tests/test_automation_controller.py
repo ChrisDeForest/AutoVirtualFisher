@@ -319,6 +319,57 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(self.kinds(), ['refresh_profile', 'refresh_buffs', 'fish', 'fish', 'refresh_buffs',
                                         'fish', 'fish'])
 
+    # --- part 4: queued plan steps ---
+
+    ACT = CONFIG.capabilities + ('act', 'refresh_upgrades', 'refresh_rod', 'refresh_pets')
+
+    def queue_after_first_fish(self, config):
+        self.make(config=replace(config, capabilities=self.ACT)).start()
+        while self.kinds().count('fish') < 1:
+            self.run_for(STEP)
+
+    def test_queued_steps_run_in_the_gaps_and_keep_fishing(self):
+        from src.actions import Action
+        self.queue_after_first_fish(replace(CONFIG, max_trips=4))
+        self.controller.queue_step('Salesman 8', [Action('buy', 'Salesman', level=8, shop='upgrades').to_dict()])
+        self.controller.queue_step('Switch: rod Lava Rod, pet Zebrafish',
+                                   [Action('rod', 'Lava Rod').to_dict(), Action('pet', 'Zebrafish').to_dict()])
+        self.run_for(80)
+        acts = [intent for _, intent in self.sim.sent if intent.kind == 'act']
+        self.assertEqual([intent.arguments[0]['act'] for intent in acts], ['buy', 'rod', 'pet'])
+        status = self.controller.status()
+        self.assertEqual(status['queue'], [])
+        self.assertEqual([entry['result'] for entry in status['action_log']], ['done', 'done', 'done'])
+        self.assertEqual(self.saved_trips(), 4)
+        after = self.kinds()[self.kinds().index('act'):]
+        self.assertIn('refresh_upgrades', after)                 # its reads are redone
+        self.assertIn('refresh_pets', after)
+
+    def test_a_failed_action_moves_the_queue_on(self):
+        from src.actions import Action
+        self.queue_after_first_fish(replace(CONFIG, max_trips=3))
+        self.sim.script = {len(self.sim.sent): 'act_fail'}
+        self.controller.queue_step('Salesman 8', [Action('buy', 'Salesman', level=8, shop='upgrades').to_dict()])
+        self.controller.queue_step('Better Fish 9', [Action('buy', 'Better Fish', level=9, shop='upgrades').to_dict()])
+        self.run_for(80)
+        log = self.controller.status()['action_log']
+        # Newest first.
+        self.assertEqual([(entry['result'], entry['note']) for entry in log][:2],
+                         [('done', 'bought Better Fish level 9'), ('failed', "can't afford it")])
+
+    def test_unqueue_and_a_stale_step_is_skipped(self):
+        from src.actions import Action
+        self.queue_after_first_fish(replace(CONFIG, max_trips=3))
+        rod = self.controller.status()['dashboard']['profile'].get('rod')
+        self.controller.queue_step('Rod', [Action('rod', rod).to_dict()])      # already in use
+        second = self.controller.queue_step('Sell', [Action('sell').to_dict()])
+        self.assertTrue(self.controller.unqueue(second))
+        self.assertFalse(self.controller.unqueue(second))
+        self.run_for(60)
+        self.assertEqual(self.controller.status()['action_log'][0],
+                         {'label': 'Rod', 'result': 'skipped', 'note': f'already using {rod}'})
+        self.assertNotIn('act', self.kinds())
+
     def test_unreadable_resync_never_stops_fishing(self):
         self.sim.script = {5: 'unreadable_fixed', 6: 'unreadable_fixed'}
         self.make(config=replace(CONFIG, max_trips=5, resync_trips=3)).start()

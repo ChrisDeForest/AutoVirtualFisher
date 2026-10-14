@@ -280,6 +280,19 @@ class DiscordTests(unittest.TestCase):
         self.transport.enable()
         return self.transport.send(self.intent)
 
+    def test_an_action_reply_of_any_kind_answers_it(self):
+        from src.actions import Action
+        self.intent = ActionIntent('b1', 'act', self.transport.context_id, self.now.isoformat(), 'action',
+                                   arguments=(Action('rod', 'Lava Rod').to_dict(),))
+        typed = []
+        self.driver.dispatch_action = lambda line, amount, cancelled, before=None: typed.append((line, amount))
+        self.send()
+        self.assertEqual(typed, [('/rod lava rod', None)])
+        self.driver.lines = self.driver.lines + ['epicmouse used', 'rod', 'Virtual Fisher 6:04 PM',
+                                                 'v You switched to the Lava Rod.']
+        replies = self.transport.poll() or self.transport.poll()
+        self.assertEqual([(r.correlation, r.text) for r in replies], [('b1', 'v You switched to the Lava Rod.')])
+
     def test_a_cooldown_reply_answers_the_fish_at_once(self):
         # Live, Oct 13 (on screen as read): /fish reached the game before its cooldown ended. The reply answers it.
         self.send()
@@ -681,3 +694,14 @@ class IdenticalReplyTests(unittest.TestCase):
         self.send('fish', 'fishing')
         for _ in range(8):
             self.assertEqual(self.poll(1), [])
+
+
+class SellButtonTests(unittest.TestCase):
+    def test_the_sell_button_under_the_newest_catch(self):
+        from src.automation_discord import sell_point
+        def b(text, left, top):
+            return dict(text=text, left=left, top=top, right=left + 60, bottom=top + 15)
+        capture = {'original_boxes': [b('Fish Again', 527, 465), b('Sell', 653, 465), b('Return', 730, 465),
+                                      b('Fish Again', 527, 822), b('Sell', 653, 822), b('Return', 730, 822)]}
+        self.assertEqual(sell_point(capture), (683.0, 829.5))
+        self.assertIsNone(sell_point({'original_boxes': [b('Sell', 653, 822)]}))   # not beside Return

@@ -1,8 +1,10 @@
 """The route to the next prestige (progression part 3): a forward simulation over the plan state."""
 import math
+import re
 import time
 from dataclasses import replace
 
+from .actions import Action
 from .game_model import max_charm_level
 from .plan_economy import charms_for_level, prestige_requirements, xp_to_level
 from .plan_forward import fish_forward
@@ -65,13 +67,14 @@ def _league(state, route, add, notes):
         if not price:
             unpriced.append(f'{name} {level}')
             continue
+        do = (Action('buy', name, level=level, shop='league', price=price),)
         if state.hooks >= price:
-            add('league', f'{name} {level}', price, 'Hooks', why='Hooks on hand')
+            add('league', f'{name} {level}', price, 'Hooks', why='Hooks on hand', do=do)
             state.hooks -= price
             state.account = replace(state.account, upgrades={**state.account.upgrades, name: level})
         else:
             add('league', f'{name} {level}', price, 'Hooks',
-                why=f'waiting for Hooks: {price - state.hooks} more needed ({state.hooks} on hand)')
+                why=f'waiting for Hooks: {price - state.hooks} more needed ({state.hooks} on hand)', do=do)
         break
     if unpriced:
         notes.add('league prices not read (/shop league): ' + ', '.join(unpriced) + '; left out of the route')
@@ -161,10 +164,12 @@ def make_plan(state, ctx, plan_data, limits=(3000, 2.0), clock=time.monotonic):
         plan['assumptions'].add(band['estimate'])
     special_notes = route.get('special_estimates', [])
 
-    def add(kind, action, cost=0, currency='$', sell=0, why='', fished=0.0, where=None):
+    def add(kind, action, cost=0, currency='$', sell=0, why='', fished=0.0, where=None, do=()):
+        # `do`: the actions the step stands for (part 4 queues them); empty when there is nothing to send.
         steps.append({'phase': current, 'phase_label': labels.get(current, current), 'kind': kind,
                       'action': action, 'cost': cost, 'currency': currency, 'sell': sell, 'trips': fished,
-                      'seconds': seconds, 'why': why, 'where': WHERE.get(kind, '') if where is None else where})
+                      'seconds': seconds, 'why': why, 'where': WHERE.get(kind, '') if where is None else where,
+                      'do': [item.to_dict() for item in do]})
 
     _league(state, route, add, plan['assumptions'])
     bait_step = {'bait': object()}                     # the last bait step, finished when the bait changes
@@ -210,7 +215,9 @@ def make_plan(state, ctx, plan_data, limits=(3000, 2.0), clock=time.monotonic):
         plan['assumptions'].update(m['why'])
         switch = _switch_text(state.setup, setup)
         if switch:
-            add('switch', switch, why='best setup for ' + ', '.join(sorted(needs)))
+            changes = tuple(Action(field, getattr(setup, field) or '') for field in ('rod', 'biome', 'bait', 'pet')
+                            if getattr(state.setup, field) != getattr(setup, field))
+            add('switch', switch, why='best setup for ' + ', '.join(sorted(needs)), do=changes)
         if setup.bait != bait_step['bait']:
             close_bait()
             bait_step.update(bait=setup.bait, step=None)
@@ -220,7 +227,9 @@ def make_plan(state, ctx, plan_data, limits=(3000, 2.0), clock=time.monotonic):
                 buy = f'buy {setup.bait}, {batch} at a time'
                 add('bait', f'Use the {stock:,} {setup.bait} on hand, then {buy}' if stock else 'B' + buy[1:],
                     math.ceil(price * batch),
-                    why=f'${price:,.2f} a bait, paid from the money each trip makes; never run out')
+                    why=f'${price:,.2f} a bait, paid from the money each trip makes; never run out',
+                    do=() if stock else (Action('buy', setup.bait, amount=batch, shop='bait',
+                                                price=math.ceil(price * batch)),))
                 bait_step.update(step=steps[-1], price=price, stock=stock, **{'from': trips})
         state.setup = setup
         all_boosts = current in route['boosts']['always_from']
@@ -237,7 +246,9 @@ def make_plan(state, ctx, plan_data, limits=(3000, 2.0), clock=time.monotonic):
         trips += result['trips']
         seconds += result['seconds']
         for line in result['events']:
-            add('special', line, why='exotic fish on hand')
+            named = re.match(r'(.+?) (\d+) \(', line)              # 'Fish Ovens 3 (60 Lava Fish)'
+            add('special', line, why='exotic fish on hand',
+                do=(Action('buy', named[1], level=int(named[2]), shop='special'),) if named else ())
             bought = line.split(' (')[0]
             plan['assumptions'].update(note for note in special_notes if bought in note)
         if result['stopped'] == 'stuck':
@@ -253,7 +264,10 @@ def make_plan(state, ctx, plan_data, limits=(3000, 2.0), clock=time.monotonic):
         state.fish_value -= sell
         state.cash -= action.price
         label = f'{action.name} {action.level}' if action.kind == 'upgrade' else action.name
-        add('buy', label, action.price, '$', sell, reason, fished=result['trips'], where=WHERE[action.kind])
+        shop = {'upgrade': 'upgrades', 'rod': 'rods', 'boat': 'boats'}[action.kind]
+        add('buy', label, action.price, '$', sell, reason, fished=result['trips'], where=WHERE[action.kind],
+            do=(Action('buy', action.name, level=action.level if action.kind == 'upgrade' else None, shop=shop,
+                       price=action.price),))
         if action.for_rod and action.for_rod in route.get('salesman_estimates', {}):
             plan['assumptions'].add(route['salesman_estimates'][action.for_rod])
         state = apply(state, action, ctx.data)
