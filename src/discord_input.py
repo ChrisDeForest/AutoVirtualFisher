@@ -4,7 +4,8 @@ from ctypes import wintypes
 import time
 
 from .automation_models import FocusLost, Interrupted, NotDispatched, TransportError
-from .automation_discord import CHALLENGE, _center, composer_click, composer_target, command_target, command_text
+from .automation_discord import (CHALLENGE, _center, bottom_text, composer_click, composer_target, command_target,
+                                 command_text)
 from .live_capture import channel_matches, make_capture
 from .window_capture import window_process
 
@@ -174,7 +175,8 @@ class WindowsDiscordDriver:
             if composer is None:
                 # Discord hides the "Message @..." placeholder whenever the box holds anything, even a space.
                 raise NotDispatched('The message box placeholder is not visible: it may hold a draft (even a space '
-                                    'or new line). Click it, clear it (Ctrl+A, Delete), then start again.')
+                                    'or new line). Click it, clear it (Ctrl+A, Delete), then start again. Read at '
+                                    f'the bottom: {bottom_text(placeholder)}')
             # From the first click, anything left in the box is this command's draft. Discord keeps the box focused
             # between commands, so it is clicked only the first time and after focus loss, a pause or a failed
             # entry: the pointer stays free in between.
@@ -243,9 +245,14 @@ class WindowsDiscordDriver:
         try:
             frame = self._frame(cancelled) if before is None else self._frame(cancelled, before)
             placeholder = frame.get('original_boxes', frame.get('boxes', []))
-            if composer_target(placeholder, self.channel) is None:
+            composer = composer_target(placeholder, self.channel)
+            if composer is None and getattr(self, 'draft_composer', None) is not None:
+                # As for a read: what an interrupted entry left is cleared at the spot it was typed.
+                composer, _, placeholder = self._clear_draft(cancelled)
+            if composer is None:
                 raise NotDispatched('The message box placeholder is not visible: it may hold a draft. Click it, '
-                                    'clear it (Escape, Ctrl+A, Delete), then start again.')
+                                    'clear it (Escape, Ctrl+A, Delete), then start again. Read at the bottom: '
+                                    f'{bottom_text(placeholder)}')
             self.draft_composer = composer_click(placeholder, self.channel)
             if not getattr(self, 'box_focused', False):
                 self._click(self.draft_composer, cancelled)

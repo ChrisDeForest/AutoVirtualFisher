@@ -7,6 +7,7 @@ Do not manually invoke VF commands while this adapter owns the command stream.
 """
 from datetime import datetime, timezone
 import json
+import difflib
 import re
 import threading
 import time
@@ -142,10 +143,26 @@ def sell_point(capture):
 
 def composer_box(boxes, channel):
     """The empty message box's "Message @channel" placeholder. The blinking caret sits on its M, so OCR may
-    read it without one, or read the caret in front of it as I, | or l."""
-    pattern = re.compile(r'[I|l]?M?essage\s*@\s*' + re.escape(channel), re.I)
-    found = [box for box in boxes if pattern.fullmatch(box['text'].strip())]
+    read it without one, or read the caret in front of it as I, | or l. The name after the @ is compared loosely
+    (spaces, one or two misread letters, a stray mark after it): a strict match failed one read in a few live and
+    each failure cost a fish (2026-10-14)."""
+    pattern = re.compile(r'[I|l]?M?essage\s*@\s*(.+?)[\W_]{0,3}', re.I)
+    wanted = re.sub(r'\s+', '', channel).casefold()
+
+    def matches(text):
+        found = pattern.fullmatch(text.strip())
+        if not found:
+            return False
+        name = re.sub(r'\s+', '', found[1]).casefold()
+        return name == wanted or difflib.SequenceMatcher(None, name, wanted).ratio() >= 0.85
+    found = [box for box in boxes if matches(box['text'])]
     return found[0] if len(found) == 1 else None
+
+
+def bottom_text(boxes, count=3):
+    """The lowest few boxes read, for saying what was there when the message box was not found."""
+    lowest = sorted(boxes, key=lambda box: box['top'])[-count:]
+    return ' | '.join(box['text'].strip() for box in lowest) or 'nothing'
 
 
 def composer_target(boxes, channel):

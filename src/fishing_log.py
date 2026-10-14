@@ -1,4 +1,5 @@
 """Tally pasted Virtual Fisher fishing results. Pure parsing; no file or network access."""
+import difflib
 from functools import cache
 from hashlib import sha256
 import re
@@ -40,8 +41,22 @@ def known_name(name: str) -> str:
     """A found item's name as the game writes it when it is a known fish, else as read. A charm's emoji read
     as one trailing letter ("Quantity Charm Q") is dropped."""
     name = re.sub(r'(\bCharm)\s+\S$', r'\1', name, flags=re.I)
+    # A chest's or crate's icon read as a mark after it ("legendary crate e", "epic crate $").
+    name = re.sub(r'\b(chest|crate|box)\s+\S{1,2}$', r'\1', name, flags=re.I)
     found = next((known for known in _known_names() if _fold(known) == _fold(name)), None)
-    return found or next((known for known in _known_names() if _fold(known) == _fold(without_icon(name))), name)
+    return found or _charm_name(name) or next(
+        (known for known in _known_names() if _fold(known) == _fold(without_icon(name))), name)
+
+
+def _charm_name(name):
+    """A charm whose kind was misread ("Treaswe Charm", "Q�antity Charm", "Qaantity Charm"): the one kind it is
+    closest to, when it is close enough. "Charm" alone (the kind lost) stays as read."""
+    kind = re.fullmatch(r'(.+?)\s*Charm', name.strip(), re.I)
+    if not kind:
+        return None
+    kinds = {charm.split()[0].casefold(): charm for charm in CHARM_NAMES}
+    close = difflib.get_close_matches(kind[1].strip().casefold(), kinds, n=1, cutoff=0.7)
+    return kinds[close[0]] if close else None
 
 
 def without_icon(name: str) -> str:
@@ -182,12 +197,13 @@ def parse_fishing(text: str) -> dict:
             name = known_name(_name(match[2]))
             _add(tally['chest_contents'], name, _number(match[1]))
             event(f'Chest: {match[1]} {name}')
-        elif match := re.fullmatch(r'You found (?:an? )?(.+?)\s*!?', line, re.I):
-            name = known_name(_name(match[1]))
+        elif match := re.fullmatch(r'You found (?:an? )?(?:(\d+)x )?(.+?)\s*!?', line, re.I):
+            name = known_name(_name(match[2]))
             # Exact observed OCR substitution: rn for m in this chest label only.
             if name.lower() == 'uncornmon chest':
                 name = 'uncommon chest'
-            _add(tally['finds'], name, 1)
+            # "You found 2x Worker Charm" (seen live): two at once.
+            _add(tally['finds'], name, int(match[1]) if match[1] else 1)
             event(f'Found {name}')
         elif match := re.fullmatch(r'Your pet (.+?) leveled up!\s*It is now level (\d+)!?', line, re.I):
             name = known_pet(_name(match[1]))

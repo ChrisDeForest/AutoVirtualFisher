@@ -515,6 +515,22 @@ class AutomationWebTests(unittest.TestCase):
         self.assertIn('@keyframes', STYLE)
         self.assertNotIn('transition:width', STYLE)
 
+    def test_a_button_press_comes_back_to_its_tab(self):
+        # Pressing Do it on the Plan tab used to land back on the Run tab, scrolled to the top.
+        from src.automation_web import SCRIPT
+        self.assertIn("panel.addEventListener('submit'", SCRIPT)
+        self.assertIn("event.target.action = '/automation' + location.hash", SCRIPT)
+        self.assertIn("sessionStorage.setItem('back'", SCRIPT)
+        self.assertIn('window.scrollTo(0, back.y)', SCRIPT)
+
+    def test_chests_are_listed_by_rarity(self):
+        from src.automation_web import _finds_box
+        chests = {'legendary crate': 1, 'uncommon chest': 90, 'rare chest': 50, 'common chest': 40, 'epic crate': 9,
+                  'super crate': 2}
+        html = _finds_box({'run': {}, 'all': {'chests': chests}})
+        order = ['common chest', 'uncommon chest', 'rare chest', 'epic crate', 'legendary crate', 'super crate']
+        self.assertEqual(sorted(order, key=html.index), order)
+
     def test_tab_script_keeps_the_hash_across_refreshes(self):
         from src.automation_web import SCRIPT
         self.assertIn('location.hash', SCRIPT)

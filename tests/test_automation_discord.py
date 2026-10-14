@@ -582,6 +582,18 @@ class TargetTests(unittest.TestCase):
         self.assertEqual(composer_target([box('IMessage@Virtual Fisher')], 'Virtual Fisher'), (380, 810))
         self.assertEqual(composer_target([box('|Message @Virtual Fisher')], 'Virtual Fisher'), (380, 810))
         self.assertIsNone(composer_target([box('xMessage @Virtual Fisher')], 'Virtual Fisher'))
+        # The name after the @ is compared loosely: a strict match failed a read in a few (2026-10-14).
+        for read in ('Message @VirtualFisher', 'Message @Virtual Fisber', 'Message @Virtual Fisher .',
+                     'IMessage@Virtual  Fisher', 'Message @Virtua1 Fisher'):
+            self.assertEqual(composer_target([box(read)], 'Virtual Fisher'), (380, 810), read)
+        self.assertIsNone(composer_target([box('Message @Virtual Farmer')], 'Virtual Fisher'))
+
+    def test_what_was_read_at_the_bottom(self):
+        from src.automation_discord import bottom_text
+        boxes = [dict(text='older', top=10), dict(text='You caught:', top=700), dict(text='+11 XP', top=760),
+                 dict(text='Message @Virtual Fisher J', top=800)]
+        self.assertEqual(bottom_text(boxes), 'You caught: | +11 XP | Message @Virtual Fisher J')
+        self.assertEqual(bottom_text([]), 'nothing')
 
     def test_sidebar_status_is_not_a_second_picker_command(self):
         # Live: the DM list shows "Virtual Fisher" with the status "/fish", read as "[fish", far above the picker.

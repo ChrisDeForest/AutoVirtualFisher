@@ -32,6 +32,17 @@ class LiveFishingTests(unittest.TestCase):
         tally = parse_fishing('You caught:\n2 Cod\nYou found a Quantity Charm Q !\nYour Charm is now level 1!\n+20 xp')
         self.assertEqual(tally['charm_levels'], {'Quantity Charm': 1})
 
+    def test_misread_chests_and_charms_are_named(self):
+        # Seen in live runs, 2026-10-14.
+        from src.fishing_log import known_name
+        for read, name in (('legendary crate e', 'legendary crate'), ('epic crate $', 'epic crate'),
+                           ('Treaswe Charm', 'Treasure Charm'), ('Q�antity Charm', 'Quantity Charm'),
+                           ('Qaantity Charm', 'Quantity Charm'), ('Q�ality Charm', 'Quality Charm'),
+                           ('Charm', 'Charm'), ('uncommon chest', 'uncommon chest')):
+            self.assertEqual(known_name(read), name, read)
+        self.assertEqual(parse_fishing('You caught:\n1 Cod\nYou found 2x Worker Charm!\n+5 XP')['finds'],
+                         {'Worker Charm': 2})
+
     def test_charm_emoji_read_as_a_letter_is_not_part_of_its_name(self):
         tally = parse_fishing('You caught:\n2 Cod\nYou found an epic crate\nYou found a Quantity Charm Q !\n+233 xp')
         self.assertEqual(tally['finds'], {'epic crate': 1, 'Quantity Charm': 1})

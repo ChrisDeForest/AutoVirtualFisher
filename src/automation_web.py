@@ -161,6 +161,25 @@ SCRIPT = """<script nonce="{nonce}">
   }
   window.addEventListener('hashchange', showTab);
   showTab();
+  // A button press reloads the page (post/redirect/get): it comes back to the tab it was pressed on (the redirect
+  // keeps the form's #tab), scrolled where it was, with the same toggles open.
+  panel.addEventListener('submit', function (event) {
+    event.target.action = '/automation' + location.hash;
+    var open = {};
+    panel.querySelectorAll('details[data-key]').forEach(function (d) { open[d.getAttribute('data-key')] = d.open; });
+    try { sessionStorage.setItem('back', JSON.stringify({y: window.scrollY, open: open})); } catch (e) {}
+  });
+  try {
+    var back = JSON.parse(sessionStorage.getItem('back') || 'null');
+    sessionStorage.removeItem('back');
+    if (back) {
+      panel.querySelectorAll('details[data-key]').forEach(function (d) {
+        var key = d.getAttribute('data-key');
+        if (key in back.open) d.open = back.open[key];
+      });
+      window.scrollTo(0, back.y);
+    }
+  } catch (e) {}
   // Next fish counts down here between refreshes. A refresh within half a second of the running count keeps it,
   // so the count never steps back and forth; a new cooldown starts a new count.
   var deadline = null;
@@ -370,6 +389,16 @@ def _charm_cells(charm):
     return f'<td>{level}</td><td>{charm["into"]}/{charm["needed"]}</td>'
 
 
+RARITIES = ('common', 'uncommon', 'rare', 'epic', 'legendary', 'mythic', 'super', 'artifact')
+
+
+def _chest_rank(name):
+    """Common chest first, up to legendary and super crates, then the artifact box; anything else last."""
+    words = name.casefold().split()
+    rarity = next((RARITIES.index(word) for word in words if word in RARITIES), len(RARITIES))
+    return rarity, 'crate' in words, name.casefold()
+
+
 def _finds_box(finds, charms=None):
     run, every = finds.get('run') or {}, finds.get('all') or {}
     charms = charms or {}
@@ -377,6 +406,8 @@ def _finds_box(finds, charms=None):
     def group(title, key, levels=False):
         names = sorted(set(every.get(key, {})) | set(run.get(key, {})),
                        key=lambda name: -every.get(key, {}).get(name, 0))
+        if key == 'chests':
+            names = sorted(names, key=_chest_rank)    # by rarity; the same rarity's chest before its crate
         if levels:
             # All eight charms, in /charms order, then anything else read as a charm.
             names = list(CHARM_NAMES) + [name for name in names + sorted(charms.get('charms', {}))
