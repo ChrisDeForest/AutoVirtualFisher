@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import random
 import secrets
 import threading
 import time
@@ -633,6 +634,40 @@ class Handler(BaseHTTPRequestHandler):
                                      ocr_ready=self.screenshots_supported()))
 
 
+TIPS = (
+    'Follow the plan (Plan tab) buys and switches by itself; Do it runs one step.',
+    'Charms are a prestige requirement: the Run tab counts them toward the goal.',
+    'A pause keeps every reply already sent; Resume picks up where it left off.',
+    'Needs review lists anything the run was unsure of. Nothing there blocks fishing.',
+    'The Model tab compares each trip with the game model; big gaps are worth a look.',
+    'A captcha pauses the run and pops up an alert. Solve it in Discord, then Resume.',
+    'Lava and Diamond Fish buy special shop upgrades; the Plan tab spends them in order.',
+    'Keep Discord in front while a run is live: it waits whenever it is not.',
+)
+
+
+def greeting(port, account=None, hour=None, tip=None):
+    """The console greeting: who it is for, the pages to open, and a tip that changes each start. ASCII only, as a
+    Windows console may not print anything else."""
+    hour = datetime.now().hour if hour is None else hour
+    part = 'morning' if 5 <= hour < 12 else 'afternoon' if 12 <= hour < 18 else 'evening' if 18 <= hour < 23 else 'night'
+    base = f'http://127.0.0.1:{port}'
+    tip = tip or random.choice(TIPS)
+    return '\n'.join((
+        '',
+        '   ><(((o>   AutoVirtualFisher',
+        f'   Good {part}' + (f', {account}' if account else '') + '. The lines are in the water.',
+        '   ' + '-' * 52,
+        f'   Automation    {base}/automation',
+        f'   Logbook       {base}/',
+        f'   Live capture  {base}/live',
+        '',
+        f'   Tip: {tip}',
+        '   Ctrl+C stops everything, a running run included.',
+        '',
+    ))
+
+
 def main():
     parser = argparse.ArgumentParser(description='Open the local player logbook')
     parser.add_argument('--port', type=int, default=8765)
@@ -645,10 +680,12 @@ def main():
         Handler.keep_captures_dir = args.keep_captures.resolve()
         print(f'Keeping live captures in {args.keep_captures.resolve()}', flush=True)
     with ThreadingHTTPServer(('127.0.0.1', args.port), Handler) as server:
-        print(f'Player logbook: http://127.0.0.1:{server.server_port}', flush=True)
-        print(f'Press Ctrl+C to stop. Parsed snapshots are kept in {Handler.snapshot_root} and fishing '
-              f'sessions in {Handler.fishing_root}; '
-              'raw pasted responses are not stored.', flush=True)
+        try:
+            account = json.loads((Path(Handler.automation_live_root) / 'settings.json').read_text(
+                encoding='utf-8')).get('account')
+        except (OSError, ValueError, AttributeError):
+            account = None   # the greeting goes without a name
+        print(greeting(server.server_port, account), flush=True)
         try:
             server.serve_forever()
         except KeyboardInterrupt:

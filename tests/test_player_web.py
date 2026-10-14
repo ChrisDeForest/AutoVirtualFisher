@@ -435,3 +435,17 @@ Gives you bonus XP and leads you to more treasure.
                       '<td>+2 fish, XP −10%</td>', html)
         self.assertIn('<td>No bait *</td><td>1 (0 boosted)</td><td>4.00</td><td>2.00×</td>', html)
         self.assertIn('1 trip from sessions saved without a bait is left out.', html)
+
+
+class GreetingTests(unittest.TestCase):
+    def test_greeting_names_the_pages_and_a_tip(self):
+        from src.player_web import TIPS, greeting
+        text = greeting(8765, 'epicmouse', hour=20, tip=TIPS[0])
+        self.assertIn('Good evening, epicmouse.', text)
+        for page in ('/automation', '/live', 'http://127.0.0.1:8765/'):
+            self.assertIn(page, text)
+        self.assertIn(TIPS[0], text)
+        self.assertIn('Good morning.', greeting(8765, hour=9))          # no name saved yet
+        self.assertIn('Good night', greeting(8765, hour=2))
+        text.encode('ascii')                                            # a Windows console prints it
+        self.assertIn(greeting(8765).split('Tip: ')[1].split('\n')[0], TIPS)

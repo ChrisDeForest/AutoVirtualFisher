@@ -363,6 +363,7 @@ def parse_responses(profile='', buffs='', prestige_shop='', pet='', quests=''):
             if not missing_upgrades:
                 result['prestige']['upgrades_bought'] = observed_bought
     current_owned_pet = None
+    level_only = None    # the level of a pet line read without its name ("60)"), until the next line names it
     for original in pet.splitlines():
         line = _clean(original).rstrip('.').rstrip()
         if not line or line.startswith('Pets are permanent') or line.startswith('Pets are slightly more common'):
@@ -379,6 +380,22 @@ def parse_responses(profile='', buffs='', prestige_shop='', pet='', quests=''):
             continue
         if re.fullmatch(r'You have no pets!.*', line, re.I):
             result['pets']['status'] = 'No pets'
+            continue
+        if level_only is not None:
+            # The line after a pet line whose name was lost: its description says which pet it is.
+            described = next((name for name, known in (_pet_reference() or {}).get('pets', {}).items()
+                              if known.get('description', '').rstrip('.').casefold() == line.casefold()), None)
+            level, level_only = level_only, None
+            if described and described not in (result['pets']['owned'] or {}):
+                result['pets']['owned'] = result['pets']['owned'] or {}
+                result['pets']['owned'][described] = {'level': level, 'description': line, 'xp_current': None,
+                                                      'xp_required': None, 'xp_to_next_level': None}
+                current_owned_pet = described
+                continue
+            result['unparsed']['pet'].append(f'{level})')   # not told apart: shown as not read
+        # Live 2026-10-14: Axolotl's line read as just "60)", its name and "(Lvl" lost.
+        if only := re.fullmatch(r'\W{0,3}(\d{1,3})\s*\)', line):
+            level_only = int(only[1])
             continue
         # "Axolotl(Lvl 60)"; OCR may read the l of Lvl as 1, I or |, an O in the level, or lose the ")".
         owned = re.fullmatch(r'(.+?)\s*\(\s*L[vV][l1I|]\s*([\dOo]+)\s*\)?', line)

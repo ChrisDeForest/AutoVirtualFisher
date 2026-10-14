@@ -117,6 +117,18 @@ UNLOCKED AT PRESTIGE 5: Virtual Fisher - 40% more high quality fish.''')
         owned = state['sections']['pet']['values']['owned']
         self.assertEqual({name: data['level'] for name, data in owned.items()}, {'Axolotl': 60, 'Tuna': 15})
 
+    def test_a_pet_line_read_without_its_name_is_known_by_its_description(self):
+        # The live /pet read of 2026-10-14 (account_state.json): Axolotl's line came through as just "60)".
+        text = ('Current pet: Dolphin.\nPuffer(Lvl 38)\nIncreases your fish catch.\n550/4,500 XP to next level.\n'
+                'Zebrafish(Lvl 61)\nIncreases fish quality.\n23,314/45,000 XP to next level.\n60)\n'
+                'Increases the quality of treasure you find.\nXP to next level.\nTuna(Lvl 14)\n'
+                'Buffs every stat slightly. Wicked!\n931725 XP to next level.')
+        owned = parse_responses(pet=text)['pets']['owned']
+        self.assertEqual({name: data['level'] for name, data in owned.items()},
+                         {'Puffer': 38, 'Zebrafish': 61, 'Axolotl': 60, 'Tuna': 14})
+        first = parse_responses(pet='60)\nIncreases the quality of treasure you find.')['pets']['owned']
+        self.assertEqual(first['Axolotl']['level'], 60)                   # also as the first pet listed
+
     def test_a_pet_line_that_does_not_read_is_named_and_the_text_kept(self):
         from src.account_replies import PARSERS
         from src.account_state import apply_read, empty_state
