@@ -231,6 +231,14 @@ class FindNameTests(unittest.TestCase):
         saved = summarize_finds([{'finds': {'Quantity Charm Q': 1}}, {'finds': {'Quantity Charm': 1}}])
         self.assertEqual(saved['charms'], {'Quantity Charm': 2})
 
+    def test_pets_found_are_their_own_group(self):
+        from src.live_stats import summarize_finds
+        # Old trips saved the find as "pet  Puffer" / "pet Axolotl'"; new ones as pets_found.
+        finds = summarize_finds([{'finds': {'pet  Puffer': 1, "pet Axolotl'": 1, 'rare chest': 1}},
+                                 {'pets_found': {'Puffer': 1}}])
+        self.assertEqual(finds['pets'], {'Puffer': 2, 'Axolotl': 1})
+        self.assertEqual((finds['chests'], finds['other']), ({'rare chest': 1}, {}))
+
     def test_saved_charm_misreads_are_never_charm_rows(self):
         # Shown live 2026-10-14 on the Run tab: "Charm", "QuantiW charm", "Treaswe Charm".
         from src.live_stats import summarize_finds

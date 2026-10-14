@@ -76,10 +76,11 @@ def _add(counts, name, amount):
 def parse_fishing(text: str) -> dict:
     tally = {'schema_version': FISHING_SCHEMA_VERSION, 'trips': 0, 'boosted_trips': 0, 'catches': {},
              'fishing_xp': 0, 'chest_xp': 0, 'chest_money': 0, 'finds': {}, 'chest_contents': {}, 'charm_levels': {}, 'level_ups': [],
-             'level_up_money': 0, 'level_bonuses': [], 'pet_levels': {}, 'unlocks': [], 'quests_completed': [], 'bait_ran_out': [],
+             'level_up_money': 0, 'level_bonuses': [], 'pet_levels': {}, 'pets_found': {}, 'pet_xp': {}, 'unlocks': [], 'quests_completed': [], 'bait_ran_out': [],
              'trip_details': [], 'warnings': [], 'unparsed_line_count': 0}
     mode = None
     trip = None
+    upcoming = []   # what a message says before its "You caught:" (a pet found): that trip's
     # A line that is not recognized may be the message author line, which precedes "You caught:".
     pending = None
 
@@ -100,9 +101,14 @@ def parse_fishing(text: str) -> dict:
         if line == 'You caught:':
             pending = None
             tally['trips'] += 1
-            trip = {'catches': {}, 'xp': None, 'chest_xp': 0, 'boosted': False, 'events': []}
+            trip = {'catches': {}, 'xp': None, 'chest_xp': 0, 'boosted': False, 'events': upcoming}
+            upcoming = []
             tally['trip_details'].append(trip)
             mode = 'catch'
+            continue
+        if re.fullmatch(r'RARE FIND!?', line, re.I):
+            # A pet found on this trip comes first, under its own heading (and the player's name above it).
+            pending = None
             continue
         if pending is not None:
             unrecognized(pending)
@@ -197,6 +203,16 @@ def parse_fishing(text: str) -> dict:
             name = known_name(_name(match[2]))
             _add(tally['chest_contents'], name, _number(match[1]))
             event(f'Chest: {match[1]} {name}')
+        elif match := re.fullmatch(r'You found a pet (.+?)\s*!?', line, re.I):
+            # Live 2026-10-14: "You found a pet Puffer!" before "You caught:"; it belongs to that trip.
+            name = known_pet(_name(match[1]))
+            _add(tally['pets_found'], name, 1)
+            upcoming.append(f'Found pet {name}')
+        elif match := re.fullmatch(rf'Since you already have this pet,? your pet (.+?) gained ({NUMBER}) pet XP[.!]?',
+                                   line, re.I):
+            name = known_pet(_name(match[1]))
+            _add(tally['pet_xp'], name, _number(match[2]))
+            upcoming.append(f'Pet {name} +{match[2]} pet XP')
         elif match := re.fullmatch(r'You found (?:an? )?(?:(\d+)x )?(.+?)\s*!?', line, re.I):
             name = known_name(_name(match[2]))
             # Exact observed OCR substitution: rn for m in this chest label only.
@@ -229,6 +245,8 @@ def parse_fishing(text: str) -> dict:
                 pending = line
     if pending is not None:
         unrecognized(pending)
+    if upcoming and trip is not None:
+        trip['events'] += upcoming   # a pet found after the last trip's catch list
     if not text.strip():
         tally['warnings'].append('Paste fishing results to begin.')
     return tally

@@ -32,6 +32,17 @@ class LiveFishingTests(unittest.TestCase):
         tally = parse_fishing('You caught:\n2 Cod\nYou found a Quantity Charm Q !\nYour Charm is now level 1!\n+20 xp')
         self.assertEqual(tally['charm_levels'], {'Quantity Charm': 1})
 
+    def test_a_pet_found_on_a_trip(self):
+        # Live 2026-10-14 (Discord copy text): the pet find comes before "You caught:", under "RARE FIND".
+        text = ('epicmouse9925\nRARE FIND\nYou found a pet :pufferfish: Puffer!\n'
+                'Since you already have this pet your pet Puffer gained 9,207 pet XP.\n'
+                'epicmouse9925\nYou caught:\n35 :pufferfish: Pufferfish\n+1,542 XP\nGlobal boost by Magnus!')
+        tally = parse_fishing(text)
+        self.assertEqual((tally['trips'], tally['warnings'], tally['finds']), (1, [], {}))
+        self.assertEqual((tally['pets_found'], tally['pet_xp']), ({'Puffer': 1}, {'Puffer': 9207}))
+        self.assertEqual(tally['trip_details'][0]['events'], ['Found pet Puffer', 'Pet Puffer +9,207 pet XP'])
+        self.assertEqual(tally['catches'], {'Pufferfish': 35})
+
     def test_misread_chests_and_charms_are_named(self):
         # Seen in live runs, 2026-10-14.
         from src.fishing_log import known_name

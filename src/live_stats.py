@@ -9,7 +9,7 @@ import re
 
 from .fishing_log import CHARM_NAMES, EXOTIC_FISH, known_name
 from .player_planner import xp_required
-from .player_state import _clean, parse_responses
+from .player_state import _clean, known_pet, parse_responses
 
 # Read only when the whole line did not parse: observed "P4 Level 31, xp to next level." with the numbers lost.
 LEVEL_ONLY = re.compile(r'(?:P(\d+)\s+)?Level (\d+),', re.I)
@@ -164,11 +164,19 @@ def summarize_finds(tallies, earlier: dict | None = None) -> dict:
     """Chests by type, special fish from chests, charms found and the latest charm levels, added onto `earlier`."""
     finds = deepcopy(earlier) if earlier else {'chests': {}, 'special_fish': {}, 'charms': {}, 'other': {},
                                                 'charm_levels': {}}
+    finds.setdefault('pets', {})
     for tally in tallies:
+        for name, count in tally.get('pets_found', {}).items():
+            finds['pets'][name] = finds['pets'].get(name, 0) + count
         # A charm whose kind was not read ("Charm") is the trip's one named charm level, else no charm row at all.
         named = {known_name(name) for name in tally.get('charm_levels', {})} & set(CHARM_NAMES)
         for name, count in tally.get('finds', {}).items():
             name = known_name(name)
+            if pet := re.fullmatch(r'pet\s+(.+)', name, re.I):
+                # Saved before pet finds were told apart ("pet  Puffer", "pet Axolotl'").
+                pet_name = known_pet(pet[1])
+                finds['pets'][pet_name] = finds['pets'].get(pet_name, 0) + count
+                continue
             if name.casefold().endswith('charm') and name not in CHARM_NAMES:
                 name = next(iter(named)) if len(named) == 1 else 'Charm (kind not read)'
             group = ('charms' if name in CHARM_NAMES else
