@@ -231,6 +231,18 @@ class FindNameTests(unittest.TestCase):
         saved = summarize_finds([{'finds': {'Quantity Charm Q': 1}}, {'finds': {'Quantity Charm': 1}}])
         self.assertEqual(saved['charms'], {'Quantity Charm': 2})
 
+    def test_saved_charm_misreads_are_never_charm_rows(self):
+        # Shown live 2026-10-14 on the Run tab: "Charm", "QuantiW charm", "Treaswe Charm".
+        from src.live_stats import summarize_finds
+        tallies = [{'finds': {'QuantiW charm': 1}, 'charm_levels': {'QuantiW charm': 3}},
+                   {'finds': {'Treaswe Charm': 1}, 'charm_levels': {'Treaswe Charm': 2}},
+                   {'finds': {'Charm': 1}, 'charm_levels': {'Worker Charm': 4}},      # the trip names its charm
+                   {'finds': {'Charm': 1}}]                                          # nothing names it
+        finds = summarize_finds(tallies)
+        self.assertEqual(finds['charms'], {'Quantity Charm': 1, 'Treasure Charm': 1, 'Worker Charm': 1})
+        self.assertEqual(finds['charm_levels'], {'Quantity Charm': 3, 'Treasure Charm': 2, 'Worker Charm': 4})
+        self.assertEqual(finds['other'], {'Charm (kind not read)': 1})
+
 
 class HiddenExoticTests(unittest.TestCase):
     def test_exotics_the_profile_does_not_list_come_from_finds(self):

@@ -165,20 +165,25 @@ def summarize_finds(tallies, earlier: dict | None = None) -> dict:
     finds = deepcopy(earlier) if earlier else {'chests': {}, 'special_fish': {}, 'charms': {}, 'other': {},
                                                 'charm_levels': {}}
     for tally in tallies:
+        # A charm whose kind was not read ("Charm") is the trip's one named charm level, else no charm row at all.
+        named = {known_name(name) for name in tally.get('charm_levels', {})} & set(CHARM_NAMES)
         for name, count in tally.get('finds', {}).items():
             name = known_name(name)
-            group = ('charms' if name.casefold().endswith('charm') else
+            if name.casefold().endswith('charm') and name not in CHARM_NAMES:
+                name = next(iter(named)) if len(named) == 1 else 'Charm (kind not read)'
+            group = ('charms' if name in CHARM_NAMES else
                      'chests' if CONTAINER.search(name) else 'other')
             finds[group][name] = finds[group].get(name, 0) + count
         for name, count in tally.get('chest_contents', {}).items():
             name = known_name(name)
             group = 'special_fish' if name.casefold().endswith('fish') else 'other'
             finds[group][name] = finds[group].get(name, 0) + count
-        charms = [known_name(name) for name in tally.get('finds', {}) if known_name(name).casefold().endswith('charm')]
+        charms = [known_name(name) for name in tally.get('finds', {}) if known_name(name) in CHARM_NAMES]
         for name, level in tally.get('charm_levels', {}).items():
+            name = known_name(name)   # "Treaswe Charm", saved before misreads were named
             if name.casefold() == 'charm' and len(charms) == 1:
                 name = charms[0]  # saved before the parser named it: the charm found that trip
-            if not name.casefold().endswith('charm'):
+            if name not in CHARM_NAMES:
                 continue  # saved before pet level-ups were told apart: "pet Puffer leveled up! It"
             # Levels only rise; the highest the game reported stands.
             finds['charm_levels'][name] = max(level, finds['charm_levels'].get(name, 0))
