@@ -3,7 +3,7 @@ import ctypes
 from ctypes import wintypes
 import time
 
-from .automation_models import FocusLost, Interrupted, NotDispatched, TransportError
+from .automation_models import CapabilityError, FocusLost, InputUnavailable, Interrupted, NotDispatched, TransportError
 from .automation_discord import (CHALLENGE, _center, bottom_text, composer_click, composer_target, command_target,
                                  command_text)
 from .live_capture import channel_matches, make_capture
@@ -237,6 +237,8 @@ class WindowsDiscordDriver:
             self.box_focused = False
             if submission_possible:
                 raise
+            if isinstance(error, InputUnavailable):
+                raise CapabilityError(f'{error} {command} was not sent.') from error
             raise NotDispatched(f'{error} {command} was not sent.') from error
         if self._left_the_box(command, cancelled):
             self.draft_composer = None
@@ -299,6 +301,8 @@ class WindowsDiscordDriver:
             self.box_focused = False
             if submission_possible:
                 raise
+            if isinstance(error, InputUnavailable):
+                raise CapabilityError(f'{error} {line} was not sent.') from error
             raise NotDispatched(f'{error} {line} was not sent.') from error
         if self._left_the_box(line, cancelled):
             self.draft_composer = None

@@ -663,6 +663,7 @@ class AutomationController:
                 return
             if failure and failure[0] == 'abandoned':
                 self._safe_event('abandoned', intent.action_id, reason=failure[1])
+                self._finish(failure[1])
                 self.failed = failure[1]
                 self.phase, self.reason = 'FAILED', failure[1]
                 return

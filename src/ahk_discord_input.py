@@ -3,7 +3,7 @@ import ctypes
 from ctypes import wintypes
 from .ahk_bridge import AhkBridge, AhkBridgeError, AhkTarget
 from .ahk_runtime import AhkRuntime
-from .automation_models import TransportError
+from .automation_models import InputUnavailable, TransportError
 from .discord_input import WindowsDiscordDriver
 
 class AhkDiscordDriver(WindowsDiscordDriver):
@@ -116,7 +116,11 @@ class AhkDiscordDriver(WindowsDiscordDriver):
             raise TransportError('Discord geometry or renderer changed during input.')
         try:
             return self.bridge.request(operation,target,point,payload,cancelled)
-        except (AhkBridgeError,ValueError) as error:
+        except AhkBridgeError as error:
+            if error.code in ('ipc', 'protocol') or error.input_state == 'unknown':
+                raise InputUnavailable(f'AHK worker unavailable: {error}. Stop and restart the run.') from error
+            raise TransportError(f'AHK input unavailable: {error}') from error
+        except ValueError as error:
             raise TransportError(f'AHK input unavailable: {error}') from error
 
     def _click(self,point,cancelled):

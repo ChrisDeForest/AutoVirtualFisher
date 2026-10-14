@@ -59,6 +59,10 @@ class TransportError(Exception):
     """The transport could not hand the command over. Whether it reached the game is unknown."""
 
 
+class InputUnavailable(TransportError):
+    """The input worker cannot continue; submission certainty depends on the caller."""
+
+
 class CapabilityError(Exception):
     """The transport does not support this action; raised before anything is dispatched."""
 

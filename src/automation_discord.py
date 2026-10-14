@@ -392,6 +392,10 @@ class DiscordTransport:
                 # Nothing was sent (the driver says so: interrupted, or refused before the final Enter).
                 self.pending = self.baseline = None
                 raise
+            except CapabilityError:
+                # Terminal refusal with proof that no command reached the game.
+                self.pending = self.baseline = None
+                raise
             except Exception as error:
                 # Enter may or may not have been pressed. Not repeated; the controller decides when to move on.
                 self.blocked = f'Dispatch could not be confirmed: {error}'
