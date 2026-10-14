@@ -86,7 +86,7 @@ def _next_rod(state, route, data):
 def _upgrade(state, name, prices, target=None, reason='', forced=False, money_first=False):
     level = state.account.upgrades.get(name, 0)
     table = prices['upgrades'][name]
-    if level >= len(table) or (target is not None and level >= target):
+    if level >= min(len(table), state.maxed.get(name, len(table))) or (target is not None and level >= target):
         return None
     return Action('upgrade', name, level + 1, table[level], reason, forced, money_first)
 

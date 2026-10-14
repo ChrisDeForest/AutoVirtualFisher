@@ -19,7 +19,7 @@ import time
 
 from .account_reads import ACCOUNT_READS, PAGE_TWO, read_of
 from .account_replies import PARSERS as ACCOUNT_PARSERS
-from .account_state import apply_read, empty_state, load_state, save_state
+from .account_state import apply_read, empty_state, load_state, mark_maxed, save_state
 from .automation_journal import AutomationJournal
 from .automation_models import (ActionIntent, AutomationConfig, CapabilityError, Interrupted, NOT_FOREGROUND,
                                 NotDispatched, TransportError)
@@ -504,10 +504,11 @@ class AutomationController:
                 self.phase = 'RETRYING_STARTUP'
                 self.reason = f'Retrying startup read in {self.startup_retry_at - now:.1f} s.'
                 return
-            # A queued action goes in the gap between trips, without waiting for the fishing cooldown.
+            # A queued action goes in the gap between trips, without waiting for the fishing cooldown; after one
+            # that changes the balance (a sell, a buy) /profile is read first, so the next is checked against it.
             intent = None
             if self.queue and 'act' in self.config.capabilities and self.state.pending is None \
-                    and not self.state.uncertain:
+                    and not self.state.uncertain and 'refresh_profile' not in self.state.refresh_due:
                 intent = self._action_intent()
             if intent is None:
                 if self.last_trip_at is not None and self.state.cooldown_seconds is not None:
@@ -709,7 +710,8 @@ class AutomationController:
         entry = self.queue[0] if self.queue else None
         if entry is not None and entry['actions'] and entry['actions'][0] == action:
             entry['actions'].pop(0)
-            if result != 'done' or not entry['actions']:
+            # A sell whose reply was not read still goes on to its buy: the buy is checked against the new /profile.
+            if (result != 'done' and action.act != 'sell') or not entry['actions']:
                 self.queue.pop(0)
         self._log_action(entry['label'] if entry else action.label(), result, note)
         self.pending_action = None
@@ -756,7 +758,17 @@ class AutomationController:
             result = 'unreadable' if problems else 'refreshed'
         elif kind == 'act':
             from .actions import Action, outcome
-            result, note = outcome(Action.from_dict(self.pending_action or {'act': 'sell'}), observation.text)
+            action = Action.from_dict(self.pending_action or {'act': 'sell'})
+            result, note = outcome(action, observation.text)
+            if note == 'already maxed' and action.level:
+                # Remembered, so the plan stops offering it (the shop's own max can be higher).
+                self.account = mark_maxed(self.account, action.name, action.level - 1)
+                if self.state_path:
+                    try:
+                        save_state(self.state_path, self.account)
+                    except OSError as error:
+                        self._safe_event('state_not_saved', None, reason=str(error))
+                self._request_plan()
             self._finish_action(self.pending_action, 'done' if result == 'done' else 'failed', note)
         elif kind != 'fish':
             # A resync or retry must read on its own; at startup, fields read across replies add up.
@@ -1058,7 +1070,9 @@ class AutomationController:
         read = read_of(kind)
         due = tuple(k for k in self.state.refresh_due if k != kind)
         page_two = f'{kind}_page2'
-        if page_two in PAGE_TWO and page_two in self.config.capabilities:
+        total = (parsed.get('page') or (None, None))[1]
+        listed = total is not None and total > 1 if ACCOUNT_READS[read].paged_when_listed else total != 1
+        if page_two in PAGE_TWO and page_two in self.config.capabilities and listed:
             self.state = replace(self.state, refresh_due=(page_two,) + tuple(k for k in due if k != page_two))
             return
         self.state = replace(self.state, refresh_due=due,

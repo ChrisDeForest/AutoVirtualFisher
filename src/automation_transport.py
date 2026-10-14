@@ -41,7 +41,7 @@ SIM_ACCOUNT = {'refresh_upgrades': samples.UPGRADES_PAGE_1, 'refresh_upgrades_pa
                'refresh_rod': samples.ROD, 'refresh_bait': samples.BAIT, 'refresh_biome': samples.BIOME,
                'refresh_boats': samples.BOATS, 'refresh_pets': samples.PETS,
                'refresh_prestige_shop': samples.PRESTIGE_SHOP, 'refresh_league': samples.LEAGUE_PAGE_1,
-               'refresh_special': samples.SPECIAL,
+               'refresh_special': samples.SPECIAL, 'refresh_special_page2': samples.SPECIAL_PAGE_2,
                'refresh_league_page2': samples.LEAGUE_PAGE_2, 'refresh_boosts': samples.BOOSTS}
 VISIBLE_REPLIES = 12
 
@@ -104,6 +104,10 @@ class SimulationTransport:
         text, kind = self._play(intent, now)
         if outcome == 'act_fail' and kind == 'action':
             text = "x You can't afford that upgrade."
+        if outcome == 'act_maxed' and kind == 'action':
+            text = 'x You already have that upgrade maxed.'
+        if outcome == 'act_unclear' and kind == 'action':
+            text = 'Your catch, its buttons restyled'   # a reply the run cannot read
         if outcome == 'level_bonus' and kind == 'fishing':
             text += ('\n:fish: LEVEL UP! :fish: You are now level 75.\n$120,000 received for leveling up.\n'
                      '10% INCREASED SELLING PRICE FOR LEVELING UP!')

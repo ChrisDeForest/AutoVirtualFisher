@@ -153,6 +153,9 @@ def make_plan(state, ctx, plan_data, limits=(3000, 2.0), clock=time.monotonic):
         plan['error'] = f'P{state.account.prestige} requirements are not known'
         return _finish(plan)
     state = state.copy()
+    # What can be paid now, by currency as steps show it: money, Hooks, and each exotic fish ('Lava Fish').
+    on_hand = {'$': state.money(), 'Hooks': state.hooks,
+               **{f'{currency} Fish': count for currency, count in state.exotic.items()}}
     started, trips, seconds = clock(), 0.0, 0.0
     stop_levels = set(prices['biome_unlock'].values()) | set(prices['bait_unlock'].values()) \
         | {route['phase_steps']['charm_grind_2']['level']}
@@ -246,9 +249,10 @@ def make_plan(state, ctx, plan_data, limits=(3000, 2.0), clock=time.monotonic):
         trips += result['trips']
         seconds += result['seconds']
         for line in result['events']:
-            named = re.match(r'(.+?) (\d+) \(', line)              # 'Fish Ovens 3 (60 Lava Fish)'
-            add('special', line, why='exotic fish on hand',
-                do=(Action('buy', named[1], level=int(named[2]), shop='special'),) if named else ())
+            named = re.match(r'(.+?) (\d+) \((\d+) (\w+ Fish)\)', line)   # 'Fish Ovens 3 (60 Lava Fish)'
+            add('special', line, int(named[3]) if named else 0, named[4] if named else '$', why='exotic fish on hand',
+                do=(Action('buy', named[1], level=int(named[2]), shop='special', price=int(named[3])),)
+                if named else ())
             bought = line.split(' (')[0]
             plan['assumptions'].update(note for note in special_notes if bought in note)
         if result['stopped'] == 'stuck':
@@ -282,7 +286,24 @@ def make_plan(state, ctx, plan_data, limits=(3000, 2.0), clock=time.monotonic):
         if state.charm_total() < charms:
             missing.append(f'{math.ceil(charms - state.charm_total() - 1e-9)} more charms')
         plan['prestige']['missing'] = missing
+    _mark_affordable(steps, on_hand)
     return _finish(plan)
+
+
+def _mark_affordable(steps, on_hand):
+    """Mark each step that has actions `affordable` or not with what is on hand now (money: cash and fish, which a
+    buy sells), going down the route: each affordable step's cost is taken off before the next. The first step a
+    currency cannot pay ends that currency's run, so later levels are never bought before earlier ones."""
+    left, short = dict(on_hand), set()
+    for step in steps:
+        if not step['do']:
+            continue
+        cost, currency = step['cost'] or 0, step['currency']
+        step['affordable'] = bool(not cost or (currency not in short and left.get(currency, 0) >= cost))
+        if step['affordable']:
+            left[currency] = left.get(currency, 0) - cost
+        else:
+            short.add(currency)
 
 
 def _finish(plan):

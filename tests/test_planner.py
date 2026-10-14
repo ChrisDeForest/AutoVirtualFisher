@@ -183,6 +183,36 @@ class PlannerTests(unittest.TestCase):
         self.assertEqual(league[0]['cost'], 150)
         self.assertIn('waiting', league[0]['why'])
 
+    def test_a_league_step_waiting_for_hooks_cannot_be_afforded(self):
+        plan = make_plan(state(), ModelContext(DATA), PLAN)
+        league = next(s for s in plan['steps'] if s['kind'] == 'league')
+        self.assertFalse(league['affordable'])
+        switch = next(s for s in plan['steps'] if s['kind'] == 'switch')
+        self.assertTrue(switch['affordable'])
+
+    def test_special_steps_carry_their_exotic_fish_price(self):
+        plan = make_plan(state(), ModelContext(DATA), PLAN)
+        special = next(s for s in plan['steps'] if s['kind'] == 'special' and s['do'])
+        self.assertTrue(special['currency'].endswith(' Fish'), special)
+        self.assertIn(f'({special["cost"]} {special["currency"]})', special['action'])
+        self.assertEqual(special['do'][0]['price'], special['cost'])
+
+    def test_what_is_on_hand_is_spent_down_the_route(self):
+        def step(cost, currency):
+            return {'cost': cost, 'currency': currency, 'do': [{'act': 'buy'}]}
+        steps = [step(10, 'Diamond Fish'), step(0, '$'), step(25, 'Diamond Fish'), step(5, 'Diamond Fish'),
+                 step(50, 'Lava Fish'), step(100, '$'), {'cost': 0, 'currency': '$', 'do': []}]
+        planner._mark_affordable(steps, {'$': 100, 'Diamond Fish': 30, 'Lava Fish': 0})
+        # 10 of 30 Diamond Fish leaves 20: 25 is too many, and the 5 after it waits its turn.
+        self.assertEqual([s.get('affordable') for s in steps], [True, True, False, False, False, True, None])
+
+    def test_an_upgrade_the_game_said_is_maxed_is_never_planned_past_it(self):
+        from tests.plan_fixtures import CHARMS, account_state, synced
+        from src.plan_state import from_run
+        account = {**account_state(), 'maxed': {'Artifact Specialist': 3}}
+        plan = make_plan(from_run(account, synced(), CHARMS), ModelContext(DATA), PLAN)
+        self.assertFalse([s for s in plan['steps'] if s['action'].startswith('Artifact Specialist')])
+
     def test_step_limit_cuts_the_plan_short(self):
         plan = make_plan(state(), ModelContext(DATA), PLAN, limits=(3, 2.0))
         self.assertTrue(plan['cut_short'])

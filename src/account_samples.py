@@ -82,3 +82,20 @@ BOOSTS = '\n'.join(('Active Boosts', 'Global Boost Duration: 3h 3m 30s', 'Curren
 SPECIAL = '\n'.join((
     'Special Shop', 'Use /buy <upgrade name> to level up your upgrades.', 'Inventory: 49', 'Fish Ovens (2/20)',
     'Cook the fish you sellfor a 5% increase in selling price.', 'More upgrades unlocked at level 100.'))
+# /shop special from level 100, both pages, as the user copied them on 2026-10-14 (Discord copy text: emoji as
+# :name:, the price buttons left out). Page 2's last line names the next unlock.
+SPECIAL_INVENTORY = 'Inventory: 24 :lava_fish:, and 6 :diamond_fish:.'
+SPECIAL_PAGE_1 = '\n'.join((
+    'Special Shop', 'Use /buy <upgrade name> to level up your upgrades.', SPECIAL_INVENTORY,
+    'Fish Ovens (3/20)', 'Cook the fish you sell for a 5% increase in selling price.',
+    'Bait Lover (2/4)', 'Increase effectiveness of bait by 15%.',
+    'Aquatic Expert (0/4)', 'Catch 5% more fish.',
+    'Worker Extender (0/4)', 'Workers work for 10% longer.',
+    'Ultimate Salesman (0/4)', 'Sell fish for 15% more.',
+    'Page 1/2'))
+SPECIAL_PAGE_2 = '\n'.join((
+    'Special Shop', 'Use /buy <upgrade name> to level up your upgrades.', SPECIAL_INVENTORY,
+    'Highly Experienced (0/4)', 'Increase XP gain by 15%.',
+    'Boost Booster (1/4)', 'Increases effectiveness of temporary boosts.',
+    'More upgrades unlocked at level 250.',
+    'Page 2/2'))

@@ -71,6 +71,8 @@ REFRESH_GRACE = 3.0
 FRESH_READ = 0.75
 # A send time; OCR can lose its AM/PM ('Virtual Fisher 4:15').
 SENT = re.compile(r'(\d{1,2}):(\d{2})(?:\s*([AP])M)?', re.I)
+# A Sell click's reply: the catch edited to say it was sold.
+SOLD = re.compile(r'\bsold\b', re.I)
 
 
 def _bottom(messages):
@@ -449,6 +451,11 @@ class DiscordTransport:
                 # An action's reply is the new own message at the bottom, whatever it is (a Sell click edits the
                 # catch in place, which changes the bottom message); the run reads what it says.
                 expected = message['kind'] == self.pending.expected_reply_kind or self.pending.kind == 'act'
+                if self.pending.kind == 'act' and self.pending.arguments[0].get('act') == 'sell' \
+                        and message['kind'] == 'fishing' and not SOLD.search('\n'.join(message['lines'])):
+                    # Clicking Sell restyles the catch's buttons before the game edits it: the catch is not the
+                    # reply until it says what was sold (seen live 2026-10-13: an unclear sell in 1 s).
+                    expected = False
                 if expected and self.pending.kind in PAGE_TWO:
                     # Page 2 replaces page 1 in the same message; only a later page answers the click.
                     page = PAGE.search('\n'.join(message['lines']))

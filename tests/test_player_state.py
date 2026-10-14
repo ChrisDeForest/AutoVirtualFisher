@@ -87,6 +87,11 @@ UNLOCKED AT PRESTIGE 5: Virtual Fisher - 40% more high quality fish.''')
         self.assertEqual(result['prestige']['inferred_prestige_minimum'], 4)
         self.assertNotIn('prestige shop: Azure Fish balance was not found.', result['warnings'])
 
+    def test_a_rod_icon_read_as_a_letter_is_dropped(self):
+        # Live 2026-10-14: "Currently using J Supporter Rod."
+        result = parse_responses(profile='Balance: $1,000.\nCurrently using J Supporter Rod.')
+        self.assertEqual(result['profile']['rod'], 'Supporter Rod')
+
     def test_pet_response_records_no_pet_state_and_average_xp(self):
         result = parse_responses(pet='''Pets are permanent, they are not lost when you prestige. They increase in effectiveness as you level them up.
 

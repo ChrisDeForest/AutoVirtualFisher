@@ -13,14 +13,28 @@ class SpecialShopTests(unittest.TestCase):
         self.assertEqual((parsed['values']['inventory'], parsed['values']['more_at_level']), (49, 100))
         self.assertEqual(parsed['unread'], [])
 
-    def test_a_second_special_shop_page_shows_a_reminder(self):
-        # Only page 1 is read: when the shop grows a page 2 (expected from level 100), the Account box says so.
+    def test_special_shop_both_pages_from_level_100(self):
+        one = PARSERS['shop_special'](sample.SPECIAL_PAGE_1)
+        two = PARSERS['shop_special'](sample.SPECIAL_PAGE_2)
+        self.assertEqual((one['page'], two['page']), ((1, 2), (2, 2)))
+        self.assertEqual(list(one['values']['items']),
+                         ['Fish Ovens', 'Bait Lover', 'Aquatic Expert', 'Worker Extender', 'Ultimate Salesman'])
+        self.assertEqual(two['values']['items'], {'Highly Experienced': {'level': 0, 'max': 4, 'price': None},
+                                                  'Boost Booster': {'level': 1, 'max': 4, 'price': None}})
+        self.assertEqual(two['values']['more_at_level'], 250)
+        self.assertEqual((one['unread'], two['unread']), ([], []))
+
+    def test_an_unread_special_shop_page_two_is_noted(self):
+        # From level 100 the shop has a page 2: until it has been read, the Account box says so.
         from src.automation_web import _account_rows
         parsed = PARSERS['shop_special'](sample.SPECIAL + '\nPage 1/2')
         self.assertEqual(parsed['values']['pages'], 2)
         rows = {label: (text, unread) for label, text, unread in
-                _account_rows({'shop_special': {'values': parsed['values'], 'unread': []}})}
-        self.assertIn('page 2 is not read yet', rows['Special shop'][0])
+                _account_rows({'shop_special': {'values': parsed['values'], 'unread': [], 'pages': {'1': 'x'}}})}
+        self.assertIn('Page 2 is not read yet', rows['Special shop'][0])
+        rows = {label: text for label, text, _ in _account_rows(
+            {'shop_special': {'values': parsed['values'], 'unread': [], 'pages': {'1': 'x', '2': 'y'}}})}
+        self.assertNotIn('Page 2', rows['Special shop'])
         one = PARSERS['shop_special'](sample.SPECIAL)['values']
         rows = {label: text for label, text, _ in _account_rows({'shop_special': {'values': one, 'unread': []}})}
         self.assertNotIn('page 2', rows['Special shop'])

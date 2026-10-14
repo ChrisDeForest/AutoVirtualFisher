@@ -28,6 +28,12 @@ def load_state(path) -> dict:
     return state if isinstance(state.get('sections'), dict) else empty_state()
 
 
+def mark_maxed(state: dict, name: str, level: int) -> dict:
+    """The state with `name` known to stop at `level`: the game answered a buy of the next level with "You already
+    have that upgrade maxed." while the shop still listed a higher max (Artifact Specialist 5/7, 2026-10-14)."""
+    return {**state, 'maxed': {**(state.get('maxed') or {}), name: level}}
+
+
 def save_state(path, state: dict) -> None:
     path = Path(path)
     write_json_atomically(path.parent, path.stem, state)

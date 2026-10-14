@@ -1,4 +1,5 @@
 import unittest
+from dataclasses import replace
 
 from src.actions import Action, AMOUNT_TABS, check, command_line, outcome, reads_after
 
@@ -36,6 +37,8 @@ class OutcomeTests(unittest.TestCase):
         self.assertEqual(outcome(better, 'You cant afford that upgrade.')[0], 'failed')
         self.assertEqual(outcome(better, 'You just bought Better Fish level 19!')[0], 'unclear')
         self.assertEqual(outcome(better, 'something else')[0], 'unclear')
+        # Seen live 2026-10-14 (Artifact Specialist 6, bought by hand earlier).
+        self.assertEqual(outcome(better, 'x You already have that upgrade maxed.'), ('failed', 'already maxed'))
 
     def test_switches(self):
         self.assertEqual(outcome(Action('rod', 'Lava Rod'), 'v You switched to the Lava Rod.'),
@@ -96,3 +99,10 @@ class ReadsAndChecksTests(unittest.TestCase):
         self.assertEqual(check(Action('rod', 'Steel Rod'), {}, {'rod': 'Steel Rod'}), 'already using Steel Rod')
         self.assertEqual(check(Action('pet', 'Zebrafish'), sections, profile), 'already using Zebrafish')
         self.assertIsNone(check(Action('sell'), sections, profile))
+
+    def test_a_league_buy_needs_the_hooks(self):
+        sections = {'shop_league': {'values': {'hooks': 11, 'items': {'Super Crates': {'level': 2}}}}}
+        crates = Action('buy', 'Super Crates', level=3, shop='league', price=150)
+        self.assertEqual(check(crates, sections, {}), 'not enough Hooks (11 of 150)')
+        self.assertIsNone(check(replace(crates, price=10), sections, {}))
+        self.assertIsNone(check(crates, {}, {}))                    # Hooks not read: left to the game's reply

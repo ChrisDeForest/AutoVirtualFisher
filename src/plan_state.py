@@ -24,6 +24,7 @@ class PlanState:
     hooks: int = 0
     league_prices: dict = field(default_factory=dict)
     bait_stock: dict = field(default_factory=dict)   # bait on hand by name, from the last /bait read
+    maxed: dict = field(default_factory=dict)        # the level the game said an upgrade is maxed at, by name
 
     @property
     def level(self) -> int:
@@ -85,7 +86,9 @@ def from_run(account_state, synced, charms_text, since=None):
         hooks=int(league.get('hooks') or 0),
         # a maxed league upgrade is left out; one whose price was not read stays in with None
         league_prices={name: item.get('price') for name, item in (league.get('items') or {}).items()
-                       if item.get('max') is None or (item.get('level') or 0) < item['max']},
+                       if (item.get('max') is None or (item.get('level') or 0) < item['max'])
+                       and (item.get('level') or 0) < (account_state or {}).get('maxed', {}).get(name, float('inf'))},
+        maxed=dict((account_state or {}).get('maxed') or {}),
         bait_stock={name: int(count) for name, count in (_values(account_state, 'bait').get('owned') or {}).items()
                     if count})
     if since:

@@ -293,6 +293,21 @@ class DiscordTests(unittest.TestCase):
         replies = self.transport.poll() or self.transport.poll()
         self.assertEqual([(r.correlation, r.text) for r in replies], [('b1', 'v You switched to the Lava Rod.')])
 
+    def test_a_sell_is_answered_only_once_the_catch_says_it_was_sold(self):
+        # Live 2026-10-14: the Sell click restyled the catch's buttons, and that catch was taken as the reply.
+        from src.actions import Action
+        self.intent = ActionIntent('b1', 'act', self.transport.context_id, self.now.isoformat(), 'action',
+                                   arguments=(Action('sell').to_dict(),))
+        self.driver.dispatch_action = lambda line, amount, cancelled, before=None: None
+        self.send()
+        self.driver.lines = self.driver.lines + fish(3, 3, 30)
+        self.assertEqual(self.transport.poll() + self.transport.poll(), [])
+        self.driver.lines = self.driver.lines[:-len(fish(3, 3, 30))] + [
+            'epicmouse used', 'sell', 'Virtual Fisher 6:04 PM', 'v You sold your entire inventory for $56,636.']
+        replies = self.transport.poll() or self.transport.poll()
+        self.assertEqual([r.correlation for r in replies], ['b1'])
+        self.assertIn('You sold', replies[0].text)
+
     def test_a_cooldown_reply_answers_the_fish_at_once(self):
         # Live, Oct 13 (on screen as read): /fish reached the game before its cooldown ended. The reply answers it.
         self.send()

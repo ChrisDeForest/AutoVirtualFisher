@@ -13,6 +13,8 @@ class Read:
     command: str
     reply: str
     pages: int = 1
+    # Page 2 only when page 1 says so ("Page 1/2"); otherwise a read of two pages always has one.
+    paged_when_listed: bool = False
 
 
 ACCOUNT_READS = {
@@ -24,8 +26,8 @@ ACCOUNT_READS = {
     'refresh_pets': Read('/pet', 'pet'),
     'refresh_prestige_shop': Read('/prestige shop', 'prestige_shop'),
     'refresh_league': Read('/shop league', 'shop_league', 2),
-    # One page below level 100; later levels may add a page 2 (not seen yet).
-    'refresh_special': Read('/shop special', 'shop_special'),
+    # One page below level 100, two from there (seen 2026-10-13, level 100+).
+    'refresh_special': Read('/shop special', 'shop_special', 2, paged_when_listed=True),
     'refresh_boosts': Read('/boosts', 'boosts'),
 }
 # Page-2 intent -> its read.

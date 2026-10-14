@@ -267,6 +267,9 @@ def parse_responses(profile='', buffs='', prestige_shop='', pet='', quests=''):
                         if field == 'pet' and re.fullmatch(r'Level \d+\)?', value, re.I):
                             # Observed OCR: "Pet: (Level 51)", the emoji and name lost. The pet stays unknown.
                             continue
+                        if field == 'rod':
+                            # The rod's icon may read as one stray letter ("J Supporter Rod", live 2026-10-14).
+                            value = re.sub(r'^[A-Za-z]\s+(?=[A-Z][a-z]+ Rod\.?$)', '', value)
                         if field == 'biome':
                             value = known_biome(value)
                         if field == 'pet':

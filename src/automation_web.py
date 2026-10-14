@@ -79,6 +79,7 @@ STYLE = """<style>
 .model td.bad { color:#ffda8b; } .model td.good { color:var(--sea); }
 .model .why { display:block; color:var(--muted); font-size:13px; }
 .queue li { display:flex; align-items:center; gap:10px; } .queue form { margin:0; }
+.model .cannot { color:var(--muted); font-size:13px; white-space:nowrap; }
 .model .where { display:block; color:var(--muted); font-size:12px; font-family:ui-monospace,Consolas,monospace; }
 .visually-hidden { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
 @media(max-width:900px) { .finds { grid-template-columns:minmax(0,1fr); } }
@@ -409,9 +410,8 @@ def _account_rows(sections):
     if values:
         text = (_levels(values['items']) or 'nothing listed') + (
             f'; more at level {values["more_at_level"]}' if values.get('more_at_level') else '')
-        if (values.get('pages') or 1) > 1:
-            text += ('. Reminder: page 2 is not read yet. Open /shop special page 2 in Discord and ask Claude to '
-                     'add it.')
+        if (values.get('pages') or 1) > 1 and '2' not in (sections['shop_special'].get('pages') or {}):
+            text += '. Page 2 is not read yet; it is read with the next /shop special.'
     rows.append(('Special shop', text if values else None, unread))
     values, unread = section('boosts')
     rows.append(('Boosts', (f'global {values["global_duration"]}' if values['global_duration'] else 'none')
@@ -552,9 +552,15 @@ def render_plan_tab(view) -> str:
             last = item['phase_label']
         sell = f' · sell ${item["sell"]:,.0f}' if item.get('sell') else ''
         where = f'<span class="where">{escape(item["where"])}</span>' if item.get('where') else ''
-        # Do it queues the step's actions (part 4); a step with nothing to send has no button.
-        do = _button('queue', 'Do it', secondary=True, extra={'label': item['action'], 'actions': json.dumps(item['do'])}
-                     ) if item.get('do') else ''
+        # Do it queues the step's actions (part 4); a step with nothing to send has no button, and one that what is
+        # on hand cannot pay for yet (after the steps above it) says so instead.
+        if item.get('do') and item.get('affordable') is False:
+            do = '<span class="cannot">Cannot afford</span>'
+        elif item.get('do'):
+            do = _button('queue', 'Do it', secondary=True,
+                         extra={'label': item['action'], 'actions': json.dumps(item['do'])})
+        else:
+            do = ''
         rows.append(f'<tr><td>{escape(item["action"])}{where}</td><td>{escape(_cost(item) + sell)}</td>'
                     f'<td>{escape(_trips(item.get("trips")))}</td><td>{escape(_when(item["seconds"]))}</td>'
                     f'<td>{escape(item.get("why") or "")}</td><td>{do}</td></tr>')

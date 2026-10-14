@@ -12,7 +12,8 @@ AMOUNT_TABS = 3
 SHOP_READ = {'upgrades': 'refresh_upgrades', 'special': 'refresh_special', 'league': 'refresh_league',
              'rods': 'refresh_rod', 'boats': 'refresh_boats', 'bait': 'refresh_bait'}
 SWITCH_READ = {'rod': 'refresh_rod', 'biome': 'refresh_biome', 'bait': 'refresh_bait', 'pet': 'refresh_pets'}
-# Shops paid in money: the balance is checked before buying. League (Hooks) and special (exotic fish) are not.
+# Shops paid in money: the balance is checked before buying. League buys check the Hooks from /shop league;
+# special (exotic fish) buys are left to the game's reply.
 MONEY_SHOPS = ('upgrades', 'rods', 'boats', 'bait')
 
 
@@ -55,6 +56,8 @@ def outcome(action, text):
     text = re.sub(r'\s+', ' ', text.replace('’', "'")).strip()
     if re.search(r"can'?t afford", text, re.I):
         return 'failed', "can't afford it"
+    if re.search(r'already have that upgrade maxed', text, re.I):
+        return 'failed', 'already maxed'
     if re.search(r"don'?t own that rod", text, re.I):
         return 'failed', 'the rod is not owned'
     if re.search(r'Invalid biome name', text, re.I):
@@ -117,6 +120,9 @@ def check(action, sections, profile):
         level = ((_values(sections, shop).get('items') or {}).get(action.name) or {}).get('level') if shop else None
         if action.level and level is not None and level >= action.level:
             return f'already level {level}'
+        hooks = _values(sections, 'shop_league').get('hooks')
+        if action.shop == 'league' and action.price and hooks is not None and hooks < action.price:
+            return f'not enough Hooks ({hooks:,} of {action.price:,.0f})'
         balance = (profile or {}).get('balance')
         if action.shop in MONEY_SHOPS and action.price and balance is not None and balance < action.price:
             return f'not enough money (${balance:,.0f} of ${action.price:,.0f})'

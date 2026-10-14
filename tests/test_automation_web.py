@@ -331,6 +331,17 @@ class AutomationWebTests(unittest.TestCase):
         self.assertIn('✗ Bait Helper 2: can&#x27;t afford it', html)
         self.assertIn('<h2>Queue</h2>', render_plan_tab({'plan': view['plan']}))   # shown empty too
 
+    def test_a_step_that_cannot_be_paid_for_yet_has_no_do_it(self):
+        from src.automation_web import render_plan_tab
+        action = {'act': 'buy', 'name': 'Bait Lover', 'level': 3, 'shop': 'special', 'price': 25}
+        step = {'phase_label': '1st XP grind', 'kind': 'special', 'action': 'Bait Lover 3 (25 Diamond Fish)',
+                'cost': 25, 'currency': 'Diamond Fish', 'sell': 0, 'trips': 0, 'seconds': 0, 'why': '',
+                'where': '/shop special', 'do': [action], 'affordable': False}
+        html = render_plan_tab({'plan': {'error': None, 'cut_short': False, 'assumptions': [], 'next': step,
+                                         'steps': [step], 'prestige': {'reached': False, 'missing': []}}})
+        self.assertIn('Cannot afford', html)
+        self.assertNotIn('value="queue"', html)
+
     def test_plan_tab_trips_column_and_now(self):
         from src.automation_web import render_plan_tab
         step = {'phase_label': '1st XP grind', 'kind': 'switch', 'action': 'Switch: rod Supporter Rod', 'cost': 0,

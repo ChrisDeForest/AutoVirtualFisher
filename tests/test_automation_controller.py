@@ -357,6 +357,51 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual([(entry['result'], entry['note']) for entry in log][:2],
                          [('done', 'bought Better Fish level 9'), ('failed', "can't afford it")])
 
+    def test_an_upgrade_the_game_says_is_maxed_is_remembered(self):
+        # Live 2026-10-14: Artifact Specialist 6 with the shop showing 5/7.
+        from src.actions import Action
+        self.queue_after_first_fish(replace(CONFIG, max_trips=2))
+        self.sim.script = {len(self.sim.sent): 'act_maxed'}
+        self.controller.queue_step('Artifact Specialist 6', [Action(
+            'buy', 'Artifact Specialist', level=6, shop='upgrades').to_dict()])
+        self.run_for(60)
+        self.assertEqual(self.controller.status()['action_log'][0]['note'], 'already maxed')
+        self.assertEqual(self.controller.account['maxed'], {'Artifact Specialist': 5})
+
+    def test_a_sell_whose_reply_was_not_read_still_goes_on_to_its_buy(self):
+        # Live 2026-10-14: Better Chests 4's sell went through but its reply was unclear, and the buy was dropped.
+        from src.actions import Action
+        self.queue_after_first_fish(replace(CONFIG, max_trips=3))
+        self.sim.script = {len(self.sim.sent): 'act_unclear'}
+        self.controller.queue_step('Better Chests 4', [Action('sell').to_dict(), Action(
+            'buy', 'Better Chests', level=4, shop='upgrades').to_dict()])
+        self.run_for(80)
+        acts = [(index, intent.arguments[0]['act']) for index, (_, intent) in enumerate(self.sim.sent)
+                if intent.kind == 'act']
+        self.assertEqual([act for _, act in acts], ['sell', 'buy'])
+        # /profile is read again between them, so the buy is checked against the new balance.
+        self.assertIn('refresh_profile', self.kinds()[acts[0][0]:acts[1][0]])
+        self.assertEqual([entry['result'] for entry in self.controller.status()['action_log']], ['done', 'failed'])
+
+    def test_special_shop_page_two_is_read_only_when_page_one_lists_it(self):
+        from unittest.mock import patch
+        from src.account_samples import SPECIAL, SPECIAL_PAGE_1
+        from src.automation_transport import SIM_ACCOUNT
+        reads = ('refresh_profile', 'refresh_buffs', 'refresh_special', 'refresh_special_page2', 'fish')
+        config = replace(CONFIG, max_trips=1, resync_trips=100, capabilities=reads)
+        self.make(config=config).start()
+        self.run_for(40)
+        self.assertEqual(self.kinds(), ['refresh_profile', 'refresh_buffs', 'refresh_special', 'fish'])
+        with patch.dict(SIM_ACCOUNT, {'refresh_special': SPECIAL_PAGE_1}):
+            self.setUp()
+            self.make(config=config).start()
+            self.run_for(40)
+        self.assertEqual(self.kinds(), ['refresh_profile', 'refresh_buffs', 'refresh_special',
+                                        'refresh_special_page2', 'fish'])
+        items = self.controller.status()['account']['sections']['shop_special']['values']['items']
+        self.assertEqual(items['Highly Experienced']['level'], 0)          # from page 2
+        self.assertEqual(items['Ultimate Salesman']['level'], 0)           # from page 1
+
     def test_unqueue_and_a_stale_step_is_skipped(self):
         from src.actions import Action
         self.queue_after_first_fish(replace(CONFIG, max_trips=3))

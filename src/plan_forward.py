@@ -14,6 +14,8 @@ def buy_special(state, route, prices):
     for currency, order in route['special_orders'].items():
         for name, target in order:
             item = prices['special'][name]
+            # A level the game said is maxed ends the item early; the order moves on past it.
+            target = min(target, state.maxed.get(name, target))
             while state.level >= item['unlock'] and state.account.upgrades.get(name, 0) < target:
                 level = state.account.upgrades.get(name, 0)
                 if level >= len(item['prices']) or state.exotic[currency] < item['prices'][level]:
