@@ -115,9 +115,14 @@ class ChooseSetupTests(unittest.TestCase):
         s.cash = 500 * 250 * (1 - 0.05 * s.account.upgrades.get('Bait Efficiency', 0))   # 500 Magic Bait
         self.assertIn('Magic Bait', bait_options(s, {'money': 1}, PLAN['route'], PLAN['prices'], 'Ocean'))
         river = bait_options(s, {'money': 1}, PLAN['route'], PLAN['prices'], 'River')
-        self.assertIn('Magic Bait', river)                  # River batches are 200
+        self.assertIn('Magic Bait', river)
         s.cash -= 1
         self.assertNotIn('Magic Bait', bait_options(s, {'money': 1}, PLAN['route'], PLAN['prices'], 'Ocean'))
+        # 500 at a time in every biome (the user, 2026-10-14), River included.
+        self.assertNotIn('Magic Bait', bait_options(s, {'money': 1}, PLAN['route'], PLAN['prices'], 'River'))
+        from src.plan_setup import bait_batch
+        self.assertEqual({biome: bait_batch(PLAN['route'], biome) for biome in ('River', 'Volcanic', 'Ocean')},
+                         {'River': 500, 'Volcanic': 500, 'Ocean': 500})
         setup, _ = choose_setup(state(level=90, balance=0, fish_value=0), {'money': 1e6}, 'xp_grind_1', ctx(),
                                 PLAN['route'], PLAN['prices'])
         self.assertIsNone(setup.bait)

@@ -23,7 +23,7 @@
            "charm": "Artifact Magnet", "xp": "Wise Bait", "xp_after_rod": "Infinity Rod",
            "never": ["Magnet", "Support Bait"],
            "never_why": "the guide: never Magnet; Support Bait only for worker manipulation from P15",
-           "batch": {"River": 200, "default": 500}},
+           "batch": {"default": 500}},
   "pet_order": {"money": ["Puffer", "Zebrafish", "Tuna", "Dolphin", "Axolotl"],
                 "xp": ["Dolphin", "Puffer", "Tuna", "Zebrafish", "Axolotl"],
                 "charms": ["Axolotl", "Dolphin", "Tuna", "Puffer", "Zebrafish"]},

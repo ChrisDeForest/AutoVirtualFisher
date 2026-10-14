@@ -106,7 +106,7 @@ def bait_batch(route, biome):
 
 def bait_options(state, needs, route, prices, biome, affordable=True):
     """The baits the model may choose from: none, and every bait unlocked at this level whose batch for the biome
-    (the guide: 200 at a time in River, 500 elsewhere) the money on hand can pay for. Bait on hand is allowed, and so
+    (500 at a time everywhere: the user, 2026-10-14; the guide said 200 in River) the money on hand can pay for. Bait on hand is allowed, and so
     is the bait in use: it is restocked from what each trip makes, so a purchase that empties the wallet does not take
     it away. The
     guide's exclusions stay: never Magnet or Support Bait, and Wise Bait only for an XP goal once the Infinity Rod is
