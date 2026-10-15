@@ -43,7 +43,7 @@ ACCOUNT_MARKERS = (
     ('bait', re.compile(SLASH + r'?\s*bait\s*<bait type>', re.I)),
     ('biome', re.compile(r'Current Biome:', re.I)),
     ('shop_boats', re.compile(r'All boats are permanent', re.I)),
-    ('shop_league', re.compile(r'League Shop$', re.I)),
+    ('shop_league', re.compile(r'League Shop$|Hooks are obtained through weekly fishing leagues\.', re.I)),
     ('shop_special', re.compile(r'Special Shop$', re.I)),
     ('boosts', re.compile(r'Active Boosts$', re.I)),
 )

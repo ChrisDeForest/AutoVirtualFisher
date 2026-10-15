@@ -13,7 +13,7 @@ DATED_TIME = re.compile(r'(?:Today|Yesterday) at\s+\d{1,2}:\d{2}\s*[AP]M', re.I)
 # A message header: the bot name, its APP tag as OCR reads it ("APP", "AP", "VAPP", "V APP"), and/or a time.
 # Rejects look-alikes such as the DM title "Virtual Fisher [fish" or the profile panel's "Virtual Fisher#7036".
 # The AM/PM may go unread ("Virtual Fisher 1:49", live with Discord zoomed in); the reply's sent time is then unknown.
-MESSAGE_HEADER = re.compile(r'Virtual Fisher(?:\s+[V✓]?\s*A?PP?)?'
+MESSAGE_HEADER = re.compile(r"Virtual Fisher(?:\s+(?:[V✓]?\s*A?PP?|@APPJ?|'Ige))?"
                             r'(?:(?:\s*[—–-]\s*|\s+)(?:(?:Today|Yesterday) at\s+)?\d{1,2}:\d{2}(?:\s*[AP]M)?)?', re.I)
 # Any other author's header: a name, an optional APP tag, and a time. Keeps other bots' and players' messages
 # apart from Virtual Fisher's instead of letting them run into the message above.

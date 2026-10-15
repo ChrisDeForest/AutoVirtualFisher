@@ -840,3 +840,33 @@ class PriceColumnTests(unittest.TestCase):
         texts = [b['text'] for b in chat_column(boxes)[0]]
         self.assertEqual(texts, ['League Shop', 'Balance: 11', 'Pet Helper (0/5)', '50', 'Bait Helper (1/5)', '100',
                                  'Super Crates (2/5)', "t.' 150"])
+
+
+class GarbledShopHeaderTests(unittest.TestCase):
+    def test_observed_bot_badge_misread_preserves_invocation_and_time(self):
+        from src.live_capture import capture_frame
+        lines = ['Virtual Fisher [fish', 'epicmouse used', 'shop special',
+                 "Virtual Fisher 'Ige", '10:34 AM', 'Special Shop', 'Fish Ovens (6/20)']
+        [message] = capture_frame(lines)['messages']
+        self.assertEqual((message['kind'], message['invoked_by'], message['sent']),
+                         ('shop_special', 'epicmouse', '10:34 AM'))
+        self.assertEqual(capture_frame(['Virtual Fisher [fish', 'Special Shop'])['messages'], [])
+
+    def test_league_body_identifies_reply_when_title_is_garbled(self):
+        from src.live_capture import capture_frame
+        lines = ['epicmouse used', 'shop league', 'Virtual Fisher 10:34 AM', 'League •nop',
+                 'Hooks are obtained through weekly fishing leagues. In addition you can earn them through',
+                 'special quests each day.', 'Balance: 84', 'Super Crates (2/5)', '150']
+        [message] = capture_frame(lines)['messages']
+        self.assertEqual(message['kind'], 'shop_league')
+
+
+class AppBadgeRegressionTests(unittest.TestCase):
+    def test_observed_wrapped_app_badge_preserves_bot_and_time(self):
+        from src.live_capture import capture_frame
+        for badge in ('@APPJ', '@APP'):
+            with self.subTest(badge=badge):
+                [message] = capture_frame(['epicmouse used', 'prestige shop',
+                    f'Virtual Fisher {badge} 10:34 AM', 'Prestige Shop', 'Azure Fish: 4'])['messages']
+                self.assertEqual((message['kind'], message['invoked_by'], message['sent']),
+                                 ('prestige_shop', 'epicmouse', '10:34 AM'))

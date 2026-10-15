@@ -45,7 +45,7 @@ def _page(lines):
 def _known(raw, names):
     """A known name for an OCR'd item, ignoring case and an emoji glyph read before it."""
     raw = re.sub(r'^\W+', '', raw).strip().casefold()
-    for name in names:
+    for name in sorted(names, key=len, reverse=True):
         key = name.casefold()
         if raw == key or raw.endswith(' ' + key):
             return name
@@ -212,6 +212,11 @@ def parse_shop_boats(text):
         if not match:
             continue
         name = _known(match[1], BOATS)
+        if name is None:
+            # Use the same unique close-name rule as rods/bait; never repair prices or ownership text.
+            from .player_state import _known as match_item_name
+            candidate = match_item_name(match[1], BOATS)
+            name = candidate if candidate in BOATS else None
         if name is None:
             unread.append(line)
             continue

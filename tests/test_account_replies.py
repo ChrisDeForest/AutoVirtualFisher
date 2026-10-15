@@ -214,3 +214,20 @@ class KindTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class BoatOcrRegressionTests(unittest.TestCase):
+    def test_luxury_yacht_misread_keeps_owned_status(self):
+        parsed = PARSERS['shop_boats']('All boats are permanent\nLuxury hcht - OWNED')
+        self.assertEqual(parsed['values']['items'], {'Luxury Yacht': {'owned': True, 'price': None}})
+        self.assertEqual(parsed['unread'], [])
+
+    def test_unknown_boat_is_still_unread(self):
+        parsed = PARSERS['shop_boats']('All boats are permanent\nMystery Vessel - OWNED')
+        self.assertEqual(parsed['values']['items'], {})
+        self.assertIn('Mystery Vessel - OWNED', parsed['unread'])
+
+    def test_exact_yacht_and_luxury_yacht_remain_distinct(self):
+        parsed = PARSERS['shop_boats']('Yacht - $20,000,000\nLuxury Yacht - OWNED')
+        self.assertFalse(parsed['values']['items']['Yacht']['owned'])
+        self.assertTrue(parsed['values']['items']['Luxury Yacht']['owned'])
