@@ -10,6 +10,18 @@ Before every typed command, the sender locates and retargets the empty message
 box without moving the physical pointer or activating Discord. Server channels
 are not supported yet. Do not manually send VF commands during an automated run.
 
+Keyboard commands use literal window messages and modifier state scoped to Discord's
+input thread. They do not release or re-press your desktop's Ctrl, Shift, Alt, or Win
+keys. This also prevents a held Ctrl from swallowing the slash in `/fish`.
+After the empty command box has been located, AHK can clear leftover text there
+before the next command, including text no longer tracked as a bot draft. It checks
+that the window/renderer geometry still matches and rereads the empty placeholder
+before typing. With no verified box location, or after a layout/geometry change,
+clear the box once so it can be located again. Clearing never presses Enter.
+If a keyboard operation hangs, the bridge terminates its worker and runs a guarded
+reset of Discord's local modifier state; it never repeats the command. If that
+reset fails, restarting that driver is blocked with instructions to restart Discord.
+
 Install the official **AutoHotkey 2.0.30 x64** interpreter for **all users**
 (Windows may request administrator approval for installation):
 

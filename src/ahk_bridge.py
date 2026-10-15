@@ -56,6 +56,9 @@ class AhkBridge:
         self._responses = queue.Queue()
         self._stderr = deque(maxlen=20)
         self._next_id = 0
+        self._inflight_target = None
+        self._cleanup_error = ''
+        self._cleanup_pending = False
 
     def _command(self):
         return [str(self.runtime.executable), '/ErrorStdOut',
@@ -64,6 +67,9 @@ class AhkBridge:
     def start(self) -> None:
         with self._lock:
             with self._state_lock:
+                if self._cleanup_pending or self._cleanup_error:
+                    raise AhkBridgeError(self._cleanup_error or 'Discord keyboard cleanup is still running.',
+                                         'not_started', 'cleanup')
                 if self._process is not None:
                     if self._process.poll() is None and not self._cancelled.is_set():
                         return
@@ -129,6 +135,7 @@ class AhkBridge:
             x,y = point or (0,0)
             body = base64.b64encode(payload.encode('utf-8')).decode('ascii')
             line = f'1\t{request_id}\t{operation}\t{window}\t{renderer}\t{x}\t{y}\t{body}\n'
+            self._inflight_target = target if operation in ('text', 'key', 'select_all') else None
             try:
                 posted = True
                 process.stdin.write(line)
@@ -156,17 +163,27 @@ class AhkBridge:
                     raise AhkBridgeError('AHK worker exited before acknowledgement. ' + detail)
                 reply = parse_reply(response, request_id)
                 if reply.status == 'error':
+                    if reply.input_state == 'not_started':
+                        with self._state_lock:
+                            self._inflight_target = None
                     raise AhkBridgeError(reply.message, reply.input_state, reply.code)
+                with self._state_lock:
+                    self._inflight_target = None
                 return reply
         except AhkBridgeError as error:
             if error.code in ('ipc','protocol') or error.input_state == 'unknown':
                 self.cancel_input()
+                if self._cleanup_error:
+                    raise AhkBridgeError(f'{error} {self._cleanup_error}', error.input_state, error.code) from error
             raise
 
     def cancel_input(self) -> None:
         self._cancelled.set()
         with self._state_lock:
             process, self._process = self._process, None
+            target, self._inflight_target = self._inflight_target, None
+            if target is not None:
+                self._cleanup_pending = True
         if process is not None:
             if process.poll() is None:
                 process.terminate()
@@ -180,6 +197,29 @@ class AhkBridge:
                     stream.close()
                 except (OSError, ValueError):
                     pass
+            if target is not None:
+                try:
+                    self._reset_target(target)
+                finally:
+                    with self._state_lock:
+                        self._cleanup_pending = False
+
+    def _reset_target(self, target):
+        """No key events: clear target-local modifiers after interrupted keyboard work.
+
+        This fresh process uses the same Discord ownership guard and never replays input.
+        It has its own deadline because a killed worker cannot run its finally block.
+        """
+        line = f'1\t1\treset\t{target.window}\t{target.renderer}\t0\t0\t\n'
+        try:
+            result = subprocess.run(self._command(), input=line, capture_output=True, text=True,
+                                    encoding='utf-8', timeout=.5, **hidden_process_options())
+            reply = parse_reply(result.stdout, 1)
+            if result.returncode or reply.status != 'ok' or reply.code != 'reset':
+                raise ValueError('Target keyboard reset was not acknowledged')
+            self._cleanup_error = ''
+        except (OSError, ValueError, subprocess.TimeoutExpired, AhkBridgeError):
+            self._cleanup_error = 'Could not reset Discord keyboard state; restart Discord before resuming.'
 
     def close(self) -> None:
         # EOF is an explicit shutdown signal; it needs no request lock or queue.

@@ -96,3 +96,17 @@ class BridgeTests(unittest.TestCase):
         for thread in threads: thread.join(2)
         self.assertEqual(errors,[])
         self.assertEqual(sorted(ids),list(range(2,10)))
+
+
+    def test_failed_keyboard_cleanup_blocks_restart(self):
+        self.bridge._cleanup_error = 'Could not reset Discord keyboard state; restart Discord before resuming.'
+        with self.assertRaises(self.m.AhkBridgeError) as caught:
+            self.bridge.start()
+        self.assertEqual(caught.exception.code,'cleanup')
+        self.assertIsNone(self.bridge._process)
+
+    def test_cleanup_in_progress_blocks_restart(self):
+        self.bridge._cleanup_pending = True
+        with self.assertRaises(self.m.AhkBridgeError):
+            self.bridge.start()
+        self.assertIsNone(self.bridge._process)

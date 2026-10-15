@@ -1,8 +1,8 @@
 import importlib
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from src.ahk_bridge import AhkTarget, AhkBridgeError
-from src.automation_models import TransportError
+from src.automation_models import TransportError, NotDispatched
 
 class AdapterTests(unittest.TestCase):
     def setUp(self):
@@ -91,3 +91,61 @@ class AdapterTests(unittest.TestCase):
         self.d._target_window=lambda:(99,'Other DM - Discord')
         with self.assertRaises(TransportError): self.d._text('draft',lambda:False)
         self.d.bridge.request.assert_not_called()
+
+
+class ComposerRecoveryTests(unittest.TestCase):
+    def driver(self, frames):
+        from test_discord_input import NativeDispatchTests
+        from src.ahk_discord_input import AhkDiscordDriver
+        driver = NativeDispatchTests().driver(frames)
+        driver.__class__ = AhkDiscordDriver
+        driver._geometry = lambda: ('same window/client/renderer',)
+        driver._composer_anchor = (driver._geometry(), (660,810))
+        return driver
+
+    @patch('src.discord_input.time.sleep')
+    def test_unowned_leftover_is_cleared_then_read_command_is_typed(self, sleep):
+        from test_discord_input import box
+        from test_discord_input import NativeDispatchTests as Fixture
+        driver = self.driver([{'boxes':[box('fish',800)]}, Fixture.EMPTY, {'boxes':[box('/profile',600),box('Virtual Fisher',620)]}, Fixture.EMPTY])
+        driver.dispatch('/profile',lambda:False)
+        self.assertEqual(driver.events[:2], [('click',(660,810)),('clear',None)])
+        self.assertIn(('text','/profile'),driver.events)
+
+    @patch('src.discord_input.time.sleep')
+    def test_unowned_leftover_is_cleared_before_action_options(self, sleep):
+        from test_discord_input import box
+        from test_discord_input import NativeDispatchTests as Fixture
+        driver = self.driver([{'boxes':[box('leftover',800)]}, Fixture.EMPTY,
+                              {'boxes':[box('/buy luxury yacht',800)]}, Fixture.EMPTY])
+        driver.dispatch_action('/buy luxury yacht',None,lambda:False)
+        self.assertEqual(driver.events[:2], [('click',(660,810)),('clear',None)])
+        self.assertIn(('text','/buy luxury yacht'),driver.events)
+
+    def test_failed_clear_never_types_or_submits(self):
+        from test_discord_input import box
+        driver = self.driver([{'boxes':[box('leftover',800)]}])
+        with self.assertRaises(NotDispatched):
+            driver.dispatch('/profile',lambda:False)
+        self.assertEqual(driver.events,[('click',(660,810)),('clear',None)])
+
+    def test_stale_or_unknown_composer_location_is_never_used(self):
+        from test_discord_input import box
+        for anchor in (None, (('old geometry',),(660,810))):
+            driver = self.driver([{'boxes':[box('leftover',800)]}])
+            driver._composer_anchor = anchor
+            with self.assertRaises(NotDispatched):
+                driver.dispatch('/profile',lambda:False)
+            self.assertEqual(driver.events,[])
+
+    def test_verified_empty_frame_remembers_composer_and_geometry(self):
+        from test_discord_input import box
+        from src.ahk_discord_input import AhkDiscordDriver
+        from unittest.mock import patch
+        driver = AhkDiscordDriver.__new__(AhkDiscordDriver)
+        driver.channel = 'Virtual Fisher'
+        driver._geometry = lambda: ('fresh geometry',)
+        frame = {'boxes':[box('Message @Virtual Fisher',800)], '_ahk_geometry':driver._geometry()}
+        with patch('src.discord_input.WindowsDiscordDriver._frame',return_value=frame):
+            driver._frame(lambda:False)
+        self.assertEqual(driver._composer_anchor,(driver._geometry(),(660,810)))

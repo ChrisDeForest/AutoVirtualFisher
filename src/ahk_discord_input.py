@@ -6,6 +6,7 @@ from .ahk_runtime import AhkRuntime
 from .ocr_journal import ocr_scope
 from .automation_models import InputUnavailable, TransportError
 from .discord_input import WindowsDiscordDriver
+from .automation_discord import composer_click
 
 class AhkDiscordDriver(WindowsDiscordDriver):
     requires_foreground = False
@@ -14,6 +15,7 @@ class AhkDiscordDriver(WindowsDiscordDriver):
         super().__init__(window, channel)
         self.bridge = bridge if bridge is not None else AhkBridge(runtime)
         self._frame_geometry = None
+        self._composer_anchor = None
         self.ocr_journal = None
         callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
         self._callback_type = callback_type
@@ -99,7 +101,21 @@ class AhkDiscordDriver(WindowsDiscordDriver):
         if geometry is None or geometry != self._geometry():
             raise TransportError('Discord geometry changed; obtain a fresh capture before input.')
         self._frame_geometry = geometry
+        point = composer_click(result.get('original_boxes', result.get('boxes', [])), self.channel)
+        if point is not None:
+            self._composer_anchor = (geometry, point)
         return result
+
+    def _recover_composer(self, frame, cancelled):
+        # The user authorizes clearing leftovers, including drafts no longer tracked as ours.
+        # Use only a location previously verified in this same channel/window/renderer geometry.
+        anchor = getattr(self, '_composer_anchor', None)
+        if anchor is not None and anchor[0] == self._geometry():
+            self.draft_composer = anchor[1]
+            return self._clear_draft(cancelled)
+        if getattr(self, 'draft_composer', None) is not None:
+            self.draft_composer = None
+        return super()._recover_composer(frame, cancelled)
 
     def _client_point(self,point: tuple[float,float]) -> tuple[int,int]:
         current = self._geometry()

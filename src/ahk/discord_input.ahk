@@ -1,6 +1,7 @@
 #Requires AutoHotkey v2.0
 #SingleInstance Off
 #NoTrayIcon
+#Include targeted_keyboard.ahk
 SetKeyDelay -1, -1
 SetControlDelay -1
 input := FileOpen("*", "r", "UTF-8-RAW")
@@ -26,7 +27,7 @@ while true {
             throw Error("Stale request ID")
         lastID := id
         op := fields[3]
-        if !InStr("|probe|target|text|key|select_all|click|shutdown|", "|" op "|")
+        if !InStr("|probe|target|text|key|select_all|reset|click|shutdown|", "|" op "|")
             throw Error("Unknown operation")
         Loop 4 {
             if !RegExMatch(fields[A_Index + 3], "^-?[0-9]+$")
@@ -62,16 +63,8 @@ while true {
         switch op {
             case "target", "click":
                 ControlClick "x" x " y" y, target, , "Left", 1, "NA Pos"
-            case "text":
-                ControlSendText payload, renderer, target
-            case "key":
-                ControlSend "{" payload "}", renderer, target
-            case "select_all":
-                try {
-                    ControlSend "{Ctrl down}{a down}{a up}", renderer, target
-                } finally {
-                    ControlSend "{Ctrl up}", renderer, target
-                }
+            case "text", "key", "select_all", "reset":
+                TargetKeyboard renderer, op, payload
         }
         Reply(id, "ok", op, "posted", "")
     } catch Error as err {
