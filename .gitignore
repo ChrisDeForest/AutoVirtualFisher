@@ -12,3 +12,5 @@ docs/
 .uv-cache
 
 tools/
+.pytest_cache/
+
