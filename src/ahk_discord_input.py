@@ -1,5 +1,6 @@
 """AHK primitives behind the existing Python command workflow and OCR guards."""
 import ctypes
+import time
 from ctypes import wintypes
 from .ahk_bridge import AhkBridge, AhkBridgeError, AhkTarget
 from .ahk_runtime import AhkRuntime
@@ -7,6 +8,10 @@ from .ocr_journal import ocr_scope
 from .automation_models import InputUnavailable, TransportError
 from .discord_input import WindowsDiscordDriver
 from .automation_discord import composer_click
+
+MODIFIER_KEYS = (0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0x5B, 0x5C)
+MODIFIER_POLL = .05
+
 
 class AhkDiscordDriver(WindowsDiscordDriver):
     requires_foreground = False
@@ -20,6 +25,7 @@ class AhkDiscordDriver(WindowsDiscordDriver):
         callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
         self._callback_type = callback_type
         for name, args, result in (
+            ('GetAsyncKeyState',[ctypes.c_int],ctypes.c_short),
             ('IsIconic',[wintypes.HWND],wintypes.BOOL),
             ('IsWindowVisible',[wintypes.HWND],wintypes.BOOL),
             ('GetClientRect',[wintypes.HWND,ctypes.POINTER(wintypes.RECT)],wintypes.BOOL),
@@ -128,19 +134,45 @@ class AhkDiscordDriver(WindowsDiscordDriver):
             raise TransportError('Input point outside Discord client area.')
         return x,y
 
+    def _wait_modifiers(self, cancelled):
+        waited = False
+        while True:
+            self._guard(cancelled)
+            if not any(self.api.GetAsyncKeyState(vk) & 0x8000 for vk in MODIFIER_KEYS):
+                return waited
+            waited = True
+            time.sleep(MODIFIER_POLL)
+
     def _primitive(self,operation,cancelled,point=None,payload=''):
-        self._guard(cancelled)
-        target = self._resolve_target()
-        if self._frame_geometry is not None and self._frame_geometry != self._geometry():
-            raise TransportError('Discord geometry or renderer changed during input.')
-        try:
-            return self.bridge.request(operation,target,point,payload,cancelled)
-        except AhkBridgeError as error:
-            if error.code in ('ipc', 'protocol') or error.input_state == 'unknown':
-                raise InputUnavailable(f'AHK worker unavailable: {error}. Stop and restart the run.') from error
-            raise TransportError(f'AHK input unavailable: {error}') from error
-        except ValueError as error:
-            raise TransportError(f'AHK input unavailable: {error}') from error
+        refresh = False
+        geometry = self._geometry()
+        while True:
+            waited = self._wait_modifiers(cancelled)
+            if waited or refresh:
+                if geometry != self._geometry():
+                    raise TransportError('Discord geometry changed while waiting for held keys.')
+                # A held key can outlast the OCR frame: recheck channel and verification prompts.
+                self._frame(cancelled)
+                if geometry != self._geometry():
+                    raise TransportError('Discord geometry changed while refreshing after held keys.')
+                refresh = False
+            self._guard(cancelled)
+            target = self._resolve_target()
+            if self._frame_geometry is not None and self._frame_geometry != self._geometry():
+                raise TransportError('Discord geometry or renderer changed during input.')
+            try:
+                return self.bridge.request(operation,target,point,payload,cancelled)
+            except AhkBridgeError as error:
+                if error.code == 'modifiers' and error.input_state == 'not_started':
+                    # Worker caught a modifier pressed after Python checked. No event was posted.
+                    refresh = True
+                    time.sleep(MODIFIER_POLL)
+                    continue
+                if error.code in ('ipc', 'protocol') or error.input_state == 'unknown':
+                    raise InputUnavailable(f'AHK worker unavailable: {error}. Stop and restart the run.') from error
+                raise TransportError(f'AHK input unavailable: {error}') from error
+            except ValueError as error:
+                raise TransportError(f'AHK input unavailable: {error}') from error
 
     def _click(self,point,cancelled):
         self._primitive('target',cancelled,point=self._client_point(point))

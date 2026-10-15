@@ -10,6 +10,7 @@ class AdapterTests(unittest.TestCase):
         self.d=self.m.AhkDiscordDriver.__new__(self.m.AhkDiscordDriver)
         self.d.window=99; self.d.channel='Virtual Fisher'; self.d.title=None
         self.d.bridge=Mock(); self.d.api=Mock()
+        self.d.api.GetAsyncKeyState.return_value=0
         self.d.api.IsIconic.return_value=False
         self.d.api.GetForegroundWindow.return_value=123
         self.d._target_window=lambda:(99,'Virtual Fisher - Discord')
@@ -149,3 +150,95 @@ class ComposerRecoveryTests(unittest.TestCase):
         with patch('src.discord_input.WindowsDiscordDriver._frame',return_value=frame):
             driver._frame(lambda:False)
         self.assertEqual(driver._composer_anchor,(driver._geometry(),(660,810)))
+
+
+class HeldModifierTests(unittest.TestCase):
+    setUp = AdapterTests.setUp
+    @patch('src.ahk_discord_input.time.sleep')
+    def test_shift_held_in_another_app_defers_enter_without_sending(self, sleep):
+        down = [True]
+        self.d.api.GetAsyncKeyState.side_effect = lambda vk: 0x8000 if down[0] and vk == 0xA0 else 0
+        self.d._frame = Mock()
+        def release(_):
+            self.d.bridge.request.assert_not_called()
+            down[0] = False
+        sleep.side_effect = release
+        self.d._key(13,lambda:False)
+        self.d._frame.assert_called_once()
+        self.d.bridge.request.assert_called_once()
+        self.assertEqual(self.d.bridge.request.call_args.args[3],'Enter')
+
+    @patch('src.ahk_discord_input.time.sleep')
+    def test_all_sided_modifiers_defer_text(self, sleep):
+        for vk in (0xA0,0xA1,0xA2,0xA3,0xA4,0xA5,0x5B,0x5C):
+            with self.subTest(vk=vk):
+                down = [True]
+                self.d.bridge.reset_mock()
+                self.d.api.GetAsyncKeyState.side_effect = lambda key: 0x8000 if down[0] and key == vk else 0
+                self.d._frame = Mock()
+                def release(_):
+                    self.d.bridge.request.assert_not_called()
+                    down[0] = False
+                sleep.side_effect = release
+                self.d._text('/fish',lambda:False)
+                self.d.bridge.request.assert_called_once()
+
+    @patch('src.ahk_discord_input.time.sleep')
+    def test_stop_while_shift_held_does_not_send(self, sleep):
+        stopped = [False]
+        self.d.api.GetAsyncKeyState.return_value=0x8000
+        sleep.side_effect=lambda _:stopped.__setitem__(0,True)
+        with self.assertRaises(TransportError):
+            self.d._key(13,lambda:stopped[0])
+        self.d.bridge.request.assert_not_called()
+
+    @patch('src.ahk_discord_input.time.sleep')
+    def test_worker_modifier_race_is_retried_only_when_definitely_not_started(self, sleep):
+        self.d._frame=Mock()
+        self.d.bridge.request.side_effect=[AhkBridgeError('Held Shift','not_started','modifiers'),None]
+        self.d._key(13,lambda:False)
+        self.assertEqual(self.d.bridge.request.call_count,2)
+        self.d._frame.assert_called_once()
+
+
+    @patch('src.ahk_discord_input.time.sleep')
+    def test_geometry_change_during_modifier_wait_refuses_stale_click(self, sleep):
+        down = [True]
+        self.d.api.GetAsyncKeyState.side_effect=lambda vk:0x8000 if down[0] and vk==0xA1 else 0
+        def release(_):
+            down[0]=False
+            self.d._window_rect=lambda:(-1800,100,-800,1100)
+        sleep.side_effect=release
+        with self.assertRaises(TransportError):
+            self.d._click((660,810),lambda:False)
+        self.d.bridge.request.assert_not_called()
+
+    @patch('src.ahk_discord_input.time.sleep')
+    def test_recheck_after_wait_refuses_changed_channel_or_verification(self, sleep):
+        down=[True]
+        self.d.api.GetAsyncKeyState.side_effect=lambda vk:0x8000 if down[0] and vk==0xA0 else 0
+        sleep.side_effect=lambda _:down.__setitem__(0,False)
+        self.d._frame=Mock(side_effect=TransportError('Target changed or verification prompt'))
+        with self.assertRaises(TransportError):
+            self.d._key(13,lambda:False)
+        self.d.bridge.request.assert_not_called()
+
+    def test_uncertain_modifier_error_is_never_replayed(self):
+        self.d.bridge.request.side_effect=AhkBridgeError('uncertain','unknown','modifiers')
+        with self.assertRaises(TransportError):
+            self.d._key(13,lambda:False)
+        self.d.bridge.request.assert_called_once()
+
+
+    @patch('src.ahk_discord_input.time.sleep')
+    def test_resize_during_successful_refresh_never_reuses_old_click(self, sleep):
+        down=[True]
+        self.d.api.GetAsyncKeyState.side_effect=lambda vk:0x8000 if down[0] and vk==0xA0 else 0
+        sleep.side_effect=lambda _:down.__setitem__(0,False)
+        def resize(*args):
+            self.d._client_bounds=lambda:(1200,970)
+            self.d._frame_geometry=self.d._geometry()
+        self.d._frame=Mock(side_effect=resize)
+        with self.assertRaises(TransportError):
+            self.d._click((660,810),lambda:False)
+        self.d.bridge.request.assert_not_called()

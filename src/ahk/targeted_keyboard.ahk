@@ -81,3 +81,12 @@ TargetMessage(renderer, message, key, bits, deadline) {
                 "Ptr", bits, "UInt", 0x22, "UInt", Min(remaining, 250), "UPtr*", &result, "Ptr")
         throw Error("Target keyboard message failed or timed out")
 }
+
+
+PhysicalModifiersDown() {
+    for vk in [0xA0,0xA1,0xA2,0xA3,0xA4,0xA5,0x5B,0x5C] {
+        if DllCall("GetAsyncKeyState", "Int", vk, "Short") & 0x8000
+            return true
+    }
+    return false
+}

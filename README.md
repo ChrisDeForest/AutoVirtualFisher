@@ -12,7 +12,11 @@ are not supported yet. Do not manually send VF commands during an automated run.
 
 Keyboard commands use literal window messages and modifier state scoped to Discord's
 input thread. They do not release or re-press your desktop's Ctrl, Shift, Alt, or Win
-keys. This also prevents a held Ctrl from swallowing the slash in `/fish`.
+keys. Discord can still apply physically held modifiers despite its local keyboard
+state, so input deliberately waits while either Shift, Ctrl, Alt, or Win key is held.
+It resumes on release without treating the wait as a failed command. The target is
+reread after a wait, and Stop cancels the wait. This prevents held Shift from turning
+Enter into a newline and held Ctrl from swallowing the slash in `/fish`.
 After the empty command box has been located, AHK can clear leftover text there
 before the next command, including text no longer tracked as a bot draft. It checks
 that the window/renderer geometry still matches and rereads the empty placeholder

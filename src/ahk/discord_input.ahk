@@ -59,6 +59,10 @@ while true {
             if x < 0 || y < 0 || x >= NumGet(rect, 8, "Int") || y >= NumGet(rect, 12, "Int")
                 throw Error("Click lies outside client area")
         }
+        if op != "reset" && PhysicalModifiersDown() {
+            Reply(id, "error", "modifiers", "not_started", "Waiting for held modifiers to be released")
+            continue
+        }
         state := "unknown"
         switch op {
             case "target", "click":
