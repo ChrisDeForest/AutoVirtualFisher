@@ -6,6 +6,16 @@ from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 import argparse
 
+# This scraper supports both module imports and direct execution from the repository root.
+try:
+    from src import storage_limits as sl
+    from src.retention import prune_html_cache, scoped_directory
+except ModuleNotFoundError:
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from src import storage_limits as sl
+    from src.retention import prune_html_cache, scoped_directory
+
 def process_urls(links: list, path: int, *, refresh=False) -> list:
     """Load each page independently; refresh bypasses existing cache files."""
     if path not in (0, 1):
@@ -28,10 +38,15 @@ def process_urls(links: list, path: int, *, refresh=False) -> list:
             html = response.text
             if not html.strip():
                 raise ValueError(f"Empty HTML response from {url}")
-            cache.parent.mkdir(parents=True, exist_ok=True)
-            temporary = cache.with_suffix(".html.tmp")
-            temporary.write_text(html, encoding="utf-8")
-            temporary.replace(cache)
+            if len(html.encode('utf-8')) <= sl.HTML_CACHE_MAX_BYTES and sl.HTML_CACHE_MAX_FILES > 0:
+                cache.parent.mkdir(parents=True, exist_ok=True)
+                scoped_directory(cache.parent)
+                if cache.is_symlink():
+                    raise OSError('Refusing to replace a linked HTML cache file')
+                temporary = cache.with_suffix(".html.tmp")
+                temporary.write_text(html, encoding="utf-8")
+                temporary.replace(cache)
+                prune_html_cache(cache, sl.HTML_CACHE_MAX_FILES, sl.HTML_CACHE_MAX_BYTES)
             print(f"Downloaded {url}")
         soups.append(BeautifulSoup(html, "lxml"))
     return soups

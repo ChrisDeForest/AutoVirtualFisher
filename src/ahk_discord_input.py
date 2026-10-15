@@ -3,6 +3,7 @@ import ctypes
 from ctypes import wintypes
 from .ahk_bridge import AhkBridge, AhkBridgeError, AhkTarget
 from .ahk_runtime import AhkRuntime
+from .ocr_journal import ocr_scope
 from .automation_models import InputUnavailable, TransportError
 from .discord_input import WindowsDiscordDriver
 
@@ -13,6 +14,7 @@ class AhkDiscordDriver(WindowsDiscordDriver):
         super().__init__(window, channel)
         self.bridge = bridge if bridge is not None else AhkBridge(runtime)
         self._frame_geometry = None
+        self.ocr_journal = None
         callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
         self._callback_type = callback_type
         for name, args, result in (
@@ -29,7 +31,8 @@ class AhkDiscordDriver(WindowsDiscordDriver):
         capture = self.capture
         def checked_capture(**kwargs):
             before = self._geometry()
-            frame = capture(**kwargs)
+            with ocr_scope(self.ocr_journal, window=self.window, **kwargs):
+                frame = capture(**kwargs)
             after = self._geometry()
             if before != after:
                 return {**frame, 'status':'target_changed'}
@@ -151,12 +154,18 @@ class AhkDiscordDriver(WindowsDiscordDriver):
         self._frame(cancelled, frame)
 
     def enable_input(self) -> None:
+        if getattr(self, 'ocr_journal', None) is not None:
+            self.ocr_journal.resume()
         self.bridge.start()
 
     def cancel_input(self) -> None:
+        if getattr(self, 'ocr_journal', None) is not None:
+            self.ocr_journal.close()
         self.bridge.cancel_input()
         self._frame_geometry = None
 
     def close(self) -> None:
+        if getattr(self, 'ocr_journal', None) is not None:
+            self.ocr_journal.close()
         self.bridge.close()
         self._frame_geometry = None

@@ -13,6 +13,7 @@ from .ahk_runtime import AhkSetupError, ready_ahk, resolve_ahk
 from .player_snapshots import account_key, write_json_atomically
 from .window_capture import find_discord_window
 from .run_output import RunOutput
+from .ocr_journal import OcrJournal
 
 DEFAULT_LIVE_ROOT = Path(__file__).parent / 'data' / 'automation_live'
 
@@ -52,6 +53,10 @@ def build_live(channel, account, username, root=DEFAULT_LIVE_ROOT, max_trips=Non
     controller = AutomationController(transport, config, AutomationJournal(folder / 'journal'),
                                       folder / 'fishing', folder / 'review', interval=interval, alert=show_alert,
                                       state_path=folder / 'account_state.json')
+    def ocr_context():
+        pending = controller.state.pending
+        return {'run_id': controller.state.run_id, 'action_id': pending.action_id if pending else None}
+    driver.ocr_journal = OcrJournal(folder / 'journal', ocr_context)
     return controller, transport
 
 
@@ -76,12 +81,18 @@ def show_alert(message, title='AutoVirtualFisher: captcha'):
 
 def save_diagnostics(controller, transport, root=DEFAULT_LIVE_ROOT) -> str:
     """Write what the transport last saw; returns a problem, or '' when saved."""
+    from . import storage_limits as sl
+    from .retention import RECORD_NAME, prune_files
+    import re
     try:
         write_json_atomically(Path(root) / account_key(controller.config.account) / 'transport_diagnostics',
                               controller.state.run_id or 'unstarted',
                               {'baseline': transport.baseline, 'last_frame': transport.last_frame,
                                'last_lines': getattr(transport, 'last_lines', None),
                                'blocked': transport.blocked, 'last_issue': transport.last_issue})
+        pattern = re.compile(r'(?:' + RECORD_NAME.pattern + r'|unstarted\.json)')
+        prune_files(Path(root) / account_key(controller.config.account) / 'transport_diagnostics',
+                    pattern, sl.DIAGNOSTIC_MAX_FILES, sl.DIAGNOSTIC_MAX_BYTES)
         return ''
     except OSError as error:
         return f'Could not save transport diagnostics: {error}'

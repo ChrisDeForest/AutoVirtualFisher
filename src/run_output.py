@@ -4,6 +4,8 @@ from pathlib import Path
 import re
 import sys
 from .player_snapshots import new_record_id
+from . import storage_limits as sl
+from .retention import WRITE_LOCK, owned_files, prune_files, trim_lines
 
 DEFAULT_RUNS = Path(__file__).resolve().parent.parent / 'docs' / 'runs'
 LOG_NAME = re.compile(r'^avf-run-\d{8}T\d{6}\.\d{6}Z-[0-9a-f]{8}\.log$')
@@ -19,10 +21,16 @@ class RunOutput:
         if not LOG_NAME.fullmatch(self.path.name):
             raise ValueError('Invalid run log name')
         self.file = self.path.open('x', encoding='utf-8')
-        owned = sorted(p for p in self.root.iterdir() if p.is_file() and LOG_NAME.fullmatch(p.name))
-        for old in owned[:-5]:
-            if old != self.path:
-                old.unlink()
+        # Existing owned logs are brought under the same per-file bound; unrelated files are untouched.
+        for old in owned_files(self.root, LOG_NAME):
+            if old == self.path:
+                continue
+            try:
+                trim_lines(old, sl.RUN_LOG_MAX_BYTES)
+            except OSError:
+                pass
+        prune_files(self.root, LOG_NAME, sl.RUN_LOG_MAX_FILES,
+                    sl.RUN_LOG_MAX_FILES * sl.RUN_LOG_MAX_BYTES)
 
     def __enter__(self):
         return self
@@ -33,8 +41,16 @@ class RunOutput:
     def say(self, message):
         line = f'[{datetime.now().astimezone():%H:%M:%S}] {message}'
         print(line, file=self.console, flush=True)
-        self.file.write(line + '\n')
-        self.file.flush()
+        with WRITE_LOCK:
+            self.file.write(line + '\n')
+            self.file.flush()
+            if self.file.tell() > sl.RUN_LOG_MAX_BYTES:
+                # Windows requires the writer to release its handle before an atomic replacement.
+                self.file.close()
+                try:
+                    trim_lines(self.path, sl.RUN_LOG_MAX_BYTES)
+                finally:
+                    self.file = self.path.open('a', encoding='utf-8')
 
     def update(self, status):
         result = status.get('last_result') or {}

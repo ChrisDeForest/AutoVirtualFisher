@@ -608,8 +608,13 @@ class Handler(BaseHTTPRequestHandler):
             return
         if url.path == '/automation/panel':
             cls = type(self)
+            try:
+                query = parse_qs(url.query, max_num_fields=5)
+            except ValueError:
+                self.send_error(400, 'Invalid query')
+                return
             status = self.with_disk_progress(cls.automation.status() if cls.automation else None)
-            self.send_content(render_panel(status, cls.automation_mode))
+            self.send_content(render_panel(status, cls.automation_mode, active_tab=query.get('tab', [None])[0]))
             return
         if url.path != '/':
             self.send_error(404)

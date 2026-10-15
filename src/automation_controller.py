@@ -20,7 +20,7 @@ import time
 
 from .account_reads import ACCOUNT_READS, PAGE_TWO, read_of
 from .account_replies import PARSERS as ACCOUNT_PARSERS
-from .account_state import apply_read, empty_state, load_state, mark_maxed, save_state
+from .account_state import apply_read, empty_state, load_state, mark_maxed, mark_owned, save_state
 from .automation_journal import AutomationJournal
 from .automation_models import (ActionIntent, AutomationConfig, CapabilityError, Interrupted, NOT_FOREGROUND,
                                 NotDispatched, TransportError)
@@ -306,6 +306,7 @@ class AutomationController:
         self.earlier_buffs = {}        # the /buffs values read before, for what a read misses
         self.unread = {}               # refresh -> fields its last reply did not show; read again until complete
         self.unread_trips = {}         # refresh -> trips since that reply
+        self._dashboard_cache = None  # one detached projection; discarded on restart or input changes
         self.finds_before = None       # finds from earlier automation trips, loaded once per run
         self.logbook_spacing = False   # the logbook's recent trip spacing for the plan (False: not read yet)
 
@@ -890,6 +891,14 @@ class AutomationController:
             from .actions import Action, outcome
             action = Action.from_dict(self.pending_action or {'act': 'sell'})
             result, note = outcome(action, observation.text)
+            if result == 'done' and note == f'already owned {action.name}':
+                self.account = mark_owned(self.account, action)
+                if self.state_path:
+                    try:
+                        save_state(self.state_path, self.account)
+                    except OSError as error:
+                        self._safe_event('state_not_saved', None, reason=str(error))
+                self._request_plan()
             if note == 'already maxed' and action.level:
                 # Remembered, so the plan stops offering it (the shop's own max can be higher).
                 self.account = mark_maxed(self.account, action.name, action.level - 1)
@@ -1177,7 +1186,7 @@ class AutomationController:
         folder = self.state_path.parent
         index, bad_trips = build_index(folder)
         history, bad_lines = read_history(folder / HISTORY)
-        events = journal_events(self.journal.root, self.journal_cache)
+        events = journal_events(self.journal.root, self.journal_cache, detached=False)
         notes = [f'{count} {what} could not be read.' for count, what in
                  ((bad_trips, 'trip records'), (bad_lines, 'profile history lines')) if count]
         return progress_view(index, history, events, inputs['plan'], inputs['profile'], inputs['charms'],
@@ -1335,11 +1344,7 @@ class AutomationController:
         """The synced stats carried forward over the trips since, plus this run's totals and hourly rates."""
         increments, fish = _references()
         synced = self._synced()
-        stats = project(synced, self.sync_tallies, increments, fish)
-        run = project(synced, self.run_tallies, increments, fish)['gained']
         elapsed = max(1.0, self.monotonic() - self.started_at) if self.started_at is not None else None
-        per_hour = {key: run[key] * 3600 / elapsed for key in ('trips', 'xp', 'money', 'fish_value', 'catches')}             if elapsed else {}
-        to_next = stats['profile'].get('xp_to_next_level')
         if self.finds_before is None:
             try:
                 sessions = load_sessions(self.config.account, self.roots['fishing'])[0]
@@ -1347,14 +1352,34 @@ class AutomationController:
                 sessions = []
             self.finds_before = summarize_finds([session['tally'] for session in reversed(sessions)])
             self.logbook_spacing = trip_spacing(sessions)   # the same read serves the plan's seconds per trip
-        stats['finds'] = {'run': summarize_finds(self.run_tallies),
-                          'all': summarize_finds(self.run_tallies, self.finds_before)}
-        if self.synced['profile']:
-            # Below level 50 the profile leaves out Lava and Diamond Fish; they are counted from finds instead.
-            stats['inventory'] = add_unlisted_finds(stats['inventory'], stats['finds']['all']['special_fish'],
-                                                    listed=synced['inventory'])
-            stats['unlisted'] = sorted(set(stats['inventory'].get('exotic_fish', {}))
-                                       - {name for items in synced['inventory'].values() for name in items})
+        # Compare values, not list lengths or identities: callers and recovered reads may replace
+        # a tally without changing its length, or update a nested value in place. Only misses
+        # copy these inputs; hits scan them without rebuilding the expensive projections.
+        inputs = (synced, self.synced['charms'], self.sync_tallies, self.run_tallies,
+                  self.charm_tallies, self.finds_before, increments, fish, self.config.account,
+                  bool(self.synced['profile']))
+        if self._dashboard_cache is None or self._dashboard_cache[0] != inputs:
+            stats = project(synced, self.sync_tallies, increments, fish)
+            run = project(synced, self.run_tallies, increments, fish)['gained']
+            stats['finds'] = {'run': summarize_finds(self.run_tallies),
+                              'all': summarize_finds(self.run_tallies, self.finds_before)}
+            if self.synced['profile']:
+                # Below level 50 the profile leaves out Lava and Diamond Fish; they are counted from finds instead.
+                stats['inventory'] = add_unlisted_finds(stats['inventory'], stats['finds']['all']['special_fish'],
+                                                        listed=synced['inventory'])
+                stats['unlisted'] = sorted(set(stats['inventory'].get('exotic_fish', {}))
+                                           - {name for items in synced['inventory'].values() for name in items})
+            stats['charms'] = charm_summary(stats['finds']['all'], parse_charms(self.synced['charms']),
+                                            summarize_finds(self.charm_tallies)['charms'],
+                                            prestige=stats['profile'].get('prestige'))
+            stats['run'] = run
+            self._dashboard_cache = (copy.deepcopy(inputs), stats)
+        # A status response or a planner must never mutate the stored projection.
+        stats = copy.deepcopy(self._dashboard_cache[1])
+        run = stats['run']
+        per_hour = {key: run[key] * 3600 / elapsed
+                    for key in ('trips', 'xp', 'money', 'fish_value', 'catches')} if elapsed else {}
+        to_next = stats['profile'].get('xp_to_next_level')
         recent = [{'catches': dict(tally['catches']), 'xp': tally['fishing_xp'],
                    'events': list(tally['trip_details'][0]['events']) if tally.get('trip_details') else []}
                   for tally in reversed(self.run_tallies[-8:])]
@@ -1367,10 +1392,7 @@ class AutomationController:
                      unread={kind.removeprefix('refresh_'): {
                          'fields': list(fields),
                          'retry_in': max(0, self.config.retry_unread_trips - self.unread_trips.get(kind, 0))}
-                         for kind, fields in self.unread.items()},
-                     charms=charm_summary(stats['finds']['all'], parse_charms(self.synced['charms']),
-                                          summarize_finds(self.charm_tallies)['charms'],
-                                          prestige=stats['profile'].get('prestige')))
+                         for kind, fields in self.unread.items()})
         return stats
 
     def _uncertain(self, action_id, reason):
@@ -1391,6 +1413,11 @@ class AutomationController:
         cancel_input = getattr(self.transport, 'stop', None)
         if cancel_input is not None:
             cancel_input()
+        # A quota or disk failure is terminal; don't keep capturing in a failed run.
+        # The journal itself is unavailable, so no further stop event can be required.
+        self.running = False
+        self.generation += 1
+        self.stop_event.set()
         self.failed = reason
         self.phase, self.reason = 'FAILED', reason
 

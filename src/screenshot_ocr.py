@@ -1,6 +1,7 @@
 """Read Discord screenshots with Windows' built-in OCR (optional: pip install -r requirements-ocr.txt)."""
 import asyncio
 from pathlib import Path
+from .ocr_journal import trace_windows_read
 
 # At 1x, Discord profiles and fishing results read cleanly; enlarging reordered and garbled some lines.
 SCALE = 1
@@ -14,6 +15,7 @@ def ocr_available() -> bool:
     return True
 
 
+@trace_windows_read
 async def _read(path: Path, scale: float, region: tuple | None = None) -> list[dict]:
     from winrt.windows.graphics.imaging import (BitmapAlphaMode, BitmapBounds, BitmapDecoder,
                                                 BitmapInterpolationMode, BitmapPixelFormat, BitmapTransform,

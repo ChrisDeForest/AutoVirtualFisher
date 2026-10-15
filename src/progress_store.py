@@ -1,5 +1,7 @@
 """Part 6's per-account files: the daily trip index and the profile history, beside account_state.json."""
 import json
+import os
+from copy import deepcopy
 from pathlib import Path
 
 from .player_snapshots import write_json_atomically
@@ -59,8 +61,12 @@ def build_index(folder, tz=None):
 
 
 def append_history(path, entry):
-    with Path(path).open('a', encoding='utf-8') as file:
-        file.write(json.dumps(entry) + '\n')
+    from . import storage_limits as sl
+    from .retention import WRITE_LOCK, trim_lines
+    with WRITE_LOCK:
+        with Path(path).open('a', encoding='utf-8') as file:
+            file.write(json.dumps(entry) + '\n')
+        trim_lines(path, sl.PROFILE_HISTORY_MAX_BYTES)
 
 
 def read_history(path):
@@ -95,23 +101,63 @@ def _read_event(path):
     return event
 
 
-def journal_events(journal_root, cache):
-    """AutomationJournal(journal_root).events()[0], but a run folder is read again only when its file count
-    changed: events are immutable files, so a finished run's folder never changes. `cache` (run folder name ->
-    (file count, events)) is kept by the caller between calls; folders gone from disk are dropped from it."""
+MAX_CACHED_RUNS = 128
+MAX_CACHED_EVENTS = 100_000
+
+
+def journal_events(journal_root, cache, *, detached=True):
+    """Read only changed JSON files; caller-owned cache drops deleted files/runs.
+
+    Metadata is checked even in finished runs: folder mtime alone cannot detect edits
+    to existing files. Cache size follows files on disk and never retains removed runs.
+    Returned events are detached so callers cannot mutate future reads. Trusted
+    read-only consumers may pass detached=False to avoid cloning the whole history;
+    they must never mutate returned events or expose them to other callers.
+    """
     root = Path(journal_root)
     folders = sorted((path for path in root.iterdir() if path.is_dir()), key=lambda path: path.name) \
         if root.is_dir() else []
     events = []
     for folder in folders:
-        files = sorted(folder.glob('*.json'), key=lambda path: path.name)
-        cached = cache.get(folder.name)
-        if cached is None or cached[0] != len(files):
-            cached = cache[folder.name] = (len(files), [e for e in map(_read_event, files) if e is not None])
-        events.extend(cached[1])
+        previous = cache.get(folder.name)
+        previous = previous if isinstance(previous, dict) else {}
+        current = {}
+        try:
+            with os.scandir(folder) as scan:
+                files = sorted((entry for entry in scan if entry.name.endswith('.json')), key=lambda entry: entry.name)
+        except OSError:
+            files = []
+        for entry in files:
+            path = folder / entry.name
+            try:
+                stat = entry.stat()
+            except OSError:
+                continue
+            stamp = (stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size, stat.st_ino)
+            cached = previous.get(path.name)
+            if cached is None or cached[0] != stamp:
+                cached = (stamp, _read_event(path))
+            current[path.name] = cached
+            if cached[1] is not None:
+                events.append(cached[1])
+        cache[folder.name] = current
     for name in set(cache) - {folder.name for folder in folders}:
         del cache[name]
-    return events
+    # Retain recent runs/events when history exceeds the budget. Results still include
+    # all history; evicted entries are simply reloaded on a later request.
+    budget = MAX_CACHED_EVENTS
+    for name in reversed(list(cache)):
+        files = cache[name]
+        if budget <= 0:
+            del cache[name]
+        elif len(files) > budget:
+            cache[name] = dict(list(files.items())[-budget:])
+            budget = 0
+        else:
+            budget -= len(files)
+    while len(cache) > MAX_CACHED_RUNS:
+        del cache[next(iter(cache))]
+    return deepcopy(events) if detached else events
 
 
 _DISK_JOURNALS = {}   # account folder -> journal_events cache, for view_from_disk
@@ -124,7 +170,10 @@ def view_from_disk(folder, now=None):
     folder = Path(folder)
     index, bad_trips = build_index(folder)
     history, bad_lines = read_history(folder / HISTORY)
-    events = journal_events(folder / 'journal', _DISK_JOURNALS.setdefault(str(folder.resolve()), {}))
+    key = str(folder.resolve())
+    if key not in _DISK_JOURNALS and len(_DISK_JOURNALS) >= 8:
+        del _DISK_JOURNALS[next(iter(_DISK_JOURNALS))]
+    events = journal_events(folder / 'journal', _DISK_JOURNALS.setdefault(key, {}), detached=False)
     last = next((h for h in reversed(history) if h.get('kind') == 'profile'), {})
     charms = next((h for h in reversed(history) if h.get('kind') == 'charms'), None)
     notes = [f'{count} {what} could not be read.' for count, what in

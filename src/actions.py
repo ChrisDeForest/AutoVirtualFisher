@@ -10,7 +10,7 @@ COMMAND = {'buy': '/buy', 'sell': '/sell', 'rod': '/rod', 'biome': '/biome', 'ba
 # Tabs from the first option to a buy's amount (user, 2026-10-13), each after a pause.
 AMOUNT_TABS = 3
 SHOP_READ = {'upgrades': 'refresh_upgrades', 'special': 'refresh_special', 'league': 'refresh_league',
-             'rods': 'refresh_rod', 'boats': 'refresh_boats', 'bait': 'refresh_bait'}
+             'rods': 'refresh_rod', 'boats': 'refresh_boats', 'bait': 'refresh_bait', 'pets': 'refresh_pets'}
 SWITCH_READ = {'rod': 'refresh_rod', 'biome': 'refresh_biome', 'bait': 'refresh_bait', 'pet': 'refresh_pets'}
 # Shops paid in money: the balance is checked before buying. League buys check the Hooks from /shop league;
 # special (exotic fish) buys are left to the game's reply.
@@ -53,6 +53,7 @@ def command_line(action):
 
 def outcome(action, text):
     """('done', note), ('failed', why) or ('unclear', why) for the reply to `action`."""
+    text = text.replace('**', '').replace('__', '').replace('`', '')
     text = re.sub(r'\s+', ' ', text.replace('’', "'")).strip()
     if re.search(r"can'?t afford", text, re.I):
         return 'failed', "can't afford it"
@@ -64,6 +65,12 @@ def outcome(action, text):
         return 'failed', 'invalid biome'
     name = action.name.casefold()
     if action.act == 'buy':
+        owned = re.search(r'\bYou already own that (boat|rod|pet|item)\b', text, re.I)
+        category = {'boats': 'boat', 'rods': 'rod', 'pets': 'pet'}.get(action.shop, 'item')
+        if owned and owned[1].casefold() == category:
+            if category == 'item' and action.level is not None:
+                return 'unclear', 'ownership reply does not show the upgrade level'
+            return 'done', f'already owned {action.name}'
         # Bait (user, 2026-10-14): "Bait purchase / You bought 200 artifact magnet :bait_artifact: for $15,000."
         batch = re.search(r'You bought ([\d,]+) (.+?)\s+for \$([\d,]+)', text, re.I)
         if batch:
@@ -121,8 +128,17 @@ def check(action, sections, profile):
     """Why the action should be skipped now, from the latest reads; None when it should run. Anything uncertain
     is left to the game's reply."""
     if action.act == 'buy':
+        ownership = {'boats': 'shop_boats', 'rods': 'rod', 'pets': 'pet'}.get(action.shop)
+        values = _values(sections, ownership) if ownership else {}
+        owned = values.get('owned') or []
+        item = (values.get('items') or {}).get(action.name) or {}
+        if any(name.casefold() == action.name.casefold() for name in owned) or item.get('owned'):
+            return f'already owned {action.name}'
         shop = {'upgrades': 'shop_upgrades', 'special': 'shop_special', 'league': 'shop_league'}.get(action.shop)
-        level = ((_values(sections, shop).get('items') or {}).get(action.name) or {}).get('level') if shop else None
+        item = ((_values(sections, shop).get('items') or {}).get(action.name) or {}) if shop else {}
+        if not action.level and item.get('owned'):
+            return f'already owned {action.name}'
+        level = item.get('level')
         if action.level and level is not None and level >= action.level:
             return f'already level {level}'
         hooks = _values(sections, 'shop_league').get('hooks')

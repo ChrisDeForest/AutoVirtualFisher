@@ -4,6 +4,8 @@ from pathlib import Path
 import re
 
 from .player_snapshots import new_record_id, write_json_atomically
+from . import storage_limits as sl
+from .retention import WRITE_LOCK, RECORD_NAME, prune_files
 
 DEFAULT_REVIEW_ROOT = Path(__file__).parent / 'data' / 'review_queue'
 RECORD_ID = re.compile(r'^[0-9TZ.]+-[0-9a-f]{8}$')
@@ -22,7 +24,14 @@ def add_item(root: Path, account: str, kind: str, text: str, reasons: list[str],
     item = {'id': item_id, 'captured_at': captured_at, 'account': account, 'kind': kind, 'text': text,
             'reasons': reasons, 'identity_status': identity_status, 'observation_id': observation_id,
             'evidence_id': evidence_id, 'blocks_actions': blocks_actions}
-    write_json_atomically(Path(root), item_id, item)
+    def protected(path):
+        try:
+            return json.loads(path.read_text(encoding='utf-8')).get('blocks_actions', True) is not False
+        except (OSError, ValueError, AttributeError):
+            return True
+    with WRITE_LOCK:
+        write_json_atomically(Path(root), item_id, item)
+        prune_files(root, RECORD_NAME, sl.REVIEW_MAX_FILES, sl.REVIEW_MAX_BYTES, protected=protected)
     return item
 
 

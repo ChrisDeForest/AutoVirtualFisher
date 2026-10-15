@@ -186,7 +186,7 @@ SCRIPT = """<script nonce="{nonce}">
       link.className = link.getAttribute('href') === '#' + wanted ? 'current' : '';
     });
   }
-  window.addEventListener('hashchange', showTab);
+  window.addEventListener('hashchange', function () { showTab(); refreshSoon(); });
   showTab();
   // A button press reloads the page (post/redirect/get): it comes back to the tab it was pressed on (the redirect
   // keeps the form's #tab), scrolled where it was, with the same toggles open.
@@ -196,17 +196,20 @@ SCRIPT = """<script nonce="{nonce}">
     panel.querySelectorAll('details[data-key]').forEach(function (d) { open[d.getAttribute('data-key')] = d.open; });
     try { sessionStorage.setItem('back', JSON.stringify({y: window.scrollY, open: open})); } catch (e) {}
   });
-  try {
-    var back = JSON.parse(sessionStorage.getItem('back') || 'null');
-    sessionStorage.removeItem('back');
-    if (back) {
-      panel.querySelectorAll('details[data-key]').forEach(function (d) {
-        var key = d.getAttribute('data-key');
-        if (key in back.open) d.open = back.open[key];
-      });
-      window.scrollTo(0, back.y);
-    }
-  } catch (e) {}
+  var back = null;
+  try { back = JSON.parse(sessionStorage.getItem('back') || 'null'); } catch (e) {}
+  function restoreBack() {
+    if (!back) return;
+    panel.querySelectorAll('details[data-key]').forEach(function (d) {
+      var key = d.getAttribute('data-key');
+      if (key in back.open) d.open = back.open[key];
+    });
+    window.scrollTo(0, back.y);
+    back = null;
+    try { sessionStorage.removeItem('back'); } catch (e) {}
+  }
+  // The first page contains Run only; another tab's toggles exist after its first successful poll.
+  if (!location.hash || location.hash === '#run') restoreBack();
   // Next fish counts down here between refreshes. A refresh within half a second of the running count keeps it,
   // so the count never steps back and forth; a new cooldown starts a new count.
   var deadline = null;
@@ -247,8 +250,50 @@ SCRIPT = """<script nonce="{nonce}">
   }
   syncCountdown();
   requestAnimationFrame(function (now) { last = now; tick(now); });
-  setInterval(function () {
-    fetch('/automation/panel', {cache: 'no-store'}).then(function (r) { return r.text(); }).then(function (html) {
+  var timer = null, flight = null, generation = 0;
+  var connection = document.getElementById('connection');
+  var previous = {};
+  function wantedTab() {
+    var name = (location.hash || '#run').slice(1);
+    return ['run', 'model', 'plan', 'progress'].indexOf(name) >= 0 ? name : 'run';
+  }
+  function updateSection(current, fresh, key) {
+    var markup = fresh.outerHTML;
+    if (previous[key] === markup || (previous[key] === undefined && current && current.outerHTML === markup)) {
+      previous[key] = markup;
+      return;
+    }
+    // Preserve individual stat boxes when only a rate or countdown elsewhere has changed.
+    var classes = fresh.getAttribute('class') || '';
+    var container = fresh.getAttribute('data-tab') === 'run' || classes === 'boxes' || classes === 'rewards-row';
+    if (current && container && current.children.length === fresh.children.length) {
+      Array.from(fresh.children).forEach(function (part, i) { updateSection(current.children[i], part, key + '/' + i); });
+    } else if (current) {
+      Object.keys(previous).forEach(function (cached) {
+        if (cached.indexOf(key + '/') === 0) delete previous[cached];
+      });
+      current.replaceWith(fresh);
+    }
+    previous[key] = markup;
+  }
+  function refreshSoon() {
+    generation++;
+    clearTimeout(timer);
+    if (flight) flight.abort();
+    if (!document.hidden && !flight) timer = setTimeout(poll, 0);
+  }
+  document.addEventListener('visibilitychange', refreshSoon);
+  function poll() {
+    if (document.hidden || flight) return;
+    var request = new AbortController(), version = generation, tab = wantedTab();
+    flight = request;
+    var timeout = setTimeout(function () {
+      request.abort();
+      if (connection) connection.textContent = 'Disconnected — displayed values may be stale.';
+    }, 10000);
+    fetch('/automation/panel?tab=' + encodeURIComponent(tab), {cache: 'no-store', signal: request.signal}).then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); }).then(function (html) {
+      if (request.signal.aborted || version !== generation || document.hidden || tab !== wantedTab()) return;
+      if (connection) connection.textContent = 'Connected';
       var was = panel.getAttribute('data-running');
       // Keep where each scrolling list and the page were scrolled: the refresh replaces them all.
       var kept = {}, x = window.scrollX, y = window.scrollY;
@@ -260,7 +305,25 @@ SCRIPT = """<script nonce="{nonce}">
       panel.querySelectorAll('details[data-key]').forEach(function (d) {
         open[d.getAttribute('data-key')] = d.open;
       });
-      panel.innerHTML = html;
+      var template = document.createElement('template');
+      template.innerHTML = html;
+      var incoming = template.content.firstElementChild;
+      var root = panel.firstElementChild;
+      if (!root || !incoming || incoming.getAttribute('data-running') !== was) {
+        location.replace('/automation' + location.hash);
+        return;
+      }
+      // Compare server markup, unaffected by countdown animation or locally opened details.
+      Array.from(incoming.children).forEach(function (fresh, i) {
+        var name = fresh.getAttribute('data-tab');
+        if (name && name !== tab) return;
+        var key = name || 'shared-' + i;
+        var current = name ? root.querySelector('section[data-tab="' + name + '"]') : root.children[i];
+        // Keep any form the user is currently editing until it loses focus.
+        if (current && current.contains(document.activeElement) && document.activeElement.matches('input,select,textarea')) return;
+        if (current) updateSection(current, fresh, key);
+        else { root.appendChild(fresh); previous[key] = fresh.outerHTML; }
+      });
       showTab();
       syncCountdown();
       moveLine(performance.now());
@@ -274,11 +337,19 @@ SCRIPT = """<script nonce="{nonce}">
         if (at) { el.scrollTop = at[0]; el.scrollLeft = at[1]; }
       });
       window.scrollTo(x, y);
+      restoreBack();
       var now = panel.querySelector('[data-running]');
       // Load the page afresh, never reload: reloading a page a button press answered sends the press again.
       if (now && now.getAttribute('data-running') !== was) { location.replace('/automation' + location.hash); }
-    }).catch(function () {});
-  }, 2000);
+    }).catch(function () {
+      if (version === generation && !document.hidden && connection) connection.textContent = 'Disconnected — displayed values may be stale.';
+    }).finally(function () {
+      clearTimeout(timeout);
+      flight = null;
+      if (!document.hidden) timer = setTimeout(poll, version === generation ? 2000 : 0);
+    });
+  }
+  timer = setTimeout(poll, 0);
 })();
 </script>"""
 
@@ -307,7 +378,7 @@ def _num(value, prefix=''):
     return f'{prefix}{value:,.0f}' if isinstance(value, (int, float)) else None
 
 
-def _duration(seconds):
+def _level_eta(seconds):
     if seconds is None:
         return None
     minutes = round(seconds / 60)
@@ -342,7 +413,7 @@ def _level_line(profile, dashboard):
         meta.append(f'{xp:,} of {required:,} XP')
     else:
         meta.append('XP not read yet; /profile is read again in a few trips')
-    eta = _duration(dashboard.get('next_level_in_seconds'))
+    eta = _level_eta(dashboard.get('next_level_in_seconds'))
     if eta:
         meta.append(f'{eta} to level {level + 1}')
     line = ''
@@ -990,7 +1061,7 @@ def _progress_tab(progress) -> str:
         return f'<p class="empty">The Progress tab could not be shown: {escape(repr(error))}</p>'
 
 
-def render_panel(status, mode=None) -> str:
+def render_panel(status, mode=None, active_tab=None) -> str:
     """The live part of the page: run status, level line, and the stat boxes. With no run since the server started,
     the Progress view from the account's files (when there is one) under the "No run yet" line."""
     if not status or 'running' not in status:
@@ -998,6 +1069,8 @@ def render_panel(status, mode=None) -> str:
                     '</section>') if status else ''
         return ('<div data-running="0"><p class="empty">No run yet. Start one above; your profile, buffs and '
                 f'inventory appear here once Virtual Fisher replies.</p>{progress}</div>')
+    if active_tab not in (None, 'run', 'model', 'plan', 'progress'):
+        active_tab = 'run'
     running = status['running']
     label = state_label(status)
     buttons = ''
@@ -1015,6 +1088,19 @@ def render_panel(status, mode=None) -> str:
                   + (f'in {next_fish:.1f} s' if next_fish else 'now') + '</span>.')
     strip = (f'<div class="strip {tone}"><span class="phase">{escape(label)}</span>'
              f'<span class="why">{reason}</span>{buttons}</div>')
+    run_tab = _run_tab(status, mode) if active_tab in (None, 'run') else ''
+    return (f'<div data-running="{1 if running else 0}">{strip}'
+            '<nav class="tabs"><a href="#run">Run</a><a href="#model">Model</a><a href="#plan">Plan</a>'
+            '<a href="#progress">Progress</a></nav>'
+            f'<section class="tab" data-tab="run">{run_tab}</section>'
+            f'<section class="tab" data-tab="model" hidden>{(_model_tab(status.get("model")) if active_tab in (None, "model") else "")}</section>'
+            f'<section class="tab" data-tab="plan" hidden>{(_plan_tab({**(status.get('plan') or {}), 'queue': status.get('queue'), 'executor': status.get('executor'), 'action_log': status.get('action_log')}) if active_tab in (None, "plan") else "")}</section>'
+            f'<section class="tab" data-tab="progress" hidden>{(_progress_tab(status.get("progress")) if active_tab in (None, "progress") else "")}</section></div>')
+
+
+def _run_tab(status, mode):
+    running = status['running']
+    next_fish = status.get('next_eligible_in')
     dashboard = status.get('dashboard') or {}
     profile = dashboard.get('profile') or {}
     gained = dashboard.get('gained') or {}
@@ -1094,13 +1180,7 @@ def render_panel(status, mode=None) -> str:
                f'<div class="rewards-row">{rewards_box}{_finds_box(dashboard.get("finds") or {}, dashboard.get("charms"))}'
                f'</div>{_pets_box(status.get("account"), profile)}{inventory_box}{trips_box}'
                f'{_account_box(status.get("account"))}</div>')
-    return (f'<div data-running="{1 if running else 0}">{strip}'
-            '<nav class="tabs"><a href="#run">Run</a><a href="#model">Model</a><a href="#plan">Plan</a>'
-            '<a href="#progress">Progress</a></nav>'
-            f'<section class="tab" data-tab="run">{run_tab}</section>'
-            f'<section class="tab" data-tab="model" hidden>{_model_tab(status.get("model"))}</section>'
-            f'<section class="tab" data-tab="plan" hidden>{_plan_tab({**(status.get('plan') or {}), 'queue': status.get('queue'), 'executor': status.get('executor'), 'action_log': status.get('action_log')})}</section>'
-            f'<section class="tab" data-tab="progress" hidden>{_progress_tab(status.get("progress"))}</section></div>')
+    return run_tab
 
 
 def _field(name, label, value, hint=''):
@@ -1149,5 +1229,6 @@ def render_automation(head, status, notice='', live_problem='', settings=None, m
             '<header><a class="brand" href="/">AutoVirtualFisher</a><span class="local">Automation</span></header>'
             '<main><h1>Automation</h1>'
             f'{notice_html}{control}'
-            f'<div id="panel" data-running="{1 if running else 0}">{render_panel(status, mode)}</div>'
+            '<p id="connection" role="status">Connecting…</p>'
+            f'<div id="panel" data-running="{1 if running else 0}">{render_panel(status, mode, active_tab="run")}</div>'
             f'</main>{SCRIPT.replace("{nonce}", escape(nonce))}</body></html>')

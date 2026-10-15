@@ -48,6 +48,22 @@ Stop or terminal failure. If the worker fails, there is no native-input fallback
 and no automatic replay of a possibly submitted command. Keep Discord restored:
 minimized Discord is unavailable, and the app never restores it automatically.
 
+Each live run records the text returned by every Windows OCR and Tesseract pass
+in `src/data/automation_live/<account>/journal/<run>/ocr_reads.jsonl.gz`,
+with older segments named `ocr_reads.<timestamp>-<id>.jsonl.gz`.
+The compressed JSON lines include capture/action identifiers, crop/scale details
+and read timing where available; screenshots are not saved. Stop the run before
+opening the compressed log. Reads already underway at Stop finish journaling;
+new captures do not start a log after Stop. Logging is best effort and never
+changes command outcomes; an interrupted process can leave a partial compressed
+tail. Inspection and simulation do not create these logs. OCR engine, bitmap,
+and file-stream cleanup remains per read to prevent memory growth.
+
+Trip JSON remains the source of truth. A rebuildable `.sessions.sqlite3` index
+speeds duplicate checks; older tallies are normalized when read without rewriting
+their files. Dashboard polling requests only the selected tab, pauses while the
+browser page is hidden, and shows when its displayed values may be stale.
+
 The migration has automated and no-input interpreter coverage. Supervised
 production-timing Discord acceptance is still pending; earlier portable AHK
 probes are evidence for the approach, not validation of the final adapter.
@@ -551,3 +567,35 @@ corrected by fuzzy matching.
 
 Tests use temporary output folders, local HTML fixtures, and simulated HTTP
 responses. They do not contact the websites or modify your collected data.
+
+## Generated data limits
+
+Limits are defined in `src/storage_limits.py`. They apply on subsequent writes;
+existing history is not swept at startup. Both count and size limits apply.
+Paths below are relative to the repository; live account data is under
+`src/data/automation_live/<account>/` (or the configured data directory).
+
+| Data | Location | Limit and behavior |
+| --- | --- | --- |
+| Fishing trips | Live account `fishing/<account>/`; logbook `src/data/fishing_sessions/<account>/` | 100,000 files / 512 MiB per account folder; refuse new trips, preserve existing history |
+| Trip index | `.sessions.sqlite3` beside trip files | 128 MiB database; rebuildable from trip JSON |
+| Action journal | Live account `journal/` | 250,000 events / 1 GiB per account; stop new work at capacity, always allow outcome and recovery records |
+| OCR text | Live account `journal/<run>/ocr_reads*.jsonl.gz` | Rotate around 4 MiB; retain 20 MiB per run and 100 MiB per account, oldest first |
+| Player snapshots | `src/data/player_snapshots/<account>/` | 5,000 files / 128 MiB; refuse new snapshots |
+| Review records | Live account `review/`; `src/data/review_queue/` | Newest 2,000 nonblocking records / 32 MiB per folder; blocking or unreadable evidence is protected |
+| Profile history | Live account `profile_history.jsonl` | Newest complete lines within 16 MiB |
+| Optional screenshots | Folder selected with `--keep-captures` | Newest 200 image/text pairs / 256 MiB |
+| Console logs | `docs/runs/` | Newest 5 logs, each retaining up to 10 MiB of complete lines |
+| Transport diagnostics | Live account `transport_diagnostics/` | Newest 20 files / 32 MiB |
+| Downloaded HTML | `src/data/html/`, including `pages/` | Newest 1,000 cached files / 256 MiB; oversized downloads are parsed without caching |
+
+OCR retention is a rolling window: every OCR pass is recorded while logging is
+available, and older text eventually expires. A single oversized read can disable
+OCR logging for that run without changing automation behavior. Active segments can
+briefly cross a rotation target. Protected review evidence and critical journal
+outcomes can exceed their targets. Keep important history in a separate backup
+folder before reaching the trip, snapshot, or journal quota.
+
+Settings, current account state, and current model/progress files replace their
+previous versions rather than accumulating history. Manual backups, reference
+JSON, and source/dependency folders are not pruned.

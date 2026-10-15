@@ -34,6 +34,30 @@ def mark_maxed(state: dict, name: str, level: int) -> dict:
     return {**state, 'maxed': {**(state.get('maxed') or {}), name: level}}
 
 
+def mark_owned(state: dict, action) -> dict:
+    """Keep the ownership shown by an already-owned reply to this specific dispatched buy."""
+    kind = {'boats': 'shop_boats', 'rods': 'rod', 'pets': 'pet', 'upgrades': 'shop_upgrades',
+            'special': 'shop_special', 'league': 'shop_league'}.get(action.shop)
+    if action.act != 'buy' or kind is None:
+        return state
+    sections = dict(state.get('sections', {}))
+    old = sections.get(kind, {'values': {}, 'pages': {}})
+    values = dict(old.get('values') or {})
+    if kind == 'rod':
+        values['owned'] = list(dict.fromkeys([*(values.get('owned') or []), action.name]))
+    elif kind == 'pet':
+        values['owned'] = {**(values.get('owned') or {}),
+                           action.name: (values.get('owned') or {}).get(action.name, {})}
+    else:
+        items = dict(values.get('items') or {})
+        item = dict(items.get(action.name) or {})
+        item['owned'] = True
+        items[action.name] = item
+        values['items'] = items
+    sections[kind] = {**old, 'values': values}
+    return {**state, 'sections': sections}
+
+
 def save_state(path, state: dict) -> None:
     path = Path(path)
     write_json_atomically(path.parent, path.stem, state)
@@ -69,6 +93,10 @@ def apply_read(state: dict, kind: str, parsed: dict, observed_at: str, text: str
     values = _merge(old.get('values', {}), parsed['values'])
     if kind in WHOLE_REPLIES and not parsed.get('unread'):
         values = dict(parsed['values'])   # a whole reply's None is a reading ("Current bait: NONE"), not a gap
+    if kind == 'rod':
+        # Rods remain owned when OCR misses a line in a later /rod reply.
+        values['owned'] = list(dict.fromkeys([*(old.get('values', {}).get('owned') or []),
+                                             *(parsed['values'].get('owned') or [])]))
     if kind == 'pet' and parsed['values'].get('owned'):
         # Pets are permanent: a /pet read that missed a pet's line (Axolotl, live 2026-10-14) never loses it.
         values['owned'] = {**(old.get('values', {}).get('owned') or {}), **parsed['values']['owned']}

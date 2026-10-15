@@ -6,11 +6,13 @@ recorded outcome (uncertain: never resent automatically), and which were acknowl
 the logbook (re-projected idempotently).
 """
 import json
+import os
 from pathlib import Path
 from secrets import token_hex
 import threading
 
 from .player_snapshots import new_record_id, write_json_atomically
+from . import storage_limits
 
 DEFAULT_JOURNAL_ROOT = Path(__file__).parent / 'data' / 'automation_runs'
 JOURNAL_SCHEMA_VERSION = 1
@@ -25,6 +27,24 @@ class AutomationJournal:
         self.root = Path(root)
         self.lock = threading.Lock()
         self.counters = {}
+        self.usage = None
+
+    def _load_usage(self):
+        """Account-wide JSON usage; refresh on run starts and before refusing new work."""
+        count = size = 0
+        if self.root.exists():
+            with os.scandir(self.root) as scan:
+                folders = [entry.path for entry in scan if entry.is_dir()]
+            for folder in folders:
+                with os.scandir(folder) as scan:
+                    for entry in scan:
+                        if entry.name.endswith('.json') and entry.is_file():
+                            try:
+                                size += entry.stat().st_size
+                                count += 1
+                            except FileNotFoundError:
+                                continue
+        return count, size
 
     def append(self, event: dict) -> None:
         """Write one event. Raises OSError when it cannot be written; the caller must not act as if it was."""
@@ -35,12 +55,31 @@ class AutomationJournal:
                     **event}
         folder = self.root / event['run_id']
         with self.lock:
+            refreshed = self.usage is None or event['type'] == 'run_started'
+            if refreshed:
+                self.usage = self._load_usage()
+            encoded_size = len((json.dumps(document, ensure_ascii=False, indent=2) + '\n').encode('utf-8'))
+            files, size = self.usage
+            # Once a command may have been sent, outcomes/recovery must remain durable
+            # even above quota. Refuse only steps which start or dispatch new work.
+            new_work = event['type'] in ('run_started', 'intent', 'dispatching')
+            over_limit = lambda: (files + 1 > storage_limits.JOURNAL_MAX_FILES
+                                  or size + encoded_size > storage_limits.JOURNAL_MAX_BYTES)
+            if new_work and over_limit():
+                if not refreshed:
+                    # An operator may have archived history since the last append.
+                    # Keep normal appends cheap, but never reject using stale usage.
+                    self.usage = self._load_usage()
+                    files, size = self.usage
+                if over_limit():
+                    raise OSError('Action journal storage limit reached; archive this account history before starting new actions.')
             if event['run_id'] not in self.counters:
                 existing = [int(path.name.split('-', 1)[0]) for path in folder.glob('*.json')
                             if path.name.split('-', 1)[0].isdigit()] if folder.exists() else []
                 self.counters[event['run_id']] = max(existing, default=0)
             self.counters[event['run_id']] += 1
             write_json_atomically(folder, f'{self.counters[event["run_id"]]:06d}-{token_hex(4)}', document)
+            self.usage = (files + 1, size + encoded_size)
 
     def events(self) -> tuple[list[dict], list[str]]:
         """All readable events in order (runs by name, which starts with their start time; events by number)."""

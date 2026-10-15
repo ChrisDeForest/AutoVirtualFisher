@@ -9,6 +9,8 @@ import re
 from secrets import token_hex
 
 from .player_state import display_value
+from . import storage_limits as sl
+from .retention import WRITE_LOCK, RECORD_NAME, capacity_problem
 
 
 DEFAULT_SNAPSHOT_ROOT = Path(__file__).parent / 'data' / 'player_snapshots'
@@ -221,7 +223,16 @@ def save_snapshot(state: dict, root: Path = DEFAULT_SNAPSHOT_ROOT, mode: str = '
         'sections': sections,
         'parser_warnings': list(state.get('warnings', [])),
     }
-    write_json_atomically(Path(root) / key, snapshot_id, snapshot)
+    try:
+        with WRITE_LOCK:
+            payload_size = len((json.dumps(snapshot, ensure_ascii=False, indent=2) + '\n').encode('utf-8'))
+            problem = capacity_problem(Path(root) / key, RECORD_NAME, payload_size,
+                                       sl.SNAPSHOT_MAX_FILES, sl.SNAPSHOT_MAX_BYTES)
+            if problem:
+                return {'status': 'rejected', 'reason': problem}
+            write_json_atomically(Path(root) / key, snapshot_id, snapshot)
+    except OSError as error:
+        return {'status': 'rejected', 'reason': f'Snapshot could not be saved or its storage limit verified: {error}'}
     return {'status': 'saved', 'snapshot': snapshot, 'warnings': history_warnings}
 
 

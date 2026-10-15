@@ -505,10 +505,10 @@ def _keep(image, folder, info, boxes, lines, bmp_to_png, limit=KEEP_LIMIT):
 def prune_kept(folder: Path, limit: int = KEEP_LIMIT) -> None:
     """Delete all but the newest `limit` kept captures (each a PNG with its JSON). Only files named like
     kept captures are touched."""
-    stamps = sorted({path.stem for path in Path(folder).glob('*.png') if KEPT_NAME.fullmatch(path.stem)})
-    for stamp in stamps[:max(len(stamps) - limit, 0)]:
-        for suffix in ('.png', '.json'):
-            (Path(folder) / f'{stamp}{suffix}').unlink(missing_ok=True)
+    from . import storage_limits as sl
+    from .retention import prune_files
+    pattern = re.compile(r'\d{8}-\d{6}-\d{6}\.(?:png|json)')
+    prune_files(folder, pattern, min(limit, sl.CAPTURE_MAX_PAIRS), sl.CAPTURE_MAX_BYTES, group_stem=True)
 
 
 capture_discord = make_capture()

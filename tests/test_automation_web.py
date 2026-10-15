@@ -644,8 +644,8 @@ class AutomationWebTests(unittest.TestCase):
         self.assertIn("querySelectorAll('details[data-key]')", SCRIPT)
         self.assertIn('open[d.getAttribute(\'data-key\')] = d.open', SCRIPT)
         self.assertIn('d.open = open[key]', SCRIPT)
-        self.assertLess(SCRIPT.index('= d.open'), SCRIPT.index('panel.innerHTML = html'))
-        self.assertLess(SCRIPT.index('panel.innerHTML = html'), SCRIPT.index('d.open = open[key]'))
+        self.assertLess(SCRIPT.index('= d.open'), SCRIPT.index('if (current) updateSection(current, fresh, key)'))
+        self.assertLess(SCRIPT.index('if (current) updateSection(current, fresh, key)'), SCRIPT.index('d.open = open[key]'))
         self.assertLess(SCRIPT.index('d.open = open[key]'), SCRIPT.index('window.scrollTo(x, y)'))
         # A run starting or stopping loads the page afresh: reloading a page a press answered would resend it (a
         # tab left on an old Stop page stopped the next run a second after it started).

@@ -2,11 +2,53 @@
 import json
 from pathlib import Path
 
-from .fishing_log import FISHING_SCHEMA_VERSION
+from .fishing_log import FISHING_SCHEMA_VERSION, known_name, parse_fishing
+from .session_index import session_index
+from . import storage_limits
 from .player_snapshots import account_key, new_record_id, write_json_atomically
 
 DEFAULT_SESSION_ROOT = Path(__file__).parent / 'data' / 'fishing_sessions'
 SESSION_SCHEMA_VERSION = 1
+
+
+def normalize_tally(tally):
+    """Fill historical defaults and merge known item aliases without rewriting source records."""
+    defaults = parse_fishing('')
+    result = dict(tally)
+    for field, default in defaults.items():
+        value = result.get(field)
+        if value is None:
+            result[field] = default
+        elif isinstance(default, (dict, list)) and not isinstance(value, type(default)):
+            raise ValueError(f'{field} has an invalid tally shape')
+        elif isinstance(default, (int, float)) and (not isinstance(value, (int, float)) or isinstance(value, bool)):
+            raise ValueError(f'{field} must be numeric')
+    for field in ('catches', 'finds', 'chest_contents'):
+        normalized = {}
+        for name, amount in result[field].items():
+            if not isinstance(name, str) or not isinstance(amount, (int, float)) or isinstance(amount, bool):
+                raise ValueError(f'{field} must map item names to numeric counts')
+            canonical = known_name(name)
+            normalized[canonical] = normalized.get(canonical, 0) + amount
+        result[field] = normalized
+    if any(not isinstance(quest, dict) for quest in result['quests_completed']):
+        raise ValueError('quests_completed must contain objects')
+    result.pop('warnings', None)
+    return result
+
+
+def _read_session(path, account_name):
+    session = json.loads(path.read_text(encoding='utf-8'))
+    if not isinstance(session, dict):
+        raise ValueError('session must be an object')
+    if session.get('schema_version') != SESSION_SCHEMA_VERSION:
+        raise ValueError('unsupported schema version')
+    if session.get('account_key') != account_key(account_name):
+        raise ValueError('account identity does not match its directory')
+    if not isinstance(session.get('tally'), dict) or not session.get('captured_at'):
+        raise ValueError('required session fields are missing')
+    session['tally'] = normalize_tally(session['tally'])
+    return session
 
 
 def load_sessions(account_name: str, root: Path = DEFAULT_SESSION_ROOT) -> tuple[list[dict], list[str]]:
@@ -17,13 +59,7 @@ def load_sessions(account_name: str, root: Path = DEFAULT_SESSION_ROOT) -> tuple
         return sessions, warnings
     for path in folder.glob('*.json'):
         try:
-            session = json.loads(path.read_text(encoding='utf-8'))
-            if session.get('schema_version') != SESSION_SCHEMA_VERSION:
-                raise ValueError('unsupported schema version')
-            if session.get('account_key') != account_key(account_name):
-                raise ValueError('account identity does not match its directory')
-            if not isinstance(session.get('tally'), dict) or not session.get('captured_at'):
-                raise ValueError('required session fields are missing')
+            session = _read_session(path, account_name)
         except (OSError, json.JSONDecodeError, ValueError) as error:
             warnings.append(f'{path.name}: {error}')
             continue
@@ -44,24 +80,38 @@ def save_session(tally: dict, account_name: str | None, source_fingerprint: str,
         return {'status': 'rejected', 'reason': 'Choose an account before saving a fishing session.'}
     if not tally.get('trips'):
         return {'status': 'rejected', 'reason': 'No fishing trips were found in the pasted results.'}
-    sessions, warnings = load_sessions(name, root)
-    previous = next((item for item in sessions if item.get('source_fingerprint') == source_fingerprint), None)
-    if previous:
-        return {'status': 'duplicate', 'session': previous, 'warnings': warnings}
-    captured_at, session_id = new_record_id()
-    stored_tally = {field: value for field, value in tally.items() if field != 'warnings'}
-    session = {
-        'schema_version': SESSION_SCHEMA_VERSION,
-        'session_id': session_id,
-        'captured_at': captured_at,
-        'account_name': name,
-        'account_key': account_key(name),
-        'source_fingerprint': source_fingerprint,
-        'tally': stored_tally,
-        'provenance': provenance or MANUAL_PROVENANCE,
-    }
-    write_json_atomically(Path(root) / session['account_key'], session_id, session)
-    return {'status': 'saved', 'session': session, 'warnings': warnings}
+    folder = Path(root) / account_key(name)
+    with session_index(folder, lambda path: _read_session(path, name)) as index:
+        warnings = [row[0] for row in index.execute('SELECT warning FROM records WHERE warning IS NOT NULL')]
+        row = index.execute('SELECT payload FROM records WHERE fingerprint = ? ORDER BY name DESC LIMIT 1',
+                            (source_fingerprint,)).fetchone()
+        previous = json.loads(row[0]) if row else None
+        if previous:
+            return {'status': 'duplicate', 'session': previous, 'warnings': warnings}
+        captured_at, session_id = new_record_id()
+        stored_tally = normalize_tally(tally)
+        session = {
+            'schema_version': SESSION_SCHEMA_VERSION,
+            'session_id': session_id,
+            'captured_at': captured_at,
+            'account_name': name,
+            'account_key': account_key(name),
+            'source_fingerprint': source_fingerprint,
+            'tally': stored_tally,
+            'provenance': provenance or MANUAL_PROVENANCE,
+        }
+        files, size = index.execute('SELECT files, bytes FROM usage').fetchone()
+        encoded_size = len((json.dumps(session, ensure_ascii=False, indent=2) + '\n').encode('utf-8'))
+        if files + 1 > storage_limits.TRIP_MAX_FILES or size + encoded_size > storage_limits.TRIP_MAX_BYTES:
+            raise OSError('Trip history storage limit reached; archive this account history before saving new trips.')
+        write_json_atomically(Path(root) / session['account_key'], session_id, session)
+        path = folder / f'{session_id}.json'
+        stat = path.stat()
+        stamp = f'{stat.st_mtime_ns}:{stat.st_ctime_ns}:{stat.st_size}'
+        index.execute('INSERT OR REPLACE INTO records VALUES (?, ?, ?, ?, ?)',
+                      (path.name, stamp, source_fingerprint, json.dumps(session), None))
+        index.commit()
+        return {'status': 'saved', 'session': session, 'warnings': warnings}
 
 
 def _merge(total: dict, counts) -> None:

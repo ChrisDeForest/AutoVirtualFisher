@@ -173,7 +173,7 @@ def _level_rereads(image, area, executable):
                 contrast_region(image, output, tuple(round(value) for value in area), scale=scale)
             else:
                 save_region(image, output, area, scale)
-            yield _tesseract(executable, output, 7)
+            yield _tesseract(executable, output, 7, region=area, scale=scale, preparation='level crop')
         except (OSError, ValueError, subprocess.TimeoutExpired):
             yield None
         finally:
@@ -299,10 +299,21 @@ FIELD_LINES = {'balance': re.compile(r'balance\b', re.I), 'level': re.compile(r'
 FIELD_PREPARATIONS = ((None, 3), (None, 4), (140, 3), (180, 3))
 
 
-def _tesseract(executable, path, psm):
-    read = subprocess.run([executable, str(path), 'stdout', '--psm', str(psm)],
-                          capture_output=True, text=True, encoding='utf-8', timeout=5,
-                          creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+def _tesseract(executable, path, psm, *, region=None, scale=None, preparation=None):
+    from .ocr_journal import record_ocr_read
+    import time
+    started = time.perf_counter()
+    metadata = {'psm': psm, 'region': region, 'scale': scale, 'preparation': preparation}
+    try:
+        read = subprocess.run([executable, str(path), 'stdout', '--psm', str(psm)],
+                              capture_output=True, text=True, encoding='utf-8', timeout=5,
+                              creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+        record_ocr_read('tesseract', [], **metadata, error=str(error),
+                        duration_ms=round((time.perf_counter()-started)*1000,3))
+        raise
+    record_ocr_read('tesseract', read.stdout.splitlines(), **metadata, returncode=read.returncode,
+                    duration_ms=round((time.perf_counter()-started)*1000,3))
     return [line.strip() for line in read.stdout.splitlines() if line.strip()] if read.returncode == 0 else None
 
 
@@ -335,7 +346,8 @@ def repair_required_fields(kind, body, image, executable, output, limits):
         reads = []
         for threshold, scale in FIELD_PREPARATIONS:
             contrast_region(image, output, region, scale=scale, threshold=threshold)
-            read = _tesseract(executable, output, 7)
+            read = _tesseract(executable, output, 7, region=region, scale=scale,
+                              preparation={'threshold':threshold})
             if read:
                 reads.append(('tesseract', ' '.join(read)))
         reads += [('windows', ' '.join(read_region_lines(image, *region, scale))) for scale in (2, 3)]
@@ -420,7 +432,7 @@ def repair_reply_regions(boxes, image, image_height, extra_controls=()):
                 contrast_region(image, output, region, threshold=None)
             else:
                 save_region(image, output, region, 3)
-            primary = _tesseract(executable, output, 6)
+            primary = _tesseract(executable, output, 6, region=region, scale=3, preparation='reply crop')
             if primary is not None:
                 all_peers = []
                 # A one-pixel crop phase can drop a word in Windows OCR. Bounded padding
@@ -437,11 +449,9 @@ def repair_reply_regions(boxes, image, image_height, extra_controls=()):
                     # Keep the original field layout and identity; a contrasted crop supplies
                     # alternate field reads, never inferred decimal points or magnitudes.
                     contrast_region(image, output, region, threshold=180)
-                    alternate_read = subprocess.run([executable, str(output), 'stdout', '--psm', '6'],
-                        capture_output=True, text=True, encoding='utf-8', timeout=5,
-                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-                    if alternate_read.returncode == 0:
-                        alternate = [line.strip() for line in alternate_read.stdout.splitlines() if line.strip()]
+                    alternate = _tesseract(executable, output, 6, region=region, scale=3,
+                                           preparation={'threshold':180})
+                    if alternate is not None:
                         candidate = buff_field_candidates(primary, alternate, all_peers)
                         repaired = agreed_reply(kind, anchor['text'].strip(), candidate, all_peers)
                 if repaired is None and kind == 'profile' and Path(image).suffix.lower() == '.bmp':
@@ -449,11 +459,9 @@ def repair_reply_regions(boxes, image, image_height, extra_controls=()):
                     from .screenshot_ocr import read_image_boxes
                     contrast_region(image, output, region, threshold=140)
                     extra_peer = [b['text'] for b in read_image_boxes(output)]
-                    alternate_read = subprocess.run([executable, str(output), 'stdout', '--psm', '6'],
-                        capture_output=True, text=True, encoding='utf-8', timeout=5,
-                        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-                    if alternate_read.returncode == 0:
-                        alternate = [line.strip() for line in alternate_read.stdout.splitlines() if line.strip()]
+                    alternate = _tesseract(executable, output, 6, region=region, scale=3,
+                                           preparation={'threshold':140})
+                    if alternate is not None:
                         candidate = profile_field_candidates(primary, alternate, all_peers)
                         supplemented = profile_level_peers(candidate, all_peers, extra_peer)
                         repaired = agreed_reply(kind, anchor['text'].strip(), candidate, supplemented)
