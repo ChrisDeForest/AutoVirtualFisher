@@ -136,6 +136,62 @@ class CharmReplyTests(unittest.TestCase):
                           'Worker Charm': 1, 'Treasure Charm': 0, 'Quality Charm': 4, 'Experience Charm': 2})
         self.assertEqual((parsed['found'], parsed['goal'], parsed['max_level']), (11, 840, 14))
 
+    def test_levels_read_as_a_column_apart_from_the_names(self):
+        # Live OCR, 2026-10-16 (x3, and x1 with its glyphs): all eight "N/14" first, then all eight names. Each
+        # level belongs to the name in the same position; the last level once went to Marketing and the rest were lost.
+        from src.live_stats import charms_for_level, parse_charms
+        levels = ('8/14-', '7/14 -', '9/14 -', '7/14 -', '7/14 -', '7/14 -', '8/14-', '8/14-')
+        names = ('Marketing Charm - Sell fish for more. (6 to next tier).',
+                 'Endurance Charm - Catch more fish. (2 to next tier).',
+                 'Haste Charm - Fish more often. (9 to next tier).',
+                 'o Quantity Charm - Increase amount of items found in chests. (3 to next tier).',
+                 'Worker Charm - Workers catch more fish. (5 to next tier).',
+                 'Treasure Charm - Catch slightly more treasure. (1 to next tier).',
+                 'Quality Charm - Increase quality of treasure. (7 to next tier).',
+                 'Experience Charm - Increase experience from all fish. (4 to next tier).')
+        expected = {'Marketing Charm': (8, 6), 'Endurance Charm': (7, 2), 'Haste Charm': (9, 9),
+                    'Quantity Charm': (7, 3), 'Worker Charm': (7, 5), 'Treasure Charm': (7, 1),
+                    'Quality Charm': (8, 7), 'Experience Charm': (8, 4)}
+        expected = {name: {'level': level, 'counted': charms_for_level(level) + level + 1 - left}
+                    for name, (level, left) in expected.items()}
+        x3 = chr(10).join(('Charms are found in high tier crates. Try to get them all!',) + levels + names
+                          + ('297/840 - Charms found.', 'Message @Virtual Fisher', 'On...'))
+        parsed = parse_charms(x3)
+        self.assertEqual(parsed['charms'], expected)
+        self.assertEqual((parsed['found'], parsed['goal'], parsed['max_level']), (297, 840, 14))
+        x1 = chr(10).join(('Charms are found in high tier crates. Try to get them all!',)
+                          + tuple(level.rstrip(' -') for level in levels) + names[:2] + ('9',) + names[2:3]
+                          + ("V' QuantiW Charm - Increase amount of items found in chests. (3 to next tier).",
+                             names[4], "C' " + names[5], 'QualiW Charm - Increase quality of treasure. (7 to next tier).',
+                             names[7], 'e...', 'On...', '2971840 - Charms found.'))
+        self.assertEqual(parse_charms(x1)['charms'], expected)
+
+    def test_a_level_read_after_its_name_still_pairs_in_order(self):
+        # Live OCR: Worker's "6/14" came after its name, and Haste's level with a stray mark ("7/14 9").
+        from src.live_stats import parse_charms
+        text = chr(10).join((
+            'Charms are found in high tier crates. Try to get them all!', '7/14',
+            'Marketing Charm - Sell fish for more. (6 to next tier).', '6/14',
+            'Endurance Charm - Catch more fish. (3 to next tier).', '7/14 9',
+            'Haste Charm - Fish more often. (2 to next tier).', '5/14',
+            'Quantity Charm - Increase amount of items found in chests. (1 to next tier).',
+            "V' %rker Charm - Workers catch more fish. (4 to next tier).", '6/14',
+            "C' Treasure Charm - Catch slightly more treasure. (5 to next tier).", '6/14', '7/14',
+            'Quality Charm - Increase quality of treasure. (8 to next tier).', '6/14',
+            'Experience Charm - Increase experience from all fish. (1 to next tier).', '211/840 - Charms found.'))
+        levels = {name: charm['level'] for name, charm in parse_charms(text)['charms'].items()}
+        self.assertEqual(levels, {'Marketing Charm': 7, 'Endurance Charm': 6, 'Haste Charm': 7, 'Quantity Charm': 5,
+                                  'Worker Charm': 6, 'Treasure Charm': 6, 'Quality Charm': 7, 'Experience Charm': 6})
+
+    def test_a_tier_note_cut_off_at_the_end_still_counts(self):
+        # Live OCR: "... (1 to" with its "next tier)." line lost before the total.
+        from src.live_stats import charms_for_level, parse_charms
+        text = chr(10).join(('8/14 - Quality Charm - Increase quality of treasure. (9 to next tier).',
+                             '7/14 - Experience Charm - Increase experience from all fish. (1 to',
+                             '2701840 - Charms found.'))
+        self.assertEqual(parse_charms(text)['charms']['Experience Charm'],
+                         {'level': 7, 'counted': charms_for_level(7) + 7})
+
     def test_unread_charm_lines_are_named(self):
         from src.live_stats import unread_fields
         self.assertEqual(unread_fields('charms', CHARMS), [])

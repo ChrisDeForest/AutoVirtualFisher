@@ -238,9 +238,42 @@ def charm_progress(found: int, reported_level: int | None = None, max_level: int
             'needed': None if max_level is not None and level >= max_level else level + 1, 'at_least': at_least}
 
 
-CHARM_LINE = re.compile(r'(\d+)\s*/\s*(\d+)\s*-?.*?\b([A-Za-z]+)\s+Charm\b.*?(?:\((\d+)\s+to next tier\))?\W*$', re.I)
+# The tier note may be cut off at the line's end ("(1 to", its "next tier)." lost to OCR); the count is read.
+CHARM_LINE = re.compile(r'(\d+)\s*/\s*(\d+)\s*-?.*?\b([A-Za-z]+)\s+Charm\b.*?(?:\((\d+)\s+to(?:\s+next(?:\s+tier\)?)?)?)?\W*$', re.I)
 CHARM_START = re.compile(r'\W*\d+\s*/\s*\d+')
 CHARMS_FOUND = re.compile(r'([\d,]+)\s*/\s*([\d,]+)\s*-\s*Charms found', re.I)
+
+
+# A level alone on its line, perhaps with stray marks ("8/14-", "7/14 9"), and the level that starts a line.
+BARE_LEVEL = re.compile(r'\W*(\d+\s*/\s*\d+)[^A-Za-z]*$')
+LEADING_LEVEL = re.compile(r'\W*(\d+\s*/\s*\d+)\s*-?\s*')
+CHARM_NAME_LINE = re.compile(r'\b[A-Za-z%]+\s+Charm\s*-', re.I)
+
+
+def _charm_column_pairs(lines):
+    """`lines` as one "N/M - <name line>" per charm, pairing levels and names in order, when OCR split them apart.
+    Live, 2026-10-16: at some window widths all eight "8/14-" came first and all eight names after; in others one
+    level fell just below its name. The levels and the names are each in the reply's order, so with as many of one
+    as the other the n-th level is the n-th charm's. A wrapped tier note ("next tier).") stays with its name; other
+    stray marks ("9", "e...") are dropped. Otherwise the lines are returned unchanged."""
+    levels, names, rest, total = [], [], [], None
+    for line in lines:
+        if CHARMS_FOUND.search(line) or re.search(r'Charms found', line, re.I):
+            total = line
+        elif BARE_LEVEL.match(line):
+            levels.append(BARE_LEVEL.match(line)[1])
+        elif CHARM_NAME_LINE.search(line):
+            leading = LEADING_LEVEL.match(line) if CHARM_START.match(line) else None
+            if leading:
+                levels.append(leading[1])
+            names.append(line[leading.end():] if leading else line)
+        elif names and not re.search(r'tier\)', names[-1], re.I) and re.search(r'tier\)', line, re.I):
+            names[-1] += ' ' + line
+        elif not levels and not names:
+            rest.append(line)
+    if len(levels) < 2 or len(levels) != len(names):
+        return lines
+    return rest + [f'{level} - {name}' for level, name in zip(levels, names)] + ([total] if total else [])
 
 
 def parse_charms(text: str) -> dict:
@@ -251,8 +284,9 @@ def parse_charms(text: str) -> dict:
     count apart from its name, the tier note below it): each "N/M" starts a charm and the lines after it join it."""
     charms, maxes, found, goal = {}, set(), None, None
     entries = []
-    for line in (_clean(line) for line in (text or '').splitlines()):
-        if entries and line and not CHARM_START.match(line):
+    for line in _charm_column_pairs([_clean(line) for line in (text or '').splitlines()]):
+        # The total never joins a charm, even when OCR lost its slash ("2971840 - Charms found.").
+        if entries and line and not CHARM_START.match(line) and not re.search(r'Charms found', line, re.I):
             entries[-1] += ' ' + line
         else:
             entries.append(line)
