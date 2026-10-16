@@ -8,7 +8,7 @@ from tests.plan_fixtures import state
 from src.game_model_data import load_game_data
 from src.plan_data import load_plan_data
 from src.plan_rules import phase
-from src.plan_setup import ModelContext, choose_setup
+from src.plan_setup import ModelContext, bait_shop_price, choose_setup
 from src.planner import make_plan
 
 DATA, PLAN = load_game_data(), load_plan_data()
@@ -92,6 +92,16 @@ class PlannerTests(unittest.TestCase):
         switched = [s for s in plan['steps'] if s['kind'] == 'switch' and 'bait ' in s['action']
                     and 'bait none' not in s['action']]
         self.assertGreaterEqual(len(baits), len(switched))
+
+    def test_bait_purchases_cost_the_full_shop_price(self):
+        s = state()
+        s.account.upgrades['Bait Efficiency'] = 9
+        plan = make_plan(s, ModelContext(DATA), PLAN)
+        buys = [(step, step['do'][0]) for step in plan['steps'] if step['kind'] == 'bait' and step['do']]
+        self.assertTrue(buys)
+        for step, buy in buys:
+            full = bait_shop_price(buy['name']) * buy['amount']
+            self.assertEqual((buy['price'], step['cost']), (full, full), step)
 
     def test_bait_on_hand_is_used_first(self):
         bare = make_plan(state(), ModelContext(DATA), PLAN)
@@ -266,6 +276,7 @@ class PlannerTests(unittest.TestCase):
         self.assertTrue(special['currency'].endswith(' Fish'), special)
         self.assertIn(f'({special["cost"]} {special["currency"]})', special['action'])
         self.assertEqual(special['do'][0]['price'], special['cost'])
+        self.assertEqual(special['do'][0]['currency'], special['currency'])   # the Progress tab names it
 
     def test_an_upgrade_the_game_said_is_maxed_is_never_planned_past_it(self):
         from tests.plan_fixtures import CHARMS, account_state, synced

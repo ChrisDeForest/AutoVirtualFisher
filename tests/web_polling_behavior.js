@@ -6,7 +6,7 @@ const script = fs.readFileSync('src/automation_web.py','utf8').split('SCRIPT = "
   const timers = new Map(), events = {}, requests = [];
   let serial = 0, parsed = 0, replacements = 0;
   const connection = {textContent:''};
-  const child = {outerHTML:'same',getAttribute(){return 'run';},contains(){return false;},replaceWith(){replacements++;}};
+  const child = {outerHTML:'same',getAttribute(){return 'run';},contains(){return false;},querySelector(){return null;},replaceWith(){replacements++;}};
   const root = {children:[child],querySelector(){return child;}};
   const panel = {firstElementChild:root,querySelectorAll(){return [];},querySelector(){return null;},addEventListener(){},getAttribute(){return '1';}};
   const incoming = {children:[child],getAttribute(){return '1';}};

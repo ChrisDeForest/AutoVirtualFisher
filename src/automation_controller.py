@@ -9,7 +9,7 @@ that fail OCR are retried up to three attempts, with a delay, unless a retry rea
 (the same pixels give the same misread); they never establish state until valid.
 """
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import copy
 import json
@@ -26,6 +26,7 @@ from .automation_models import (ActionIntent, AutomationConfig, CapabilityError,
                                 NotDispatched, TransportError)
 from .automation_policy import next_action
 from .automation_state import AutomationState, apply_observation
+from .boost_policy import BOOSTS, COST, DEFAULT_ORDER, LABEL, buys, clean_order, seconds_from_note, wanted
 from .catch_check import load_fish_reference
 from .fishing_sessions import load_sessions
 from .game_model import cooldown
@@ -41,7 +42,8 @@ from .planner import make_plan
 from .player_planner import load_level_increments
 from .player_state import parse_responses
 from .progress import progress_view
-from .progress_store import HISTORY, append_history, build_index, journal_events, read_history
+from .progress_store import HISTORY, append_history, build_index, read_history, read_journal
+from .quest_tracker import QuestTracker
 from .startup_fields import apply_startup, reply_problems, startup_problems
 from .fishing_log import parse_fishing
 from .fishing_sessions import save_session
@@ -82,6 +84,24 @@ REFUSAL_RETRY_DELAY = 2.0
 # Follow the plan (part 5): a step whose action failed or whose outcome is unknown is not queued again for this many
 # trips (Do it can still queue it).
 HOLD_BACK_TRIPS = 50
+# The boost keeper (part 7): Emerald Fish on hand older than this is read again (/shop boosts) before buying; while a
+# boost is on, /boosts is read this often; a read the keeper asked for is not asked again sooner than READ_AGAIN.
+EMERALD_FRESH = 1800
+BOOSTS_READ_EVERY = 600
+READ_AGAIN = 600
+# A /boosts read missing a boost the keeper thinks is on: not believed within BOUGHT_TRUSTED seconds of a buy's own
+# reply (the read may have been captured before it), and otherwise only when the next read misses it too (a misread
+# line would have it bought again and again). Whatever the reads say, one boost is bought at most every BUY_SPACING
+# seconds, and a buy the game could not afford waits for a new Emerald Fish count or POOR_HOLD seconds.
+BOUGHT_TRUSTED = 120
+BUY_SPACING = 900
+POOR_HOLD = 600
+# Nothing is bought while a rod, bait or biome switch is planned within this many seconds.
+SWITCH_SOON = 120
+# The Emerald Fish rate is measured over fishing time (a gap between trips longer than this is not counted: paused, a
+# captcha, Discord not in front) and only from FISHING_FOR seconds of it, so one super crate does not set it.
+FISHING_GAP = 600
+FISHING_FOR = 1800
 # Follow the plan: plans are otherwise only asked for after a read, so something that became affordable while
 # fishing would wait for the next resync (100 trips). PlanRunner's 30 s spacing still applies.
 FOLLOW_PLAN_TRIPS = 10
@@ -196,12 +216,16 @@ def _good_plan(plan):
     return isinstance(plan, dict) and not plan.get('error')
 
 
-def _load_follow(path):
-    """Whether Follow the plan was left on for this account; off when never set or unreadable."""
+def _load_settings(path):
+    """The run settings left for this account (Follow the plan, Keep boosts running, the boost order); the defaults
+    when never set or unreadable."""
     try:
-        return bool(json.loads(Path(path).read_text(encoding='utf-8')).get('follow_plan')) if path else False
-    except (OSError, ValueError, AttributeError):
-        return False
+        saved = json.loads(Path(path).read_text(encoding='utf-8')) if path else {}
+        order = saved.get('boost_order')
+        return {'follow_plan': bool(saved.get('follow_plan')), 'keep_boosts': bool(saved.get('keep_boosts')),
+                'boost_order': clean_order(order if isinstance(order, list) else ())}
+    except (OSError, ValueError, AttributeError, TypeError):
+        return {'follow_plan': False, 'keep_boosts': False, 'boost_order': DEFAULT_ORDER}
 
 
 class AutomationController:
@@ -232,10 +256,23 @@ class AutomationController:
         # The Progress view (part 6): the same background runner, at most one view every 10 s. Never stops a run.
         self.progress = PlanRunner(self._compute_progress, plan_spawn, clock=monotonic, spacing=10.0,
                                    label='Progress view')
-        self.journal_cache = {}        # run folder -> (file count, events): finished runs are not read again
         # Follow the plan (part 5): kept per account beside the account state, so it outlives restarts.
         self.executor_path = self.state_path.parent / 'executor.json' if self.state_path else None
-        self.follow_plan = _load_follow(self.executor_path)
+        settings = _load_settings(self.executor_path)
+        self.follow_plan = settings['follow_plan']
+        # The boost keeper (part 7), saved beside Follow the plan. What is known of the boosts outlives a run.
+        self.keep_boosts, self.boost_order = settings['keep_boosts'], settings['boost_order']
+        self.boost_expiry = {}         # boost -> when it ends (UTC)
+        self.boost_held = {}           # boost -> not bought until then
+        self.boost_poor = {}           # boost held after "can't afford" -> the Emerald Fish count then
+        self.boost_bought = {}         # boost -> when its last buy had a reply (any result)
+        self.boost_missed = {}         # boost -> /boosts reads in a row that did not show it while thought on
+        self.emerald, self.emerald_at = None, None    # Emerald Fish on hand, and when it was read
+        self.boosts_read_at = None
+        self.boost_note = ''           # why the keeper last failed
+        self.boost_asked = {}          # read -> when the keeper (or the run's start) last queued it
+        self.start_reads = set()       # the run start's reads still to come in
+        self.quests, self.quests_read_at = QuestTracker(), None
         self.held = {}                 # step label -> the trip from which Follow the plan may queue it again
         # step label -> the trip its queued action last ran at (any result): a read that misses a buy leaves the
         # step ready in the next plan, and a bait batch has no level check, so it is not queued again for a while.
@@ -299,6 +336,7 @@ class AutomationController:
         self.pending_action = None     # the action (as a dict) of the act intent being sent or answered
         self.synced_at = {}
         self.sync_tallies, self.run_tallies = [], []
+        self.fishing_seconds, self.fishing_last = 0.0, None    # this run's fishing time, and its latest trip
         self.uncounted = 0             # trips since /profile was read whose outcome is unknown (not counted)
         self.charm_tallies = []        # trips since /charms was read: their charms add to its counts
         self.retry_counts = {}         # deferred refresh -> trips since it was last tried
@@ -339,6 +377,10 @@ class AutomationController:
                 kind for kind in ('refresh_charms', *self._account_reads()) if kind in self.config.capabilities))
             # Follow the plan waits for these too: a plan from the account saved last run is not followed.
             self.awaiting_reads = set(self.state.refresh_due)
+            self.boost_asked = {kind: self.utc() for kind in self.state.refresh_due}
+            # The keeper buys nothing until these are in (/boosts and /quests among them): boosts lost on a restart
+            # are seen, and the plan is not one from the account saved last run.
+            self.start_reads = set(self.state.refresh_due)
             self.startup_retry_at = float('-inf')
             self.acknowledged = {action for action, info in recovered['actions'].items()
                                  if info['status'] in ('acknowledged', 'projected')}
@@ -390,6 +432,7 @@ class AutomationController:
             self.phase, self.reason = 'STOPPED', reason
             self.stop_event.set()
             worker = self.thread
+            self._request_progress()   # the run's row shows why it stopped, not "Still running."
         if worker is not None and worker is not threading.current_thread():
             worker.join(timeout)
 
@@ -462,6 +505,7 @@ class AutomationController:
                     'executor': {'follow': self.follow_plan, 'prestige_ready': self.prestige_ready,
                                  'held': [{'label': label, 'until': until} for label, until in self.held.items()
                                           if until > self.state.trips]},
+                    'boosts': self._boost_status(), 'quests': self._quest_status(),
                     'startup': {'failures': dict(self.startup_failures),
                                 'problems': dict(self.startup_problems),
                                 'confirmed_fields': dict(self.state.startup_observed_at)}}
@@ -577,6 +621,11 @@ class AutomationController:
                 self._follow()
             except Exception as error:   # following the plan never stops a run
                 self.planner.error = f'Follow the plan failed: {error}'
+            try:
+                self.boost_note = ''        # the keeper may say why it is waiting
+                self._keep_boosts()
+            except Exception as error:   # the boost keeper never stops a run
+                self.boost_note = f'Boosts failed: {error}'
             if self.paused:
                 return
             # A queued action goes in the gap between trips, without waiting for the fishing cooldown; after one
@@ -750,12 +799,29 @@ class AutomationController:
         """Turn Follow the plan on or off; saved for this account. Steps already queued stay queued."""
         with self.lock:
             self.follow_plan = bool(on)
-            if self.executor_path:
-                try:
-                    write_json_atomically(self.executor_path.parent, self.executor_path.stem,
-                                          {'follow_plan': self.follow_plan})
-                except OSError as error:
-                    self._safe_event('state_not_saved', None, reason=str(error))
+            self._save_settings()
+
+    def set_boosts(self, on):
+        """Turn Keep boosts running on or off; saved for this account. Boost buys already queued stay queued."""
+        with self.lock:
+            self.keep_boosts = bool(on)
+            self._save_settings()
+
+    def set_boost_order(self, order):
+        """The order boosts are bought in when Emerald Fish runs short; saved for this account."""
+        with self.lock:
+            self.boost_order = clean_order(order)
+            self._save_settings()
+
+    def _save_settings(self):
+        """Every run setting at once, so saving one never drops another."""
+        if self.executor_path:
+            try:
+                write_json_atomically(self.executor_path.parent, self.executor_path.stem,
+                                      {'follow_plan': self.follow_plan, 'keep_boosts': self.keep_boosts,
+                                       'boost_order': list(self.boost_order)})
+            except OSError as error:
+                self._safe_event('state_not_saved', None, reason=str(error))
 
     def _follow(self):
         """Follow the plan (part 5): with nothing queued or waiting, queue every ready step of a plan made after the
@@ -810,6 +876,9 @@ class AutomationController:
                 continue
             action = entry['actions'][0]
             why = check(action, self.account.get('sections'), profile)
+            end = self.boost_expiry.get(action.name) if action.shop == 'boosts' else None
+            if end is not None and end > self.utc():
+                why = 'already running'    # a /boosts read since it was queued shows it on
             if why and why.startswith('not enough money') and not entry['checked'] and \
                     (profile.get('balance') or 0) + (profile.get('fish_value') or 0) >= action.price:
                 entry['actions'].insert(0, Action('sell'))
@@ -838,11 +907,16 @@ class AutomationController:
                 self.queue.pop(0)
         label = entry['label'] if entry else action.label()
         self._log_action(label, result, note)
-        self.recent[label] = self.state.trips     # Follow the plan leaves it a while, whatever the reads show
-        if result in ('failed', 'unknown') and action.act != 'sell':
-            self.held[label] = self.state.trips + HOLD_BACK_TRIPS    # Follow the plan leaves it for a while
-        # Follow the plan waits for these reads, then for a plan made after them.
-        self.awaiting_reads = {kind for kind in reads_after(action) if kind in self.config.capabilities}
+        if action.shop == 'boosts':
+            self._boost_result(action, result, note)    # the keeper's own holds, never Follow the plan's
+        else:
+            self.recent[label] = self.state.trips     # Follow the plan leaves it a while, whatever the reads show
+            if result in ('failed', 'unknown') and action.act != 'sell':
+                self.held[label] = self.state.trips + HOLD_BACK_TRIPS    # Follow the plan leaves it for a while
+        # Follow the plan waits for these reads, then for a plan made after them; added to any it still waits for
+        # (a boost bought during the run's start must not cut that wait short).
+        self.awaiting_reads = (self.awaiting_reads or set()) | {kind for kind in reads_after(action)
+                                                                if kind in self.config.capabilities}
         self.pending_action = None
         due = tuple(kind for kind in reads_after(action) if kind in self.config.capabilities
                     and kind not in self.state.refresh_due)
@@ -976,6 +1050,8 @@ class AutomationController:
             if observation.kind == 'buffs' and self.synced['buffs']:
                 self.earlier_buffs = self._synced()['buffs']
             self.synced[observation.kind] = observation.text
+            if observation.kind == 'profile':
+                self._profile_emerald()
             self._keep_history(observation)
             self.synced_at[observation.kind] = observation.observed_at
             if observation.kind == 'profile':
@@ -1006,6 +1082,7 @@ class AutomationController:
             self.last_trip_at = self.sent_at[0] if this_run else now
             if this_run:
                 self.state = replace(self.state, trips=self.state.trips + 1)
+                self._count_fishing(self.last_trip_at)
                 self._follow_replan()
             self._count_retries()
         elif result == 'trip':
@@ -1014,6 +1091,7 @@ class AutomationController:
             self.last_trip_at = self.sent_at[0] if this_run else now
             if this_run:
                 self.state = replace(self.state, trips=self.state.trips + 1)
+                self._count_fishing(self.last_trip_at)
             self.sync_tallies.append(tally)
             self.charm_tallies.append(tally)
             self.run_tallies.append(tally)
@@ -1080,6 +1158,177 @@ class AutomationController:
         if self.model_problem and not view['error']:
             view['estimates'] = [self.model_problem, *view['estimates']]
         return view
+
+    # --- the boost keeper and quests (part 7); called with the lock held, never stop a run ---
+
+    def _keep_boosts(self):
+        """Queue the emerald boosts that should be running, and the reads they need."""
+        now = self.utc()
+        # Applied (both pages) or set aside: either way no longer waited for.
+        self.start_reads &= {read_of(kind) for kind in self.state.refresh_due}
+        if self.quests.read_due(now, self.quests_read_at or self.boost_asked.get('refresh_quests')):
+            self._due('refresh_quests', now)
+        if not self.keep_boosts or 'act' not in self.config.capabilities or self.mode_blocks_boosts():
+            return
+        if self.queue or self.state.pending is not None or self.state.uncertain or self.paused or self.captcha \
+                or self.start_reads:
+            return
+        if self.emerald is None or (self.emerald_at and (now - self.emerald_at).total_seconds() > EMERALD_FRESH):
+            self._due('refresh_shop_boosts', now)
+            return
+        running = any(end > now for end in self.boost_expiry.values())
+        if running and (self.boosts_read_at is None
+                        or (now - self.boosts_read_at).total_seconds() >= BOOSTS_READ_EVERY):
+            self._due('refresh_boosts', now)
+        if self._switch_soon():
+            self.boost_note = 'Waiting for a planned switch'
+            return
+        held = {name for name, until in self.boost_held.items() if until > now}
+        held |= {name for name, at in self.boost_bought.items() if (now - at).total_seconds() < BUY_SPACING}
+        expiries = {name: end.timestamp() for name, end in self.boost_expiry.items()}
+        for name in buys(self._boosts_wanted(now), self.boost_order, expiries, now.timestamp(), self.emerald, held):
+            self._enqueue(f'Boost: {LABEL[name]}', [{'act': 'buy', 'name': name, 'shop': 'boosts',
+                                                     'price': COST[name]}])
+
+    def _due(self, kind, now=None):
+        """Queue a read the keeper needs: only one the run can make, not already queued or set aside (retried by
+        _count_retries), and not asked for in the last READ_AGAIN seconds (a read with no reply is not resent at
+        once)."""
+        now = now or self.utc()
+        asked = self.boost_asked.get(kind)
+        if kind not in self.config.capabilities or kind in self.state.refresh_due or kind in self.state.deferred \
+                or (asked is not None and (now - asked).total_seconds() < READ_AGAIN):
+            return
+        self.boost_asked[kind] = now
+        self.state = replace(self.state, refresh_due=self.state.refresh_due + (kind,))
+
+    def mode_blocks_boosts(self):
+        """Boosts are bought only during a live run, and not at Ready to prestige."""
+        return not self.running or self.prestige_ready
+
+    def _switch_soon(self):
+        """Whether a rod, bait or biome switch is queued, or (while Follow the plan is on: only then is it queued)
+        planned within SWITCH_SOON seconds: a boost bought now could be spent on the old setup. A pet alone does
+        not count."""
+        switches = ('rod', 'bait', 'biome')
+        if any(action.act in switches for entry in self.queue for action in entry['actions']):
+            return True
+        if not self.follow_plan:
+            return False
+        plan = self.planner.view().get('plan') or {}
+        # A step's 'seconds' is the plan's time from now until it (see planner.make_plan add()).
+        return any(step.get('kind') == 'switch' and step.get('status') in ('ready', 'cannot_afford')
+                   and (step.get('seconds') or 0) <= SWITCH_SOON
+                   and any(item.get('act') in switches for item in step.get('do') or [])
+                   for step in plan.get('steps') or [])
+
+    def _emerald_per_hour(self):
+        """Emerald Fish found this run per hour of fishing; None before FISHING_FOR seconds of it. There is no plan
+        estimate to use before then: the plan keeps no Emerald Fish rate (its per-trip figure is net of the boosts
+        it assumes, and stays inside plan_setup.metrics)."""
+        if self.fishing_seconds < FISHING_FOR:
+            return None
+        found = sum((tally.get('chest_contents') or {}).get('Emerald Fish', 0) for tally in self.run_tallies)
+        return found * 3600 / self.fishing_seconds
+
+    def _count_fishing(self, at):
+        """Add the time since this run's last trip to its fishing time, unless it was a long wait."""
+        if self.fishing_last is not None and 0 < at - self.fishing_last <= FISHING_GAP:
+            self.fishing_seconds += at - self.fishing_last
+        self.fishing_last = at
+
+    def _boosts_wanted(self, now):
+        rules = (self.plan_data or {}).get('route', {}).get('boosts') or {}
+        phase = (self.planner.view().get('plan') or {}).get('phase_now')
+        return wanted(phase, self._emerald_per_hour(), rules, self.quests.booster_open(now))
+
+    def _boost_result(self, action, result, note):
+        """A boost buy's reply: when it ends, or how long it is held from being bought again."""
+        now = self.utc()
+        self.boost_bought[action.name] = now
+        self.boost_poor.pop(action.name, None)
+        seconds = seconds_from_note(note) if result == 'done' else None
+        if seconds is not None:
+            self.boost_expiry[action.name] = now + timedelta(seconds=seconds)
+            self.boost_held.pop(action.name, None)
+            self.boost_missed.pop(action.name, None)
+            if note.startswith('boost on'):     # "already boosting" cost nothing and added no minutes
+                self.emerald = None if self.emerald is None else max(0, self.emerald - COST.get(action.name, 0))
+                self.quests.add_boost_minutes(seconds / 60, now)
+        elif result == 'failed' and note == "can't afford it":
+            # Until /shop boosts shows a new count, or POOR_HOLD: the /profile this buy queues may show the old one.
+            self.boost_held[action.name] = now + timedelta(seconds=POOR_HOLD)
+            self.boost_poor[action.name] = self.emerald
+        else:
+            # Unknown, or a reply that could not be read (outcome's 'unclear', recorded as failed): it may have
+            # started, so it is never bought twice.
+            self.boost_held[action.name] = now + timedelta(minutes=30 if action.name == 'Auto30m' else 20)
+
+    def _boost_read(self, kind, parsed):
+        """What /boosts, /shop boosts and /quests tell the keeper."""
+        now, values = self.utc(), parsed.get('values') or {}
+        if kind == 'boosts':
+            self.boosts_read_at = now
+            active = values.get('boosts') or {}
+            for name in BOOSTS:     # this also adopts boosts started by hand
+                if name in active:
+                    self.boost_expiry[name] = now + timedelta(seconds=active[name])
+                    self.boost_missed.pop(name, None)
+                elif name in self.boost_expiry:
+                    # A missing line: off, unless the read may predate the buy's reply or misread the line once.
+                    bought = self.boost_bought.get(name)
+                    if self.boost_expiry[name] > now and bought is not None \
+                            and (now - bought).total_seconds() < BOUGHT_TRUSTED:
+                        continue
+                    self.boost_missed[name] = self.boost_missed.get(name, 0) + 1
+                    if self.boost_expiry[name] <= now or self.boost_missed[name] >= 2:
+                        self.boost_expiry.pop(name, None)
+                        self.boost_missed.pop(name, None)
+        elif kind == 'shop_boosts' and values.get('emerald') is not None:
+            self._emerald_read(values['emerald'], now, shop=True)
+        elif kind == 'quests':
+            self.quests.apply_read(values, now)
+            self.quests_read_at = now
+
+    def _profile_emerald(self):
+        try:
+            emerald = (self._synced().get('inventory') or {}).get('exotic_fish', {}).get('Emerald Fish')
+            if emerald is not None:
+                self._emerald_read(emerald, self.utc())
+        except Exception as error:   # the boost keeper never stops a run
+            self.boost_note = f'Boosts failed: {error}'
+
+    def _emerald_read(self, emerald, now, shop=False):
+        self.emerald, self.emerald_at = emerald, now
+        if shop:    # a can't-afford hold ends with a new count from /shop boosts
+            for name, count in list(self.boost_poor.items()):
+                if count != emerald:
+                    self.boost_held.pop(name, None)
+                    self.boost_poor.pop(name)
+
+    def _boost_status(self):
+        now = self.utc()
+        try:
+            want = self._boosts_wanted(now)
+            per_hour = self._emerald_per_hour()
+        except Exception as error:   # never breaks the page
+            want, per_hour = set(), None
+            self.boost_note = self.boost_note or f'Boosts failed: {error}'
+        return {'keep': self.keep_boosts, 'order': list(self.boost_order),
+                'running': {name: int((end - now).total_seconds()) for name, end in self.boost_expiry.items()
+                            if end > now},
+                # Held after a reply that did not show whether it started (not after "can't afford").
+                'held': [name for name in self.boost_order if name not in self.boost_poor
+                         and self.boost_held.get(name) is not None and self.boost_held[name] > now],
+                'emerald': self.emerald, 'per_hour': None if per_hour is None else round(per_hour, 1),
+                'wanted': [name for name in self.boost_order if name in want], 'note': self.boost_note or ''}
+
+    def _quest_status(self):
+        try:
+            view = self.quests.view(self.utc())
+        except Exception:   # never breaks the page
+            view = {'daily': [], 'special': [], 'resets_in': None, 'boost_minutes': 0}
+        return {**view, 'read_at': self.quests_read_at.isoformat() if self.quests_read_at else None}
 
     # --- the planner (part 3): inputs snapshotted here, the plan worked out in PlanRunner's thread ---
 
@@ -1186,10 +1435,10 @@ class AutomationController:
         folder = self.state_path.parent
         index, bad_trips = build_index(folder)
         history, bad_lines = read_history(folder / HISTORY)
-        events = journal_events(self.journal.root, self.journal_cache, detached=False)
+        journal = read_journal(self.journal.root)   # shared with the page's disk view; never takes self.lock
         notes = [f'{count} {what} could not be read.' for count, what in
                  ((bad_trips, 'trip records'), (bad_lines, 'profile history lines')) if count]
-        return progress_view(index, history, events, inputs['plan'], inputs['profile'], inputs['charms'],
+        return progress_view(index, history, journal, inputs['plan'], inputs['profile'], inputs['charms'],
                              datetime.now(timezone.utc), inputs['running_id'], notes)
 
     def _project(self, action_id, tally):
@@ -1274,6 +1523,10 @@ class AutomationController:
         """Apply an account reply and save the state. Page 1 of a paged read queues page 2 next; a read that
         still lacks something (after both pages) is read again every few trips."""
         self.account = apply_read(self.account, observation.kind, parsed, observation.observed_at, observation.text)
+        try:
+            self._boost_read(observation.kind, parsed)
+        except Exception as error:   # the boost keeper never stops a run
+            self.boost_note = f'Boosts failed: {error}'
         if self.state_path:
             try:
                 save_state(self.state_path, self.account)
@@ -1430,3 +1683,4 @@ class AutomationController:
         self.generation += 1
         self.stop_event.set()
         self.phase, self.reason = 'STOPPED', reason
+        self._request_progress()   # the run's row shows why it stopped, not "Still running."

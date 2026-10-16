@@ -302,11 +302,11 @@ class QuestTests(unittest.TestCase):
                                  .read_text(encoding='utf-8'))
         self.assertEqual(quests['quests'], {
             'daily': {
-                'Daily Level-ups': {'progress': 1, 'goal': 2, 'task': 'Level up 2 time(s)'},
-                'Daily Fishing': {'progress': 101, 'goal': 500, 'task': 'Catch 500 fish'},
-                'Daily Artifact Hunter': {'progress': 1, 'goal': 5, 'task': 'Find 5 chests'},
+                'Daily Level-ups': {'progress': 1, 'goal': 2, 'done': False, 'task': 'Level up 2 time(s)'},
+                'Daily Fishing': {'progress': 101, 'goal': 500, 'done': False, 'task': 'Catch 500 fish'},
+                'Daily Artifact Hunter': {'progress': 1, 'goal': 5, 'done': False, 'task': 'Find 5 chests'},
             },
-            'special': {'Pet Locator': {'progress': 0, 'goal': 1, 'task': 'Find a pet'}},
+            'special': {'Pet Locator': {'progress': 0, 'goal': 1, 'done': False, 'task': 'Find a pet'}},
             'resets_in_minutes': 22 * 60 + 40,
         })
         self.assertEqual(quests['warnings'], [])
@@ -337,6 +337,8 @@ class QuestTests(unittest.TestCase):
         self.assertEqual(quest_summary(state['quests']['daily']),
                          'Daily Level-ups 1/2, Daily Fishing 101/500, Daily Artifact Hunter 1/5')
         self.assertIsNone(quest_summary(None))
+        state = parse_responses(quests='Daily Level-ups - COMPLETED\nLevel up 3 time(s)\nDaily Fishing - 5/500')
+        self.assertEqual(quest_summary(state['quests']['daily']), 'Daily Level-ups completed, Daily Fishing 5/500')
 
 
 if __name__ == '__main__':

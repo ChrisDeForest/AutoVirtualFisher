@@ -6,7 +6,7 @@ from tests.plan_fixtures import state
 from src.game_model import trip
 from src.game_model_data import load_game_data
 from src.plan_data import load_plan_data
-from src.plan_setup import ModelContext, bait_options, choose_setup, metrics, score
+from src.plan_setup import ModelContext, bait_options, bait_shop_price, choose_setup, metrics, score
 
 DATA, PLAN = load_game_data(), load_plan_data()
 
@@ -44,6 +44,26 @@ class MetricsTests(unittest.TestCase):
         baited = metrics(s, replace(s.setup, bait='Leeches'), ctx(), PLAN['route'], PLAN['prices'], False)
         self.assertAlmostEqual(baited['bait_cost'], 25 * (1 - 0.05 * 5))
         self.assertNotEqual(bare['money'], baited['money'])
+
+    def test_bait_shop_price_is_full_while_the_per_trip_cost_is_discounted(self):
+        s = state()
+        s.account.upgrades['Bait Efficiency'] = 9
+        self.assertEqual(bait_shop_price('Wise Bait'), 35)
+        self.assertEqual(bait_shop_price(None), 0)
+        m = metrics(s, replace(s.setup, bait='Wise Bait'), ctx(), PLAN['route'], PLAN['prices'], False)
+        self.assertAlmostEqual(m['bait_cost'], 35 * 0.55)
+
+    def test_affordability_uses_the_full_shop_price(self):
+        s = state(level=90)
+        s.account.upgrades['Bait Efficiency'] = 9
+        s.rods = set(s.rods) | {'Infinity Rod'}
+        s.bait_stock = {}
+        s.setup = replace(s.setup, bait=None)
+        needs = {'xp': 1}
+        s.cash, s.fish_value = 17000.0, 0.0
+        self.assertNotIn('Wise Bait', bait_options(s, needs, PLAN['route'], PLAN['prices'], 'River'))
+        s.cash = 17500.0
+        self.assertIn('Wise Bait', bait_options(s, needs, PLAN['route'], PLAN['prices'], 'River'))
 
     def test_all_boosts_turn_both_boosts_on(self):
         s = state()
@@ -89,7 +109,7 @@ class ChooseSetupTests(unittest.TestCase):
     def test_bait_options_follow_unlocks_and_the_guide(self):
         s = state(level=90)
         s.cash = 1e9
-        options = bait_options(s, {'money': 1}, PLAN['route'], PLAN['prices'], 'Ocean')
+        options = bait_options(s, {'money': 1}, PLAN['route'], PLAN['prices'], 'River')
         self.assertIn(None, options)
         self.assertIn('Magic Bait', options)
         self.assertIn('Artifact Magnet', options)
@@ -103,7 +123,7 @@ class ChooseSetupTests(unittest.TestCase):
         s = state(level=90)
         s.cash, s.fish_value = 0, 0
         s.bait_stock = {'Magic Bait': 300, 'Wise Bait': 50, 'Magnet': 99}
-        options = bait_options(s, {'money': 1}, PLAN['route'], PLAN['prices'], 'Ocean')
+        options = bait_options(s, {'money': 1}, PLAN['route'], PLAN['prices'], 'River')
         self.assertIn('Magic Bait', options)
         self.assertNotIn('Wise Bait', options)               # the guide's rules still apply to bait on hand
         self.assertNotIn('Magnet', options)
@@ -111,13 +131,13 @@ class ChooseSetupTests(unittest.TestCase):
     def test_bait_must_be_affordable_by_the_batch(self):
         s = state(level=90)
         s.cash, s.fish_value = 0, 0
-        self.assertEqual(bait_options(s, {'money': 1}, PLAN['route'], PLAN['prices'], 'Ocean'), [None])
-        s.cash = 500 * 250 * (1 - 0.05 * s.account.upgrades.get('Bait Efficiency', 0))   # 500 Magic Bait
-        self.assertIn('Magic Bait', bait_options(s, {'money': 1}, PLAN['route'], PLAN['prices'], 'Ocean'))
+        self.assertEqual(bait_options(s, {'money': 1}, PLAN['route'], PLAN['prices'], 'River'), [None])
+        s.cash = 500 * 250   # 500 Magic Bait, at the full shop price whatever Bait Efficiency is
+        self.assertIn('Magic Bait', bait_options(s, {'money': 1}, PLAN['route'], PLAN['prices'], 'River'))
         river = bait_options(s, {'money': 1}, PLAN['route'], PLAN['prices'], 'River')
         self.assertIn('Magic Bait', river)
         s.cash -= 1
-        self.assertNotIn('Magic Bait', bait_options(s, {'money': 1}, PLAN['route'], PLAN['prices'], 'Ocean'))
+        self.assertNotIn('Magic Bait', bait_options(s, {'money': 1}, PLAN['route'], PLAN['prices'], 'River'))
         # 500 at a time in every biome (the user, 2026-10-14), River included.
         self.assertNotIn('Magic Bait', bait_options(s, {'money': 1}, PLAN['route'], PLAN['prices'], 'River'))
         from src.plan_setup import bait_batch

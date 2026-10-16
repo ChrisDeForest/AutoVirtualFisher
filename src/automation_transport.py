@@ -42,7 +42,8 @@ SIM_ACCOUNT = {'refresh_upgrades': samples.UPGRADES_PAGE_1, 'refresh_upgrades_pa
                'refresh_boats': samples.BOATS, 'refresh_pets': samples.PETS,
                'refresh_prestige_shop': samples.PRESTIGE_SHOP, 'refresh_league': samples.LEAGUE_PAGE_1,
                'refresh_special': samples.SPECIAL, 'refresh_special_page2': samples.SPECIAL_PAGE_2,
-               'refresh_league_page2': samples.LEAGUE_PAGE_2, 'refresh_boosts': samples.BOOSTS}
+               'refresh_league_page2': samples.LEAGUE_PAGE_2, 'refresh_boosts': samples.BOOSTS,
+               'refresh_shop_boosts': samples.SHOP_BOOSTS, 'refresh_quests': samples.QUESTS}
 VISIBLE_REPLIES = 12
 
 
@@ -74,6 +75,7 @@ class SimulationTransport:
         self.history = []               # delivered observations, oldest first
         self.next_allowed = float('-inf')
         self.totals = {'trips': 0, 'catches': {}, 'xp': 0}
+        self.boosts = {}                # emerald boost -> monotonic time it ends (shown by /boosts)
 
     def inspect_context(self) -> ContextStatus:
         return self.context
@@ -121,7 +123,7 @@ class SimulationTransport:
             # OCR misread the digits: "$1,0O0", "Level 1O", "3.5?s".
             glyph = '?' if outcome == 'unreadable_fixed' else '?' * (index + 1)
             text = text.replace('$1,000', '$1,0O0').replace('Level 10,', 'Level 1O,').replace(
-                f'{self.cooldown:g}s', f'{self.cooldown:g}{glyph}s').replace('Balance: $1,0O0.', f'Balance: ${glyph}1,0O0.')
+                f'{float(self.cooldown)}s', f'{float(self.cooldown)}{glyph}s').replace('Balance: $1,0O0.', f'Balance: ${glyph}1,0O0.')
         if outcome == 'partial':
             # One field lost to OCR, the rest readable.
             text = text.replace('Sell price: 1.00x\n', '').replace('Currently using Steel Rod.\n', '').replace(
@@ -162,6 +164,17 @@ class SimulationTransport:
         """The game's reply to an action, in the wording recorded live on 2026-10-13 (emoji read as letters)."""
         from .actions import Action
         action = Action.from_dict(intent.arguments[0])
+        if action.act == 'buy' and action.shop == 'boosts':
+            now = self.monotonic()
+            left = self.boosts.get(action.name, now) - now
+            if left > 0:
+                return f'You are already boosting that! Time left: {int(left // 60)}m {int(left % 60)}s'
+            minutes = {'Fish20m': 20, 'Treasure20m': 20, 'Auto30m': 30}.get(action.name)
+            if minutes:
+                self.boosts[action.name] = now + minutes * 60
+            return {'Fish20m': 'You will now catch more fish for the next 20 minutes.',
+                    'Treasure20m': 'You will now find more treasure for the next 20 minutes.',
+                    'Auto30m': 'You hired a worker for the next 30 minutes.'}.get(action.name, "You can't afford that!")
         if action.act == 'buy' and action.amount:
             return (f'Bait purchase\nYou bought {action.amount} {action.name.lower()} for ${action.price or 0:,.0f}.\n'
                     'Use /bait to see all bait you currently have.')
@@ -188,15 +201,22 @@ class SimulationTransport:
             return SIM_CHARMS, 'charms'
         if intent.kind == 'act':
             return self._act(intent), 'action'
+        if intent.kind == 'refresh_boosts':
+            # The boosts bought here, as /boosts lists them ("More Fish: 19m 0s"); none: the recorded sample.
+            names = {'Fish20m': 'More Fish', 'Treasure20m': 'More Treasure', 'Auto30m': 'Worker'}
+            active = [f'{names[name]}: {int((end - now) // 60)}m {int((end - now) % 60)}s'
+                      for name, end in self.boosts.items() if end > now]
+            lines = SIM_ACCOUNT['refresh_boosts'].split('\n')
+            return '\n'.join(lines[:1] + active + lines[1:]), 'boosts'
         if intent.kind in SIM_ACCOUNT:
             return SIM_ACCOUNT[intent.kind], reply_of(intent.kind)
         if intent.kind == 'refresh_buffs':
             return (f"{username}'s current multipliers (including bait):\nSell price: 1.00x\nFish catch: 1.00x\n"
                     'Fish quality: 1.00x\nTreasure chance: 1.00x\nTreasure quality: 1.00x\nXP Multiplier: 1.00x\n'
-                    f'Fishing cooldown: {self.cooldown:g}s.', 'buffs')
+                    f'Fishing cooldown: {float(self.cooldown)}s.', 'buffs')
         if now < self.next_allowed:
             return (f'You must wait {self.next_allowed - now:.1f}s before fishing again.\n'
-                    f'Your cooldown: {self.cooldown:g}s'), None
+                    f'Your cooldown: {float(self.cooldown)}s'), None
         self.next_allowed = now + self.cooldown
         catches = {fish: self.random.randint(1, 9) for fish in FISH}
         xp = sum(catches.values()) * 10

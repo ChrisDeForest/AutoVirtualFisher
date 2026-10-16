@@ -7,6 +7,7 @@ from functools import cache
 from html import escape
 import json
 import re
+from .boost_policy import LABEL as BOOST_LABEL, clean_order
 from .fishing_log import CHARM_NAMES
 from .game_model import round_half_up
 from .player_charts import line_chart_svg
@@ -24,7 +25,8 @@ ACCOUNT_READ_LABELS = {
     'refresh_boats': 'Reading the boat shop', 'refresh_pets': 'Reading your pets',
     'refresh_prestige_shop': 'Reading the prestige shop', 'refresh_league': 'Reading the league shop',
     'refresh_special': 'Reading the special shop',
-    'refresh_boosts': 'Reading your boosts'}
+    'refresh_boosts': 'Reading your boosts', 'refresh_shop_boosts': 'Reading the boost shop',
+    'refresh_quests': 'Reading your quests'}
 BUFFS = (('sell_price', 'Sell price'), ('fish_catch', 'Fish catch'), ('fish_quality', 'Fish quality'),
          ('treasure_chance', 'Treasure chance'), ('treasure_quality', 'Treasure quality'),
          ('xp_multiplier', 'XP multiplier'))
@@ -159,6 +161,16 @@ STYLE = """<style>
 .pets td:last-child { text-align:left; padding-left:24px; } .pets td:nth-child(2) { white-space:nowrap; }
 .model .cannot { color:var(--muted); font-size:13px; white-space:nowrap; }
 .model .where { display:block; color:var(--muted); font-size:12px; font-family:ui-monospace,Consolas,monospace; }
+.boost-order { list-style:none; margin:10px 0; padding:0; font-size:15px; }
+.boost-order li { display:flex; flex-wrap:wrap; align-items:center; gap:4px 12px; padding:7px 8px; cursor:grab;
+  border:1px solid var(--line); border-radius:6px; margin:0 0 6px; }
+.boost-order li.dragged { opacity:.5; } .boost-order form { margin:0; }
+.boost-order button { padding:2px 10px; font-size:14px; }
+.boost-name { font-weight:600; flex:1 1 auto; } .boost-state { color:var(--muted); font-size:13px; }
+.boost-order .moves { display:flex; gap:6px; }
+.quest-row { display:flex; flex-wrap:wrap; gap:2px 12px; padding:6px 0; border-bottom:1px solid var(--line); font-size:15px; }
+.quest-row .progress-mark { color:var(--sea); font-variant-numeric:tabular-nums; min-width:3.5em; }
+.quest-row .task { color:var(--muted); font-size:13px; flex:1 1 160px; overflow-wrap:anywhere; }
 .visually-hidden { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
 @media(max-width:900px) { .finds { grid-template-columns:minmax(0,1fr); } }
 @media(max-width:900px) { .boxes, .rewards-row { grid-template-columns:minmax(0,1fr); } .box.wide { grid-column:auto; }
@@ -319,6 +331,8 @@ SCRIPT = """<script nonce="{nonce}">
         if (name && name !== tab) return;
         var key = name || 'shared-' + i;
         var current = name ? root.querySelector('section[data-tab="' + name + '"]') : root.children[i];
+        // A boost tile being dragged stays put: the Run section is not replaced under the pointer.
+        if (current && current.querySelector('.boost-order.dragging')) return;
         // Keep any form the user is currently editing until it loses focus.
         if (current && current.contains(document.activeElement) && document.activeElement.matches('input,select,textarea')) return;
         if (current) updateSection(current, fresh, key);
@@ -349,6 +363,40 @@ SCRIPT = """<script nonce="{nonce}">
       if (!document.hidden) timer = setTimeout(poll, version === generation ? 2000 : 0);
     });
   }
+  // Boost tiles: drag one to a new place; the new order is posted when the drag ends.
+  var dragged = null, before = '';
+  function boostOrder(list) {
+    return Array.from(list.children).map(function (li) { return li.getAttribute('data-boost'); }).join(',');
+  }
+  panel.addEventListener('dragstart', function (event) {
+    var li = event.target.closest && event.target.closest('.boost-order li');
+    if (!li) return;
+    dragged = li;
+    before = boostOrder(li.parentNode);
+    li.parentNode.classList.add('dragging');
+    li.classList.add('dragged');
+    event.dataTransfer.effectAllowed = 'move';
+    try { event.dataTransfer.setData('text/plain', li.getAttribute('data-boost')); } catch (e) {}
+  });
+  panel.addEventListener('dragover', function (event) {
+    var over = dragged && event.target.closest && event.target.closest('.boost-order li');
+    if (!over || over.parentNode !== dragged.parentNode) return;
+    event.preventDefault();
+    if (over === dragged) return;
+    var box = over.getBoundingClientRect();
+    over.parentNode.insertBefore(dragged, event.clientY > box.top + box.height / 2 ? over.nextSibling : over);
+  });
+  panel.addEventListener('drop', function (event) { if (dragged) event.preventDefault(); });
+  panel.addEventListener('dragend', function () {
+    if (!dragged) return;
+    var list = dragged.parentNode, order = boostOrder(list);
+    dragged.classList.remove('dragged');
+    dragged = null;
+    function done() { list.classList.remove('dragging'); refreshSoon(); }
+    if (order === before) { done(); return; }
+    fetch('/automation', {method: 'POST', body: new URLSearchParams({action: 'boost_order', order: order})})
+      .then(done, done);
+  });
   timer = setTimeout(poll, 0);
 })();
 </script>"""
@@ -1098,6 +1146,68 @@ def render_panel(status, mode=None, active_tab=None) -> str:
             f'<section class="tab" data-tab="progress" hidden>{(_progress_tab(status.get("progress")) if active_tab in (None, "progress") else "")}</section></div>')
 
 
+def _hours_minutes(seconds) -> str:
+    minutes = max(0, int(seconds or 0)) // 60
+    return f'{minutes // 60}h {minutes % 60}m' if minutes >= 60 else f'{minutes}m'
+
+
+def _boost_tile(name, order, boosts):
+    left = (boosts.get('running') or {}).get(name)
+    state = (f'running, {_hours_minutes(left)} left' if left else
+             'held (outcome unknown)' if name in (boosts.get('held') or ()) else 'off')
+    i = order.index(name)
+
+    def moved(to):
+        other = list(order)
+        other[i], other[to] = other[to], other[i]
+        return ','.join(other)
+    moves = ''.join(filter(None, (
+        _button('boost_order', '↑', secondary=True, extra={'order': moved(i - 1)}) if i > 0 else '',
+        _button('boost_order', '↓', secondary=True, extra={'order': moved(i + 1)}) if i < len(order) - 1 else '')))
+    return (f'<li draggable="true" data-boost="{escape(name)}"><span class="boost-name">'
+            f'{escape(BOOST_LABEL.get(name, name))}</span><span class="boost-state">{state}</span>'
+            f'<span class="moves">{moves}</span></li>')
+
+
+def _boosts_box(boosts):
+    order = list(clean_order(boosts.get('order')))
+    toggle = (_button('boosts', 'Stop boosts', secondary=True, extra={'on': '0'}) if boosts.get('keep')
+              else _button('boosts', 'Keep boosts running', extra={'on': '1'}))
+    emerald = boosts.get('emerald')
+    rate = boosts.get('per_hour')
+    line = ('Emerald Fish: not read yet' if emerald is None else f'Emerald Fish: {emerald:,}'
+            + (f' · {rate:,.1f} an hour' if rate is not None else ''))
+    wanted = [BOOST_LABEL.get(name, name) for name in boosts.get('wanted') or ()]
+    body = (f'<div class="actions">{toggle}</div>'
+            f'<ol class="boost-order" data-key="boost-order">{"".join(_boost_tile(n, order, boosts) for n in order)}</ol>'
+            f'<p class="note">{escape(line)}</p>'
+            + (f'<p class="note">Wanted now: {escape(", ".join(wanted))}</p>' if wanted else '')
+            + (f'<p class="note">{escape(boosts["note"])}</p>' if boosts.get('note') else ''))
+    return _box('Boosts', body, note='Drag a tile, or use the arrows, to set which boost is bought first.')
+
+
+def _quests_box(quests):
+    def row(quest, name):
+        if quest.get('done'):
+            mark = '✓'
+        elif quest.get('progress') is not None and quest.get('goal') is not None:
+            mark = f'{quest["progress"]}/{quest["goal"]}'
+        else:
+            mark = 'in progress'
+        task = f'<span class="task">{escape(quest["task"])}</span>' if quest.get('task') else ''
+        return (f'<div class="quest-row"><span class="progress-mark">{escape(mark)}</span>'
+                f'<span>{escape(name)}</span>{task}</div>')
+    daily = quests.get('daily') or []
+    rows = ''.join(row(q, q.get('name', '')) for q in daily)
+    rows += ''.join(row(q, f'Special: {q.get("name", "")}') for q in quests.get('special') or [])
+    footer = (f'Resets in {_hours_minutes(quests["resets_in"])}' if quests.get('resets_in') is not None
+              else 'Not read yet')
+    booster = next((q for q in quests.get('special') or [] if q.get('name') == 'Booster'), None)
+    if booster and booster.get('goal') and quests.get('boost_minutes') is not None:
+        footer += f'. Boost minutes today: {quests["boost_minutes"]} of {booster["goal"]}'
+    return _box('Quests', rows or '<p class="empty">Not read yet.</p>', note=footer)
+
+
 def _run_tab(status, mode):
     running = status['running']
     next_fish = status.get('next_eligible_in')
@@ -1174,11 +1284,13 @@ def _run_tab(status, mode):
     trips_box = _box('Recent trips', _scroll('Recent trips', f'<ul class="trips-list">{items}</ul>')
                      if recent else '<p class="empty">No trips yet.</p>')
 
+    boosts_box = _boosts_box(status['boosts']) if status.get('boosts') else ''
+    quests_box = _quests_box(status['quests']) if status.get('quests') else ''
     run_tab = (f'{_level_line(profile, dashboard)}'
                f'<div class="boxes">{profile_box}{buffs_box}{run_box}'
                # Rewards takes a narrow share of its row so the finds tables (charms most of all) fit without scrolling.
                f'<div class="rewards-row">{rewards_box}{_finds_box(dashboard.get("finds") or {}, dashboard.get("charms"))}'
-               f'</div>{_pets_box(status.get("account"), profile)}{inventory_box}{trips_box}'
+               f'</div>{_pets_box(status.get("account"), profile)}{boosts_box}{quests_box}{inventory_box}{trips_box}'
                f'{_account_box(status.get("account"))}</div>')
     return run_tab
 

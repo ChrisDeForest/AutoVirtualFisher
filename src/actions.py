@@ -10,7 +10,8 @@ COMMAND = {'buy': '/buy', 'sell': '/sell', 'rod': '/rod', 'biome': '/biome', 'ba
 # Tabs from the first option to a buy's amount (user, 2026-10-13), each after a pause.
 AMOUNT_TABS = 3
 SHOP_READ = {'upgrades': 'refresh_upgrades', 'special': 'refresh_special', 'league': 'refresh_league',
-             'rods': 'refresh_rod', 'boats': 'refresh_boats', 'bait': 'refresh_bait', 'pets': 'refresh_pets'}
+             'rods': 'refresh_rod', 'boats': 'refresh_boats', 'bait': 'refresh_bait', 'pets': 'refresh_pets',
+             'boosts': 'refresh_boosts'}
 SWITCH_READ = {'rod': 'refresh_rod', 'biome': 'refresh_biome', 'bait': 'refresh_bait', 'pet': 'refresh_pets'}
 # Shops paid in money: the balance is checked before buying. League buys check the Hooks from /shop league;
 # special (exotic fish) buys are left to the game's reply.
@@ -25,6 +26,7 @@ class Action:
     level: int | None = None   # the level an upgrade reaches
     shop: str = ''             # a buy's shop: 'upgrades', 'special', 'league', 'rods', 'boats' or 'bait'
     price: float = 0           # a buy's price (0: not checked)
+    currency: str = ''         # what a special buy is paid in ('Lava Fish'); '' for money and Hooks
 
     @classmethod
     def from_dict(cls, data):
@@ -65,6 +67,18 @@ def outcome(action, text):
         return 'failed', 'invalid biome'
     name = action.name.casefold()
     if action.act == 'buy':
+        if action.shop == 'boosts':
+            # Live, 2026-10-15: "You hired a worker for the next 30 minutes." / "You will now find more treasure
+            # for the next 20 minutes." / "You will now catch more fish for the next 20 minutes."; a boost of the same
+            # kind already on: "You are already boosting that! Time left: 19m 38s" (it does not name the boost).
+            left = re.search(r'already boosting that!?\s*Time left:\s*((?:\d+h\s*)?(?:\d+m\s*)?(?:\d+s)?)', text, re.I)
+            if left:
+                return 'done', f'already boosting, {left[1].strip()} left'
+            words = {'Auto30m': r'hired a worker', 'Treasure20m': r'find more treasure', 'Fish20m': r'catch more fish'}
+            started = re.search(rf'{words.get(action.name, "(?!)")} for the next (\d+) minutes', text, re.I)
+            if started:
+                return 'done', f'boost on for {started[1]}m'
+            return 'unclear', 'no boost reply'
         owned = re.search(r'\bYou already own that (boat|rod|pet|item)\b', text, re.I)
         category = {'boats': 'boat', 'rods': 'rod', 'pets': 'pet'}.get(action.shop, 'item')
         if owned and owned[1].casefold() == category:

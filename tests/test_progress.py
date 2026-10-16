@@ -25,6 +25,17 @@ class IndexTests(unittest.TestCase):
                           day['seconds']), (3, 350, 50, 1, 1, 129, 5))
         self.assertEqual(index['days']['2026-10-15']['pets'], 1)
         self.assertEqual(len(index['files']), 4)
+        self.assertEqual(day['chest_kinds'], {'rare chest': 1})
+
+    def test_chests_by_kind_add_onto_an_older_index_without_them(self):
+        older = {'version': 1, 'files': ['old'], 'last_at': '2026-10-14T09:00:00+00:00',
+                 'days': {'2026-10-14': {'trips': 1, 'xp': 0, 'chest_money': 0, 'chests': 2, 'charms': 0,
+                                         'special_fish': 0, 'pets': 0, 'level': None, 'seconds': 0}}}
+        index = index_trips(older, [trip('2026-10-14T10:00:00Z', finds={'rare chest': 2, 'epic chest': 1})],
+                            tz=timezone.utc)
+        self.assertEqual(index['days']['2026-10-14']['chest_kinds'], {'rare chest': 2, 'epic chest': 1})
+        self.assertEqual(index['days']['2026-10-14']['chests'], 5)
+        self.assertNotIn('chest_kinds', older['days']['2026-10-14'])         # the index passed in is not changed
 
     def test_only_new_files_are_added(self):
         once = index_trips(empty_index(), [trip('2026-10-14T10:00:00Z')], tz=timezone.utc)
@@ -114,6 +125,21 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual(runs[0]['stopped'], 'Ended without a stop record.')
         self.assertEqual(run_history(events, running_id='r2')[0]['stopped'], 'Still running.')
 
+    def test_a_run_without_a_stop_record_still_writing_is_running(self):
+        # A run started from the command line: no running id, but its journal was written moments ago.
+        from datetime import datetime
+        from src.progress import run_history
+        events = [event('run_started', '2026-10-14T10:00:00Z'),
+                  event('run_stopped', '2026-10-14T10:30:00Z', reason='Stopped.'),
+                  event('run_started', '2026-10-14T11:00:00Z', run='r2'),
+                  event('dispatched', '2026-10-14T11:20:00Z', run='r2', action='r2-00009-fish'),
+                  event('run_started', '2026-10-14T09:00:00Z', run='r0')]      # an older run, never stopped
+        soon = datetime(2026, 10, 14, 11, 21, tzinfo=timezone.utc)
+        self.assertEqual([r['stopped'] for r in run_history(events, now=soon)],
+                         ['Still running.', 'Stopped.', 'Ended without a stop record.'])
+        later = datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc)                  # nothing written for 40 min
+        self.assertEqual(run_history(events, now=later)[0]['stopped'], 'Ended without a stop record.')
+
     def test_actions_with_their_results_notes_and_costs(self):
         from src.progress import action_history
         buy = {'act': 'buy', 'name': 'Salesman', 'level': 8, 'shop': 'upgrades', 'price': 25000}
@@ -132,9 +158,30 @@ class HistoryTests(unittest.TestCase):
                   event('intent', '2026-10-14T10:07:00Z', action='f1', intent={'kind': 'fish', 'preconditions': []})]
         actions = action_history(events)
         self.assertEqual([(a['label'], a['result'], a['note'], a['cost']) for a in actions], [
-            ('Buy Super Crates 3 (Super Crates 3)', 'failed', '', '150 Hooks'),
+            ('Buy Super Crates 3 (Super Crates 3)', 'failed', '', ''),               # failed: nothing was paid
             ('Switch to Ocean (Switch: biome Ocean)', 'unknown', 'No confirmed reply within 20 s.', ''),
-            ('Buy Salesman 8 (Salesman 8)', 'done', 'bought Salesman level 8', '$25,000')])
+            ('Buy Salesman 8 (Salesman 8)', 'done', 'bought Salesman level 8', '$25,000 (planned)')])
+
+    def test_the_cost_is_what_the_game_charged_when_its_reply_says(self):
+        from src.progress import action_history
+
+        def bought(name, arguments, result, note):
+            return [event('intent', '2026-10-14T10:00:00Z', action=name, intent={
+                        'kind': 'act', 'preconditions': [name], 'arguments': [arguments]}),
+                    event('acknowledged', '2026-10-14T10:00:03Z', action=name, result=result, note=note)]
+        events = (bought('bait', {'act': 'buy', 'name': 'Wise Bait', 'amount': 500, 'shop': 'bait', 'price': 9625},
+                         'done', 'bought 500 wise bait for $17,500')
+                  + bought('rod', {'act': 'buy', 'name': 'Infinity Rod', 'shop': 'rods', 'price': 1e9},
+                           'failed', "can't afford it")
+                  + bought('owned', {'act': 'buy', 'name': 'Dinghy', 'shop': 'boats', 'price': 5000},
+                           'done', 'already owned Dinghy')
+                  + bought('ovens', {'act': 'buy', 'name': 'Fish Ovens', 'level': 3, 'shop': 'special', 'price': 60,
+                                     'currency': 'Lava Fish'}, 'done', 'bought Fish Ovens level 3')
+                  + bought('older', {'act': 'buy', 'name': 'Fish Ovens', 'level': 2, 'shop': 'special', 'price': 40},
+                           'done', 'bought Fish Ovens level 2'))
+        self.assertEqual({a['label']: a['cost'] for a in action_history(events)},
+                         {'bait': '$17,500', 'rod': '', 'owned': '', 'ovens': '60 Lava Fish (planned)',
+                          'older': '40 exotic fish (planned)'})
 
     def test_odd_events_are_skipped_not_raised(self):
         from src.progress import action_history, run_history
@@ -165,12 +212,36 @@ class ViewTests(unittest.TestCase):
                    {'at': '2026-10-14T11:00:00+00:00', 'kind': 'charms', 'found': 40, 'goal': 840}]
         now = datetime(2026, 10, 14, 12, tzinfo=timezone.utc)
         every = chart_series(index, history, None, now)
-        self.assertEqual([v for _, v in every['level']], [100, 128, 128])
+        self.assertEqual([v for _, v in every['level']], [100, 128])   # Oct 14: the profile read, not trip level-ups
         self.assertEqual(every['xp_per_hour'], [('2026-10-01T12:00:00+00:00', 86400.0)])   # 7,200 XP in 300 s
         self.assertEqual(every['net_worth'], [('2026-10-14T10:00:00+00:00', 1500)])
         self.assertEqual(every['charms'], [('2026-10-14T11:00:00+00:00', 40)])
         week = chart_series(index, history, 7, now)
         self.assertEqual([v for _, v in week['trips']], [1])                  # Oct 1 is outside the week
+
+    def test_level_never_mixes_trip_level_ups_into_profile_reads(self):
+        # Trip level-ups by day only before the first /profile read: a day's highest level-up drawn at noon must
+        # not sit beside that day's profile reads (224 at noon, then 166 read at 14:32).
+        from datetime import datetime
+        from src.progress import chart_series
+        index = index_trips(empty_index(), [trip('2026-10-12T10:00:00Z', level_ups=[150]),
+                                            trip('2026-10-13T10:00:00Z', level_ups=[224]),
+                                            trip('2026-10-14T10:00:00Z', level_ups=[230])], tz=timezone.utc)
+        history = [{'at': '2026-10-13T14:32:00+00:00', 'kind': 'profile', 'level': 166, 'balance': 1},
+                   {'at': '2026-10-14T09:00:00+00:00', 'kind': 'profile', 'level': 170, 'balance': 1}]
+        level = chart_series(index, history, None, datetime(2026, 10, 15, tzinfo=timezone.utc))['level']
+        self.assertEqual(level, [('2026-10-12T12:00:00+00:00', 150), ('2026-10-13T14:32:00+00:00', 166),
+                                 ('2026-10-14T09:00:00+00:00', 170)])
+
+    def test_net_worth_carries_the_last_fish_value_forward(self):
+        from datetime import datetime
+        from src.progress import chart_series
+        history = [{'at': '2026-10-14T09:00:00+00:00', 'kind': 'profile', 'balance': 50},          # none known yet
+                   {'at': '2026-10-14T10:00:00+00:00', 'kind': 'profile', 'balance': 100, 'fish_value': 900},
+                   {'at': '2026-10-14T11:00:00+00:00', 'kind': 'profile', 'balance': 200, 'fish_value': None},
+                   {'at': '2026-10-14T12:00:00+00:00', 'kind': 'profile', 'balance': 300, 'fish_value': 1000}]
+        worth = chart_series(empty_index(), history, None, datetime(2026, 10, 15, tzinfo=timezone.utc))['net_worth']
+        self.assertEqual([v for _, v in worth], [1000, 1100, 1300])
 
     def test_countdown_from_a_plan(self):
         from src.progress import countdown
@@ -190,6 +261,15 @@ class ViewTests(unittest.TestCase):
                                                 {'label': 'Prestige', 'seconds': 90000}])
         self.assertEqual(countdown(None, {}, None)['missing'], ['No plan yet.'])
 
+    def test_countdown_bars_without_a_plan(self):
+        # The page opened with no run: the bars come from the last profile and charms read, the ETAs need a plan.
+        from src.progress import countdown
+        result = countdown(None, {'level': 128, 'prestige': 4, 'balance': 1e6, 'fish_value': 5e5},
+                           {'found': 40, 'goal': 840})
+        self.assertEqual((result['missing'], result['milestones']), (['No plan yet.'], []))
+        self.assertEqual([(b['label'], b['now'], b['goal']) for b in result['bars']],
+                         [('Level', 128, 500), ('Money', 1.5e6, result['bars'][1]['goal']), ('Charms', 40, 840)])
+
     def test_the_whole_view(self):
         from datetime import datetime
         from src.progress import progress_view
@@ -208,7 +288,7 @@ class ViewTests(unittest.TestCase):
                    {'at': '2026-10-14T01:00:00Z', 'kind': 'profile', 'level': 7, 'balance': 10}]
         series = chart_series({'days': {'2026-10-14': {}}}, history, 7, now)
         self.assertEqual(series['level'], [('2026-10-14T01:00:00Z', 7)])
-        self.assertEqual(series['net_worth'], [('2026-10-14T01:00:00Z', 10)])
+        self.assertEqual(series['net_worth'], [])            # no fish value read yet: not a net worth
         self.assertEqual(series['charms'], [])
         result = countdown({'steps': [{'phase': 'x'}, 'nope'], 'prestige': None}, {'prestige': 99}, None)
         self.assertEqual((result['reached'], result['milestones'], result['bars']), (False, [], []))
@@ -222,14 +302,16 @@ class ViewTests(unittest.TestCase):
             (folder / 'fishing').mkdir()
             (folder / 'fishing' / 'bad.json').write_text('{', encoding='utf-8')
             append_history(folder / HISTORY, {'at': '2026-10-14T01:00:00Z', 'kind': 'profile', 'level': 3,
-                                              'balance': 10})
+                                              'balance': 10, 'fish_value': 5, 'prestige': 4})
             append_history(folder / HISTORY, {'at': '2026-10-14T02:00:00Z', 'kind': 'profile', 'level': 7,
-                                              'balance': 20})
+                                              'balance': 20, 'fish_value': None, 'prestige': 4})
             append_history(folder / HISTORY, {'at': '2026-10-14T02:00:00Z', 'kind': 'charms', 'found': 4,
                                               'goal': 840})
             view = view_from_disk(folder, datetime(2026, 10, 14, 3, tzinfo=timezone.utc))
         self.assertEqual([v for _, v in view['charts']['all']['level']], [3, 7])
         self.assertEqual(view['runs'], [])
+        self.assertEqual([(b['label'], b['now']) for b in view['countdown']['bars']],
+                         [('Level', 7), ('Money', 25), ('Charms', 4)])
         self.assertEqual(view['notes'], ['1 trip records could not be read.'])
 
 
@@ -238,6 +320,7 @@ class JournalCacheTests(unittest.TestCase):
         from unittest import mock
         from src import progress_store
         from src.automation_journal import AutomationJournal
+        from src.progress import journal_digest
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / 'journal'
             journal = AutomationJournal(root)
@@ -246,17 +329,17 @@ class JournalCacheTests(unittest.TestCase):
             journal.append({'run_id': 'run-b', 'type': 'run_started'})
             (root / 'run-b' / '000009-bad.json').write_text('{', encoding='utf-8')     # skipped, as events() does
             cache = {}
-            first = progress_store.journal_events(root, cache)
-            self.assertEqual(first, journal.events()[0])
-            journal.append({'run_id': 'run-b', 'type': 'intent'})
+            first = progress_store.read_journal(root, cache)
+            self.assertEqual(first, journal_digest(journal.events()[0]))
+            journal.append({'run_id': 'run-b', 'type': 'run_stopped', 'reason': 'Done.'})
             read = []
             original = progress_store._read_event
             with mock.patch.object(progress_store, '_read_event',
                                    side_effect=lambda path: read.append(path.parent.name) or original(path)):
-                second = progress_store.journal_events(root, cache)
+                second = progress_store.read_journal(root, cache)
             self.assertEqual(set(read), {'run-b'})
-            self.assertEqual(second, journal.events()[0])
-            self.assertEqual([e['type'] for e in second], ['run_started', 'run_stopped', 'run_started', 'intent'])
+            self.assertEqual(second, journal_digest(journal.events()[0]))
+            self.assertEqual(sorted(r['stopped'] for r in second['runs']), ['Done.', 'Stopped.'])
 
 
 class DiskProgressTests(unittest.TestCase):
@@ -320,6 +403,20 @@ class DiskProgressTests(unittest.TestCase):
                 status = handler.with_disk_progress(None)
         self.assertEqual(status, {'progress': {'view': {'runs': []}, 'made_at': None, 'error': None}})
         self.assertIsNone(self.handler(Path('.'), {}).with_disk_progress(None))   # no account named: nothing
+
+    def test_the_full_page_never_waits_for_the_disk_view(self):
+        # Building it can take seconds: the page shows the last one built (or Working out), the polls build it.
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as temporary:
+            handler = self.handler(Path(temporary), {'account': 'Me'})
+            with mock.patch('src.player_web.view_from_disk', side_effect=AssertionError('built for the page')):
+                page = handler.with_disk_progress(None, build=False)
+            self.assertEqual(page, {'progress': {'view': None, 'made_at': None, 'error': None}})
+            with mock.patch('src.player_web.view_from_disk', return_value={'runs': []}):
+                handler.with_disk_progress(None)                              # a poll builds it
+            with mock.patch('src.player_web.view_from_disk', side_effect=AssertionError('built for the page')):
+                page = handler.with_disk_progress(None, build=False)
+            self.assertEqual(page['progress']['view'], {'runs': []})
 
     def test_a_failure_is_the_tabs_error_not_a_broken_page(self):
         from unittest import mock

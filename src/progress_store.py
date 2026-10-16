@@ -1,11 +1,12 @@
 """Part 6's per-account files: the daily trip index and the profile history, beside account_state.json."""
 import json
 import os
+import threading
 from copy import deepcopy
 from pathlib import Path
 
 from .player_snapshots import write_json_atomically
-from .progress import empty_index, index_trips, parse_time
+from .progress import empty_index, index_trips, journal_digest, parse_time
 
 INDEX, HISTORY = 'progress_index.json', 'profile_history.jsonl'
 
@@ -101,82 +102,121 @@ def _read_event(path):
     return event
 
 
-MAX_CACHED_RUNS = 128
-MAX_CACHED_EVENTS = 100_000
+# What progress.journal_digest reads of an event, all that is kept of it: its kind, time and ids, a stop's or an
+# outcome's reason, result and note, an act's intent, and the tally counts of a trip. Replies and OCR are dropped.
+KEPT = ('type', 'at', 'run_id', 'action_id', 'reason', 'result', 'note')
+TALLY = ('trips', 'fishing_xp', 'finds', 'chest_contents', 'pets_found', 'charm_levels')
+MAX_CACHED_RUNS = 4096        # runs whose digest is kept, the newest by name (a run's folder is named by its start)
+MAX_CACHED_EVENTS = 100_000   # the newest run's events kept per file, so a run that is going reads only new files
+MAX_JOURNALS = 8
+_JOURNALS = {}                # journal folder -> {'runs': {run folder: entry}, 'lock'}: the controller and the
+_JOURNALS_LOCK = threading.Lock()   # page's disk view of an account share one
 
 
-def journal_events(journal_root, cache, *, detached=True):
-    """Read only changed JSON files; caller-owned cache drops deleted files/runs.
+def _slim(event):
+    if event is None:
+        return None
+    kept = {key: event[key] for key in KEPT if key in event}
+    intent, tally = event.get('intent'), event.get('tally')
+    if event['type'] == 'intent' and isinstance(intent, dict) and intent.get('kind') == 'act':
+        kept['intent'] = {key: intent[key] for key in ('kind', 'arguments', 'preconditions') if key in intent}
+    if event['type'] == 'acknowledged' and isinstance(tally, dict):
+        kept['tally'] = {key: tally[key] for key in TALLY if key in tally}
+    return kept
 
-    Metadata is checked even in finished runs: folder mtime alone cannot detect edits
-    to existing files. Cache size follows files on disk and never retains removed runs.
-    Returned events are detached so callers cannot mutate future reads. Trusted
-    read-only consumers may pass detached=False to avoid cloning the whole history;
-    they must never mutate returned events or expose them to other callers.
-    """
+
+def _scan(folder):
+    """({.json file name: (mtime, size, ctime)}, a signature of them all) for one run's folder; unreadable: none.
+    Any file added, removed, replaced or edited changes the signature."""
+    stamps, mixed = {}, 0
+    try:
+        with os.scandir(folder) as scan:
+            for entry in scan:
+                if not entry.name.endswith('.json'):
+                    continue
+                try:
+                    stat = entry.stat()
+                except OSError:
+                    continue
+                stamps[entry.name] = stamp = (stat.st_mtime_ns, stat.st_size, stat.st_ctime_ns)
+                mixed ^= hash((entry.name, stamp))
+    except OSError:
+        pass
+    return stamps, (len(stamps), mixed)
+
+
+def _run_entry(folder, previous, keep_files):
+    """One run's cache entry: {'signature', 'digest', 'files'}. Its digest is worked out again only when its files
+    changed; `files` (file name -> (stamp, slim event)), kept for the newest run only, lets a change read just the
+    new or changed files. Any other run that changed is read whole again (rare: a run that is over is not written)."""
+    stamps, signature = _scan(folder)
+    previous = previous if isinstance(previous, dict) else {}
+    known = previous.get('files') if isinstance(previous.get('files'), dict) else {}
+    if previous.get('signature') == signature and isinstance(previous.get('digest'), dict):
+        return previous if keep_files or not known else {**previous, 'files': None}
+    files = {}
+    for name in sorted(stamps):
+        cached = known.get(name)
+        if not (isinstance(cached, tuple) and len(cached) == 2 and cached[0] == stamps[name]):
+            cached = (stamps[name], _slim(_read_event(folder / name)))
+        files[name] = cached
+    digest = journal_digest([event for _, event in files.values() if event is not None])
+    return {'signature': signature, 'digest': digest,
+            'files': files if keep_files and len(files) <= MAX_CACHED_EVENTS else None}
+
+
+def read_journal(journal_root, cache=None):
+    """The journal for the Progress view: progress.journal_digest of every run, joined ({'runs', 'acts'}). From the
+    cache shared by everything reading this folder (or `cache`, run folder -> entry, when given): a run is worked
+    out again only when its files changed. Runs past MAX_CACHED_RUNS (the oldest) are read each time. Unreadable
+    files are skipped, as AutomationJournal.events does. The result is the caller's own copy."""
     root = Path(journal_root)
-    folders = sorted((path for path in root.iterdir() if path.is_dir()), key=lambda path: path.name) \
-        if root.is_dir() else []
-    events = []
+    if cache is None:
+        with _JOURNALS_LOCK:
+            key = str(root.resolve())
+            if key not in _JOURNALS and len(_JOURNALS) >= MAX_JOURNALS:
+                del _JOURNALS[next(iter(_JOURNALS))]
+            shared = _JOURNALS.setdefault(key, {'runs': {}, 'lock': threading.Lock()})
+        with shared['lock']:
+            return deepcopy(_read_journal(root, shared['runs']))
+    return deepcopy(_read_journal(root, cache))
+
+
+def _read_journal(root, cache):
+    try:
+        folders = sorted((path for path in root.iterdir() if path.is_dir()), key=lambda path: path.name)
+    except OSError:
+        folders = []
+    kept = {folder.name for folder in folders[-MAX_CACHED_RUNS:]}
+    newest = folders[-1].name if folders else None
+    runs, acts = [], []
     for folder in folders:
-        previous = cache.get(folder.name)
-        previous = previous if isinstance(previous, dict) else {}
-        current = {}
-        try:
-            with os.scandir(folder) as scan:
-                files = sorted((entry for entry in scan if entry.name.endswith('.json')), key=lambda entry: entry.name)
-        except OSError:
-            files = []
-        for entry in files:
-            path = folder / entry.name
-            try:
-                stat = entry.stat()
-            except OSError:
-                continue
-            stamp = (stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size, stat.st_ino)
-            cached = previous.get(path.name)
-            if cached is None or cached[0] != stamp:
-                cached = (stamp, _read_event(path))
-            current[path.name] = cached
-            if cached[1] is not None:
-                events.append(cached[1])
-        cache[folder.name] = current
-    for name in set(cache) - {folder.name for folder in folders}:
+        entry = _run_entry(folder, cache.get(folder.name), folder.name == newest)
+        if folder.name in kept:
+            cache[folder.name] = entry
+        runs += entry['digest']['runs']
+        acts += entry['digest']['acts']
+    for name in set(cache) - kept:
         del cache[name]
-    # Retain recent runs/events when history exceeds the budget. Results still include
-    # all history; evicted entries are simply reloaded on a later request.
-    budget = MAX_CACHED_EVENTS
-    for name in reversed(list(cache)):
-        files = cache[name]
-        if budget <= 0:
-            del cache[name]
-        elif len(files) > budget:
-            cache[name] = dict(list(files.items())[-budget:])
-            budget = 0
-        else:
-            budget -= len(files)
-    while len(cache) > MAX_CACHED_RUNS:
-        del cache[next(iter(cache))]
-    return deepcopy(events) if detached else events
-
-
-_DISK_JOURNALS = {}   # account folder -> journal_events cache, for view_from_disk
+    return {'runs': runs, 'acts': acts}
 
 
 def view_from_disk(folder, now=None):
-    """The Progress view from the account's files alone (no run going: no plan, no live profile)."""
+    """The Progress view from the account's files alone (no run going: no plan, no live profile). The money bar
+    takes the last fish value read when the last /profile read had none."""
     from datetime import datetime, timezone
     from .progress import progress_view
     folder = Path(folder)
     index, bad_trips = build_index(folder)
     history, bad_lines = read_history(folder / HISTORY)
-    key = str(folder.resolve())
-    if key not in _DISK_JOURNALS and len(_DISK_JOURNALS) >= 8:
-        del _DISK_JOURNALS[next(iter(_DISK_JOURNALS))]
-    events = journal_events(folder / 'journal', _DISK_JOURNALS.setdefault(key, {}), detached=False)
-    last = next((h for h in reversed(history) if h.get('kind') == 'profile'), {})
+    journal = read_journal(folder / 'journal')
+    profiles = [h for h in history if h.get('kind') == 'profile']
+    last = dict(profiles[-1]) if profiles else {}
+    if profiles and not isinstance(last.get('fish_value'), (int, float)):
+        last['fish_value'] = next((h['fish_value'] for h in reversed(profiles)
+                                   if isinstance(h.get('fish_value'), (int, float))), None)
     charms = next((h for h in reversed(history) if h.get('kind') == 'charms'), None)
     notes = [f'{count} {what} could not be read.' for count, what in
              ((bad_trips, 'trip records'), (bad_lines, 'profile history lines')) if count]
-    return progress_view(index, history, events, None, last, charms, now or datetime.now(timezone.utc),
+    return progress_view(index, history, journal, None, last, charms, now or datetime.now(timezone.utc),
                          notes=notes)

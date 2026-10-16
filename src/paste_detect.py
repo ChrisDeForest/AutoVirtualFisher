@@ -46,6 +46,7 @@ ACCOUNT_MARKERS = (
     ('shop_league', re.compile(r'League Shop$|Hooks are obtained through weekly fishing leagues\.', re.I)),
     ('shop_special', re.compile(r'Special Shop$', re.I)),
     ('boosts', re.compile(r'Active Boosts$', re.I)),
+    ('shop_boosts', re.compile(r'Temporary Boosts$', re.I)),
 )
 
 

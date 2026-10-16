@@ -9,7 +9,7 @@ from .game_model import max_charm_level
 from .plan_economy import charms_for_level, prestige_requirements, xp_to_level
 from .plan_forward import fish_forward
 from .plan_rules import apply, candidates, charm_exit, phase, rod_band, select_next
-from .plan_setup import bait_batch, bait_options, bait_price, choose_setup, metrics
+from .plan_setup import bait_batch, bait_options, bait_price, bait_shop_price, choose_setup, metrics
 
 
 def _needs(state, phase_name, route, action=None):
@@ -220,13 +220,14 @@ def make_plan(state, ctx, plan_data, limits=(3000, 2.0), clock=time.monotonic):
             bait_step.update(bait=setup.bait, step=None)
             if setup.bait:
                 price, batch = bait_price(state, setup.bait), bait_batch(route, setup.biome)
+                shop = bait_shop_price(setup.bait)
                 stock = state.bait_stock.get(setup.bait, 0)
                 buy = f'buy {setup.bait}, {batch} at a time'
                 add('bait', f'Use the {stock:,} {setup.bait} on hand, then {buy}' if stock else 'B' + buy[1:],
-                    math.ceil(price * batch),
+                    math.ceil(shop * batch),
                     why=f'${price:,.2f} a bait, paid from the money each trip makes; never run out',
                     do=() if stock else (Action('buy', setup.bait, amount=batch, shop='bait',
-                                                price=math.ceil(price * batch)),))
+                                                price=math.ceil(shop * batch)),))
                 bait_step.update(step=steps[-1], price=price, stock=stock, **{'from': trips})
         # After the bait it switches to is bought, so the switch is never sent before the bait is on hand.
         switch = _switch_text(state.setup, setup)
@@ -251,7 +252,8 @@ def make_plan(state, ctx, plan_data, limits=(3000, 2.0), clock=time.monotonic):
         for line in result['events']:
             named = re.match(r'(.+?) (\d+) \((\d+) (\w+ Fish)\)', line)   # 'Fish Ovens 3 (60 Lava Fish)'
             add('special', line, int(named[3]) if named else 0, named[4] if named else '$', why='exotic fish on hand',
-                do=(Action('buy', named[1], level=int(named[2]), shop='special', price=int(named[3])),)
+                do=(Action('buy', named[1], level=int(named[2]), shop='special', price=int(named[3]),
+                            currency=named[4]),)
                 if named else ())
             bought = line.split(' (')[0]
             plan['assumptions'].update(note for note in special_notes if bought in note)

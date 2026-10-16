@@ -11,6 +11,7 @@ from .automation_models import ActionIntent
 from .observation import VERIFIED, Observation
 from .player_snapshots import SECTIONS, validate_full_state
 from .player_state import parse_responses
+from .startup_fields import cooldown_written
 
 # Initial conservative default from the automation design: money decisions need /profile and /buffs seen within
 # the last 30 seconds.
@@ -140,6 +141,8 @@ def refresh_problems(kind: str | None, text: str) -> list[str]:
         cooldown = parsed['buffs']['fishing_cooldown']
         if not (isinstance(cooldown, dict) and cooldown.get('unit') == 'seconds'):
             problems.append('The fishing cooldown was not read.')
+        elif not any(cooldown_written(line) for line in text.splitlines()):
+            problems.append('The fishing cooldown has no decimal point: most likely a misread ("2.0s" as "20s").')
     return problems
 
 

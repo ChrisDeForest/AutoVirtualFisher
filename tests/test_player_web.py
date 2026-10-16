@@ -262,6 +262,15 @@ Gives you bonus XP and leads you to more treasure.
         self.assertIn('Daily Fishing 101/500', html)
         self.assertNotIn('Quests have multiple tiers', html)
 
+    def test_completed_quests_render_on_the_account_page(self):
+        quests = ('Quest List\nDaily Level-ups - COMPLETED\nLevel up 3 time(s)\nDaily Fishing - 2500/5000\n'
+                  'Catch 5000 fish.\nQuests reset in 5h 29m')
+        html = self.post(profile=(FIXTURES / 'live_profile.txt').read_text(encoding='utf-8'), quests=quests)
+        self.assertIn('Daily Level-ups completed', html)
+        html = self.get('/?account=BugParticle')
+        self.assertIn('<dt>Daily Level-ups (completed)</dt>', html)
+        self.assertIn('Daily Fishing (2,500/5,000)', html)
+
     def test_snapshots_saved_before_quests_existed_still_render(self):
         self.post(profile=named_profile(balance=777))
         path = next(self.root.rglob('*.json'))

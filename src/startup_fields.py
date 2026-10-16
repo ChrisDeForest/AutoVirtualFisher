@@ -6,6 +6,17 @@ from .player_state import _clean, parse_responses
 from .observation import VERIFIED
 
 
+# The game always writes the cooldown with one decimal ("Fishing cooldown: 2.1s."). Windows OCR drops the point at
+# small zooms: live, 2026-10-16, "2.0s" read as "20s" at x1 and x2, and the run waited 20 s a trip ("3.5s" as "35s"
+# before). A cooldown without one is a misread, never a value.
+COOLDOWN_WRITTEN = re.compile(r'fishing cooldown:\s*\d+\.\d+\s*s', re.I)
+
+
+def cooldown_written(line):
+    """Whether a "Fishing cooldown:" line shows its value as the game writes it, with the decimal point."""
+    return bool(COOLDOWN_WRITTEN.search(line))
+
+
 def reply_fields(kind, text):
     lines = [_clean(line) for line in text.splitlines() if line.strip()]
     if kind == 'profile':
@@ -38,7 +49,7 @@ def reply_fields(kind, text):
             # Observed: the closing period read as "_" after the unit. No digit is changed.
             line = re.sub(r'(\ds)_$', r'\1.', cooldown_lines[0])
             value = parse_responses(buffs=line)['buffs']['fishing_cooldown']
-            if isinstance(value, dict) and value['unit'] == 'seconds' and math.isfinite(value['value']) and value['value'] > 0:
+            if cooldown_written(line) and isinstance(value, dict) and value['unit'] == 'seconds' and math.isfinite(value['value']) and value['value'] > 0:
                 fields['cooldown_seconds'] = value['value']
         return fields
     return {}

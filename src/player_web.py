@@ -399,7 +399,8 @@ class Handler(BaseHTTPRequestHandler):
         template = TEMPLATE.read_text(encoding='utf-8')
         head = template[template.index('<head>'):template.index('</head>') + len('</head>')]
         cls = type(self)
-        status = self.with_disk_progress(cls.automation.status() if cls.automation else None)
+        # The page never waits for the disk view (seconds on a long history): its first poll builds it.
+        status = self.with_disk_progress(cls.automation.status() if cls.automation else None, build=False)
         nonce = secrets.token_urlsafe(16)
         self.send_content(render_automation(head, status, notice, self.automation_readiness(),
                                             self.live_settings(), cls.automation_mode, nonce), script_nonce=nonce)
@@ -424,11 +425,12 @@ class Handler(BaseHTTPRequestHandler):
             settings['username'] = identity.username if identity else None
         return settings
 
-    def with_disk_progress(self, status):
+    def with_disk_progress(self, status, build=True):
         """Part 6: a stopped run without a Progress view (none worked out, or no account folder) shows the live
         account's view built from its files, worked out at most once a minute. A running run's view is its own
         (Working out progress until the first one is made). With no run at all (None) it is {'progress': ...} only,
-        so the page shows progress before the first run. Never breaks the page."""
+        so the page shows progress before the first run. Without `build` (the full page) it shows the last view
+        built, or Working out, and leaves building to the polls. Never breaks the page."""
         if status is not None and (not isinstance(status, dict) or status.get('running')
                                    or (status.get('progress') or {}).get('view') is not None):
             return status
@@ -441,7 +443,7 @@ class Handler(BaseHTTPRequestHandler):
             cached = cls.disk_progress
             if cached is None or cached[0] != account or time.monotonic() - cached[1] >= DISK_PROGRESS_SECONDS:
                 # One build at a time (it can take seconds): a poll meanwhile shows the last one, or none yet.
-                if not cls.disk_progress_lock.acquire(blocking=False):
+                if not build or not cls.disk_progress_lock.acquire(blocking=False):
                     waiting = {'view': None, 'made_at': None, 'error': None}
                     return {**base, 'progress': cached[2] if cached and cached[0] == account else waiting}
                 try:
@@ -536,6 +538,15 @@ class Handler(BaseHTTPRequestHandler):
                     notice = 'That step has nothing the run can do.'
             elif action == 'follow' and current:
                 current.set_follow(fields.get('on', ['0'])[0] == '1')
+            elif action == 'boosts' and current:
+                current.set_boosts(fields.get('on', ['0'])[0] == '1')
+            elif action == 'boost_order' and current:
+                from .boost_policy import BOOSTS
+                order = [name for name in fields.get('order', [''])[0].split(',') if name in BOOSTS]
+                if order:
+                    current.set_boost_order(order)
+                else:
+                    notice = 'That boost order was not understood.'
             elif action == 'unqueue' and current:
                 token = fields.get('id', [''])[0]
                 if not (token.isdigit() and current.unqueue(int(token))):

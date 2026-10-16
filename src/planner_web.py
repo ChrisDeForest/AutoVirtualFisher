@@ -144,7 +144,10 @@ def planner_card(account, snapshot_root, fishing_root, target=None, money_target
                      'since. Paste /quests again for current progress.</p>')
         quests = []
         for quest in result['quests']:
-            label = f'{quest["name"]} ({quest["progress"]:,}/{quest["goal"]:,})'
+            if quest['progress'] is None or quest['goal'] is None:     # "Name - COMPLETED" shows no numbers
+                label = f'{quest["name"]} (completed)'
+            else:
+                label = f'{quest["name"]} ({quest["progress"]:,}/{quest["goal"]:,})'
             if quest['status'] == 'estimate':
                 quests.append((label, f'about {quest["trips"]:,} trips ({quest["note"]})', True))
             else:

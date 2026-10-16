@@ -23,7 +23,8 @@ from src.account_reads import ALL_READS  # noqa: E402
 READS_CONFIG = ('refresh_profile', 'refresh_buffs', 'refresh_charms', *ALL_READS, 'fish')
 ACCOUNT_ORDER = ['refresh_upgrades', 'refresh_upgrades_page2',
                  'refresh_rod', 'refresh_bait', 'refresh_biome', 'refresh_boats', 'refresh_pets',
-                 'refresh_prestige_shop', 'refresh_league', 'refresh_league_page2', 'refresh_special', 'refresh_boosts']
+                 'refresh_prestige_shop', 'refresh_league', 'refresh_league_page2', 'refresh_special', 'refresh_boosts',
+                 'refresh_shop_boosts', 'refresh_quests']
 STEP = 0.1
 
 
@@ -650,7 +651,7 @@ class ControllerTests(unittest.TestCase):
         startup = ['refresh_profile', 'refresh_buffs', 'refresh_charms'] + ACCOUNT_ORDER
         self.assertEqual(self.kinds(), startup + ['fish'] * 3 + startup + ['fish'])
         sections = load_state(path)['sections']
-        self.assertEqual(len(sections), 10)
+        self.assertEqual(len(sections), 12)
         self.assertEqual({kind: section['unread'] for kind, section in sections.items() if section['unread']}, {})
         self.assertEqual(sections['shop_upgrades']['values']['items']['Better Chests']['price'], 100000)
         self.assertEqual(self.controller.status()['account']['sections']['pet']['values']['current'], 'Dolphin')
@@ -1371,11 +1372,29 @@ class ControllerTests(unittest.TestCase):
     def test_progress_view_is_worked_out_in_the_background(self):
         path = Path(self.temporary.name) / 'account' / 'account_state.json'
         path.parent.mkdir()
-        self.make(config=replace(CONFIG, max_trips=2), state_path=path, plan_spawn=lambda work: work()).start()
+        self.make(config=replace(CONFIG, max_trips=2), state_path=path, plan_spawn=lambda work: work())
+        asked, request = [], self.controller._request_progress
+        self.controller._request_progress = lambda: asked.append(self.controller.phase) or request()
+        self.controller.start()
         self.run_for(60)
+        self.assertFalse(self.controller.status()['running'])
+        self.assertEqual(asked[-1], 'STOPPED')       # asked for once the run_stopped event is in the journal
+        self.clock.now += 10                         # the runner's spacing: the view asked for at the stop starts
         progress = self.controller.status()['progress']
         self.assertIsNone(progress['error'])
-        self.assertEqual(progress['view']['runs'][0]['stopped'], 'Still running.')
+        self.assertEqual(progress['view']['runs'][0]['stopped'], self.controller.reason)   # not 'Still running.'
+
+    def test_stop_asks_for_a_fresh_progress_view(self):
+        path = Path(self.temporary.name) / 'account' / 'account_state.json'
+        path.parent.mkdir()
+        self.make(state_path=path, plan_spawn=lambda work: work()).start()
+        self.run_for(5)
+        self.clock.now += 10
+        self.assertEqual(self.controller.status()['progress']['view']['runs'][0]['stopped'], 'Still running.')
+        self.controller.stop('Stopped by you.')
+        self.clock.now += 10
+        runs = self.controller.status()['progress']['view']['runs']
+        self.assertEqual(runs[0]['stopped'], 'Stopped by you.')
 
 
 if __name__ == '__main__':

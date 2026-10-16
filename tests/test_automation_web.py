@@ -240,6 +240,86 @@ class AutomationWebTests(unittest.TestCase):
         self.assertIn('Stop following', on)
         self.assertIn('Salesman 8 held back until trip 140', on)
 
+    @staticmethod
+    def run_status(**extra):
+        return {'running': True, 'paused': False, 'reason': 'Next fish in 1.0 s.', 'trips': 3, 'phase': 'READY',
+                'config': {'max_trips': 10}, 'next_eligible_in': 1.0, 'dashboard': {}, **extra}
+
+    def boosts_status(self, keep=False, running=None, held=()):
+        return {'keep': keep, 'order': ['Fish20m', 'Treasure20m', 'Auto30m'], 'running': running or {},
+                'held': list(held), 'emerald': 1080, 'per_hour': 14.2, 'wanted': ['Fish20m', 'Treasure20m'], 'note': ''}
+
+    def test_boosts_box_toggle_tiles_and_order_forms(self):
+        off = render_panel(self.run_status(boosts=self.boosts_status()))
+        self.assertIn('<h2>Boosts</h2>', off)
+        self.assertIn('Keep boosts running', off)
+        self.assertNotIn('Stop boosts', off)
+        self.assertLess(off.index('data-boost="Fish20m"'), off.index('data-boost="Treasure20m"'))
+        self.assertLess(off.index('data-boost="Treasure20m"'), off.index('data-boost="Auto30m"'))
+        for name in ('Fish boost', 'Treasure boost', 'Worker'):
+            self.assertIn(f'<span class="boost-name">{name}</span>', off)
+        self.assertIn('data-boost="Fish20m"', off)
+        self.assertIn('draggable="true"', off)
+        self.assertIn('Emerald Fish: 1,080 · 14.2 an hour', off)
+        self.assertIn('Wanted now: Fish boost, Treasure boost', off)
+        first = off[off.index('data-boost="Fish20m"'):off.index('data-boost="Treasure20m"')]
+        self.assertNotIn('↑', first)
+        self.assertIn('value="Treasure20m,Fish20m,Auto30m"', first)
+        last = off[off.index('data-boost="Auto30m"'):]
+        self.assertNotIn('↓', last)
+        on = render_panel(self.run_status(boosts=self.boosts_status(keep=True, running={'Fish20m': 750})))
+        self.assertIn('Stop boosts', on)
+        self.assertIn('12m left', on)
+        held = render_panel(self.run_status(boosts=self.boosts_status(keep=True, held=['Auto30m'])))
+        self.assertIn('held (outcome unknown)', held[held.index('data-boost="Auto30m"'):])
+        self.assertNotIn('held (outcome unknown)', held[:held.index('data-boost="Auto30m"')])
+
+    def test_quests_box_rows_and_footer(self):
+        quests = {'daily': [{'name': 'Fisher', 'progress': 5, 'goal': 5, 'done': True, 'task': 'Fish 5 times'},
+                            {'name': 'Pet Locator', 'progress': 0, 'goal': 1, 'done': False, 'task': 'Find a pet'}],
+                  'special': [{'name': 'Pet Locator', 'progress': None, 'goal': None, 'done': False, 'task': None}],
+                  'resets_in': 5 * 3600 + 29 * 60, 'boost_minutes': 0, 'read_at': None}
+        page = render_panel(self.run_status(quests=quests))
+        self.assertIn('<h2>Quests</h2>', page)
+        self.assertIn('✓', page)
+        self.assertIn('0/1', page)
+        self.assertIn('Find a pet', page)
+        self.assertIn('Special: Pet Locator', page)
+        self.assertIn('Resets in 5h 29m', page)
+        self.assertNotIn('Boost minutes today', page)
+        booster = {**quests, 'special': [{'name': 'Booster', 'progress': 120, 'goal': 360, 'done': False,
+                                          'task': 'Boost'}], 'boost_minutes': 120}
+        self.assertIn('Boost minutes today: 120 of 360', render_panel(self.run_status(quests=booster)))
+        self.assertIn('Not read yet', render_panel(self.run_status(
+            quests={**quests, 'daily': [], 'special': [], 'resets_in': None})))
+
+    def test_run_tab_without_boosts_or_quests(self):
+        page = render_panel(self.run_status())
+        self.assertIn('data-tab="run"', page)
+
+    def test_boost_post_actions(self):
+        calls = []
+
+        class Fake:
+            def set_boosts(self, on):
+                calls.append(('boosts', on))
+
+            def set_boost_order(self, order):
+                calls.append(('order', order))
+
+            def status(self):
+                return AutomationWebTests.run_status()
+
+            def __getattr__(self, name):
+                return lambda *args, **kwargs: None
+        self.handler.automation = Fake()
+        self.post(action='boosts', on='1')
+        self.post(action='boost_order', order='Auto30m,Bogus')
+        page = self.post(action='boost_order', order='Bogus')
+        self.assertEqual(calls, [('boosts', True), ('order', ['Auto30m'])])
+        self.assertIn('That boost order was not understood.', page)
+        self.handler.automation = None
+
     def test_a_stale_resume_never_ends_a_newer_pause(self):
         # A resume sent again later (a reload, a restored tab) belongs to an earlier pause: the run stays paused.
         self.post(action='start', mode='simulation', max_trips='1000', max_minutes='5')

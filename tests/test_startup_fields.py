@@ -48,3 +48,23 @@ class ObservedGlyphTests(unittest.TestCase):
         text = 'epicmouse9925•s current multipliers (including bait):\nFishing cooldown: 3.5s_'
         self.assertEqual(reply_fields('buffs', text), {'username': 'epicmouse9925', 'cooldown_seconds': 3.5})
         self.assertNotIn('cooldown_seconds', reply_fields('buffs', text.replace('3.5s_', '3_5s')))
+
+
+class DroppedDecimalTests(unittest.TestCase):
+    # Live, 2026-10-16: Windows OCR read "Fishing cooldown: 2.0s." as "20s." at x1 and x2 (x3 read it right), and the
+    # run waited 20 s a trip. The game always writes the cooldown with one decimal.
+    TEXT = "epicmouse9925's current multipliers (including bait):\nFishing cooldown: {}"
+
+    def test_cooldown_without_a_decimal_point_is_not_read(self):
+        from src.startup_fields import reply_fields, reply_problems
+        self.assertNotIn('cooldown_seconds', reply_fields('buffs', self.TEXT.format('20s.')))
+        self.assertEqual(reply_problems('buffs', self.TEXT.format('20s.')), ['Fishing cooldown has not been read.'])
+        self.assertEqual(reply_fields('buffs', self.TEXT.format('2.0s.'))['cooldown_seconds'], 2.0)
+
+    def test_dropped_decimal_never_sets_the_cooldown(self):
+        from src.automation_state import apply_observation, refresh_problems
+        state = AutomationState('run', 'sim', 'epicmouse9925', 'dm', cooldown_seconds=2.1)
+        seen = Observation('o1', 'o1', '2026-10-16T00:11:46+00:00', 'dm', 'buffs', 'sim', self.TEXT.format('20s.'),
+                           'verified')
+        self.assertTrue(refresh_problems('buffs', seen.text))
+        self.assertEqual(apply_observation(state, seen).cooldown_seconds, 2.1)

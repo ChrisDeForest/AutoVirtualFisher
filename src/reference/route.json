@@ -41,7 +41,7 @@
     "charm_grind_2": {"level": 250, "upgrades": {"Worker Motivation": 12}, "boat": "Goldboat", "skip_boat_if_haste": 9},
     "xp_grind_3": {"rods": ["Floating Rod"], "boat": "Sky Cruiser"}
   },
-  "boosts": {"fish_min_rate": 6, "treasure_min_rate": 18, "per_hour": 18,
+  "boosts": {"worker_min_rate": 36, "fish_min_rate": 6, "treasure_min_rate": 18, "per_hour": 18,
              "always_from": ["charm_grind_1", "xp_grind_2", "charm_grind_2", "xp_grind_3"]},
   "special_orders": {
     "Lava": [["Fish Ovens", 20], ["Charmer", 10]],

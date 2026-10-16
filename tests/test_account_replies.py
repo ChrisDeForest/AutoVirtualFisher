@@ -190,7 +190,8 @@ class SetupTests(unittest.TestCase):
 
     def test_boosts(self):
         parsed = PARSERS['boosts'](sample.BOOSTS)
-        self.assertEqual(parsed['values'], {'global_duration': '3h 3m 30s', 'booster': 'Colby', 'active': {}})
+        self.assertEqual(parsed['values'], {'global_duration': '3h 3m 30s', 'booster': 'Colby', 'active': {},
+                                           'boosts': {}})
 
 
 class KindTests(unittest.TestCase):

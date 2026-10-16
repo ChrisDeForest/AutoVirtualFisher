@@ -99,3 +99,8 @@ SPECIAL_PAGE_2 = '\n'.join((
     'Boost Booster (1/4)', 'Increases effectiveness of temporary boosts.',
     'More upgrades unlocked at level 250.',
     'Page 2/2'))
+SHOP_BOOSTS = '\n'.join(('Temporary Boosts', 'Inventory: 1,018 :gold_fish:, and 490 :emerald_fish:.', 'Worker (10m)',
+                         'Hire a worker to fish for you for 10 minutes. /buy Auto10m'))
+QUESTS = '\n'.join(('Quest List', 'Daily Level-ups - COMPLETED', 'Level up 3 time(s)', 'Daily Fishing - 2500/5000',
+                    'Catch 5000 fish.', 'SPECIAL DAILY QUEST:', 'Booster - 0/360', 'Activate 360 minutes of boosts.',
+                    'Quests reset in 5h 29m'))

@@ -39,7 +39,7 @@ class SimulationTransportTests(unittest.TestCase):
             reply = sim.poll()[-1]
             self.assertEqual(reply.identity_status, 'verified', reply.kind)
             state = apply_read(state, reply.kind, PARSERS[reply.kind](reply.text), '2026-10-10T00:00:00+00:00')
-        self.assertEqual(len(state['sections']), 10)
+        self.assertEqual(len(state['sections']), 12)
         self.assertEqual({kind: section['unread'] for kind, section in state['sections'].items()
                           if section['unread']}, {})
 

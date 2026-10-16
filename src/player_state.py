@@ -166,10 +166,17 @@ def _parse_quests(text, result):
             quests['resets_in_minutes'] = (days * 24 + hours) * 60 + minutes
             quest = None
             continue
+        completed = re.fullmatch(r'(.+?)\s+-\s+COMPLETED', line, re.I)
+        if completed and _name(completed[1]):
+            quests[group] = quests[group] or {}
+            quest = {'progress': None, 'goal': None, 'done': True, 'task': None}
+            quests[group][_name(completed[1])] = quest
+            continue
         header = re.fullmatch(rf'(.+?)\s+-\s+({NUMBER})/({NUMBER})', line)
         if header and _name(header[1]):
             quests[group] = quests[group] or {}
-            quest = {'progress': _number(header[2]), 'goal': _number(header[3]), 'task': None}
+            quest = {'progress': _number(header[2]), 'goal': _number(header[3]),
+                     'done': _number(header[2]) >= _number(header[3]), 'task': None}
             quests[group][_name(header[1])] = quest
             continue
         if quest is not None and quest['task'] is None:
@@ -182,10 +189,12 @@ def _parse_quests(text, result):
 
 
 def quest_summary(quests):
-    """Return 'Name progress/goal, ...' for a quest group, or None when the group is unknown."""
+    """Return 'Name progress/goal, ...' ('Name completed' for a completed quest) for a quest group, or None when
+    the group is unknown."""
     if quests is None:
         return None
-    return ', '.join(f'{name} {display_value(quest["progress"])}/{display_value(quest["goal"])}'
+    return ', '.join(f'{name} completed' if quest.get('done') else
+                     f'{name} {display_value(quest["progress"])}/{display_value(quest["goal"])}'
                      for name, quest in quests.items())
 
 

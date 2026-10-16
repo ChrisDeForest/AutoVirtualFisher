@@ -92,8 +92,14 @@ def score(m, needs):
     return -worst
 
 
+def bait_shop_price(bait):
+    """What the shop charges for one bait, in full (no bait costs nothing). Bait Efficiency is a chance not to use
+    the bait up, so it never lowers what a batch costs to buy."""
+    return BAIT_COST.get(bait, 0) if bait else 0.0
+
+
 def bait_price(state, bait):
-    """What one bait costs, less Bait Efficiency (no bait costs nothing)."""
+    """What one bait costs per use, less Bait Efficiency (no bait costs nothing): the running cost of a trip."""
     if not bait:
         return 0.0
     return BAIT_COST.get(bait, 0) * (1 - 0.05 * state.account.upgrades.get('Bait Efficiency', 0))
@@ -119,7 +125,7 @@ def bait_options(state, needs, route, prices, biome, affordable=True):
             continue
         if name == rules['xp'] and not (set(needs) == {'xp'} and rules['xp_after_rod'] in state.rods):
             continue
-        if not affordable or name == state.setup.bait or state.bait_stock.get(name, 0) > 0                 or bait_price(state, name) * batch <= money:
+        if not affordable or name == state.setup.bait or state.bait_stock.get(name, 0) > 0                 or bait_shop_price(name) * batch <= money:
             options.append(name)
     return options
 
@@ -144,7 +150,7 @@ def _with_bait(state, best, needs, ctx, route, prices, all_boosts):
     best = dict(best)
     best['bait_wait'] = None
     if top['setup'].bait not in allowed:
-        best['bait_wait'] = bait_price(state, top['setup'].bait) * bait_batch(route, biome)
+        best['bait_wait'] = bait_shop_price(top['setup'].bait) * bait_batch(route, biome)
     return best
 
 

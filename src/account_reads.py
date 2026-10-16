@@ -29,6 +29,8 @@ ACCOUNT_READS = {
     # One page below level 100, two from there (seen 2026-10-13, level 100+).
     'refresh_special': Read('/shop special', 'shop_special', 2, paged_when_listed=True),
     'refresh_boosts': Read('/boosts', 'boosts'),
+    'refresh_shop_boosts': Read('/shop boosts', 'shop_boosts'),
+    'refresh_quests': Read('/quests', 'quests'),
 }
 # Page-2 intent -> its read.
 PAGE_TWO = {f'{kind}_page2': kind for kind, read in ACCOUNT_READS.items() if read.pages == 2}

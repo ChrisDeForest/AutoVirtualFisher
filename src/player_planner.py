@@ -72,6 +72,8 @@ def _model_check(snapshots, increments):
 
 
 def _quest_estimate(quest, totals, level, xp_to_next, xp_per_trip, increments, usable):
+    if quest.get('done') or quest['progress'] is None:
+        return 'complete', None, 'Complete'
     remaining = quest['goal'] - quest['progress']
     if remaining <= 0:
         return 'complete', None, 'Complete'

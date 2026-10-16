@@ -252,19 +252,55 @@ def parse_prestige_shop(text):
     return _result(values, [] if prestige['azure_fish'] is not None else ['Azure Fish'], lines)
 
 
+ACTIVE_BOOSTS = {'more fish': 'Fish20m', 'more treasure': 'Treasure20m', 'worker': 'Auto30m'}
+
+
+def duration_seconds(text):
+    """'1h 1m 35s' -> 3695; None when there is no h/m/s part."""
+    parts = re.findall(r'(\d+)\s*([hms])', text or '', re.I)
+    if not parts:
+        return None
+    return sum(int(n) * {'h': 3600, 'm': 60, 's': 1}[unit.lower()] for n, unit in parts)
+
+
 def parse_boosts(text):
     lines = _lines(text)
-    values = {'global_duration': None, 'booster': None, 'active': {}}
+    values = {'global_duration': None, 'booster': None, 'active': {}, 'boosts': {}}
     for line in lines:
         if match := re.match(r'Global Boost Duration:\s*(.+)$', line, re.I):
             values['global_duration'] = match[1].strip()
         elif match := re.match(r'Current Booster:\s*(.+)$', line, re.I):
             values['booster'] = match[1].strip()
+        elif match := re.search(r'(more fish|more treasure|worker)\s*:\s*((?:\d+\s*[hms]\s*)+)', line, re.I):
+            # Searched, not matched: OCR can put an icon's glyph before the name ("r' More Fish: 19m 0s"), and a
+            # boost missed here is bought again.
+            values['active'][match[1]] = match[2].strip()
+            values['boosts'][ACTIVE_BOOSTS[match[1].casefold()]] = duration_seconds(match[2])
         elif match := re.match(r'^(.+?):\s*(\d+[hms].*)$', line):
             values['active'][match[1].strip()] = match[2].strip()
     return _result(values, (), lines)
 
 
+def parse_shop_boosts(text):
+    """/shop boosts: only the inventory line is used (_lines drops the emoji codes; live, 2026-10-15:
+    "Inventory: 2,314 :gold_fish:, and 1,080 :emerald_fish:.")."""
+    lines = _lines(text)
+    values = {'gold': None, 'emerald': None}
+    for line in lines:
+        match = re.search(r'Inventory:\s*([\d,]+).*?\band\s+([\d,]+)', line, re.I)    # OCR: glyphs for the emoji
+        if match:
+            values = {'gold': _number(match[1]), 'emerald': _number(match[2])}
+    return _result(values, [] if values['emerald'] is not None else ['Emerald Fish'], lines)
+
+
+def parse_quests(text):
+    quests = parse_responses(quests=text)['quests']
+    values = {'daily': quests['daily'], 'special': quests['special'],
+              'resets_in_minutes': quests.get('resets_in_minutes')}
+    return _result(values, [] if (values['daily'] or values['special']) else ['quests'], _lines(text))
+
+
 PARSERS = {'shop_upgrades': parse_shop_upgrades, 'shop_league': parse_shop_league, 'shop_special': parse_shop_special,
            'rod': parse_rod, 'bait': parse_bait, 'biome': parse_biome, 'shop_boats': parse_shop_boats,
-           'pet': parse_pets, 'prestige_shop': parse_prestige_shop, 'boosts': parse_boosts}
+           'pet': parse_pets, 'prestige_shop': parse_prestige_shop, 'boosts': parse_boosts,
+           'shop_boosts': parse_shop_boosts, 'quests': parse_quests}
