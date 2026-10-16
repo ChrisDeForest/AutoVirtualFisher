@@ -86,6 +86,7 @@ class ControllerTests(unittest.TestCase):
         self.controller = AutomationController(self.sim, config, journal or AutomationJournal(self.journal_root),
                                                self.fishing, self.review, monotonic=self.clock.monotonic,
                                                utc=self.clock.utc, state_path=state_path, plan_spawn=plan_spawn)
+        self.controller.claim_daily = False    # /daily (on by default) is tested in test_daily_controller
         return self.controller
 
     def run_for(self, seconds, controller=None):

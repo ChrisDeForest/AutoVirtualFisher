@@ -50,6 +50,7 @@ class AlreadyOwnedControllerTests(unittest.TestCase):
             ('act', 'refresh_boats'), resync_trips=100), AutomationJournal(self.root / 'journal'),
             self.root / 'fishing', self.root / 'review', monotonic=self.clock.monotonic, utc=self.clock.utc,
             state_path=self.root / 'account.json', plan_spawn=lambda work: None)
+        self.controller.claim_daily = False    # /daily (on by default) is tested in test_daily_controller
         self.controller.start()
         self.advance_until(lambda: any(intent.kind == 'fish' for _, intent in self.sim.sent))
         play = self.sim._play

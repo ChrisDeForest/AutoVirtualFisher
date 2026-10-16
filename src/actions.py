@@ -6,7 +6,8 @@ line makes Discord pick the command and fill its first option; a buy's amount is
 from dataclasses import asdict, dataclass, fields
 import re
 
-COMMAND = {'buy': '/buy', 'sell': '/sell', 'rod': '/rod', 'biome': '/biome', 'bait': '/bait', 'pet': '/pet'}
+COMMAND = {'buy': '/buy', 'sell': '/sell', 'rod': '/rod', 'biome': '/biome', 'bait': '/bait', 'pet': '/pet',
+           'daily': '/daily'}
 # Tabs from the first option to a buy's amount (user, 2026-10-13), each after a pause.
 AMOUNT_TABS = 3
 SHOP_READ = {'upgrades': 'refresh_upgrades', 'special': 'refresh_special', 'league': 'refresh_league',
@@ -42,6 +43,8 @@ class Action:
             return f'Buy {self.name}' + (f' {self.level}' if self.level else '')
         if self.act == 'sell':
             return 'Sell all fish'
+        if self.act == 'daily':
+            return 'Claim daily'
         return f'Switch to {self.name or "no bait"}'
 
 
@@ -66,6 +69,18 @@ def outcome(action, text):
     if re.search(r'Invalid biome name', text, re.I):
         return 'failed', 'invalid biome'
     name = action.name.casefold()
+    if action.act == 'daily':
+        # Live, 2026-10-16: "Daily reward / Medium Exotic crate! / You gained: / +38 :diamond_fish: / Streak: 1 /
+        # Best streak: 8"; again: ":x: Daily reward on cooldown! (21h 14m 11s)".
+        waiting = re.search(r'Daily reward on cooldown!?\s*\(([^)]*)\)', text, re.I)
+        if waiting:
+            # OCR's I, l or | for 1 and O for 0 ("2lh" is 21h): misread, the hours would be lost.
+            left = re.sub(r'[Oo]', '0', re.sub(r'[Il|]', '1', waiting[1].strip()))
+            return 'done', f'on cooldown, {left} left'
+        streak = re.search(r'Daily reward.*?Streak:\s*(\d+)', text, re.I)
+        if streak:
+            return 'done', f'streak {streak[1]}'
+        return 'unclear', 'no daily reply'
     if action.act == 'buy':
         if action.shop == 'boosts':
             # Live, 2026-10-15: "You hired a worker for the next 30 minutes." / "You will now find more treasure
@@ -129,7 +144,7 @@ def reads_after(action):
     """The reads to redo once the action has a reply, whatever it said."""
     if action.act == 'buy':
         return 'refresh_profile', SHOP_READ[action.shop]
-    if action.act == 'sell':
+    if action.act in ('sell', 'daily'):
         return ('refresh_profile',)
     return 'refresh_profile', 'refresh_buffs', SWITCH_READ[action.act]
 

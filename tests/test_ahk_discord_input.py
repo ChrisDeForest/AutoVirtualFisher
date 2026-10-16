@@ -123,6 +123,20 @@ class ComposerRecoveryTests(unittest.TestCase):
         self.assertEqual(driver.events[:2], [('click',(660,810)),('clear',None)])
         self.assertIn(('text','/buy luxury yacht'),driver.events)
 
+    @patch('src.discord_input.time.sleep')
+    def test_daily_waits_for_the_vf_picker_row_before_any_enter(self, sleep):
+        # Final review: live runs use this driver; /daily must be verified against VF's picker row like reads.
+        from test_discord_input import box
+        from test_discord_input import NativeDispatchTests as Fixture
+        driver = self.driver([Fixture.EMPTY, {'boxes':[box('/daily',600),box('Other Bot',620)]}])
+        with self.assertRaises(NotDispatched) as caught:
+            driver.dispatch('/daily',lambda:False)
+        self.assertIn('VF slash-command picker could not be verified', str(caught.exception))
+        self.assertNotIn(('key',13),driver.events)
+        driver = self.driver([Fixture.EMPTY, {'boxes':[box('/daily',600),box('Virtual Fisher',620)]}, Fixture.EMPTY])
+        driver.dispatch('/daily',lambda:False)
+        self.assertEqual([e for e in driver.events if e==('key',13)],[('key',13),('key',13)])
+
     def test_failed_clear_never_types_or_submits(self):
         from test_discord_input import box
         driver = self.driver([{'boxes':[box('leftover',800)]}])

@@ -9,6 +9,7 @@ from src.plan_setup import ModelContext
 
 DATA, PLAN = load_game_data(), load_plan_data()
 ROUTE, PRICES = PLAN['route'], PLAN['prices']
+DAILIES = 'Better Dailies'
 
 
 class PhaseTests(unittest.TestCase):
@@ -54,11 +55,33 @@ class CandidateTests(unittest.TestCase):
     def test_salesman_before_alloy_comes_when_alloy_is_the_purchase(self):
         s = state()   # the fixture has Salesman 7, past the 6 Alloy needs; drop it to 5
         s.account.upgrades['Salesman'] = 5
-        self.assertFalse([a for a in candidates(s, 'xp_grind_1', ROUTE, PRICES, DATA) if a.forced])
+        self.assertFalse([a for a in candidates(s, 'xp_grind_1', ROUTE, PRICES, DATA) if a.forced and a.name != DAILIES])
         rod = Action('rod', 'Alloy Rod', None, 250_000, 'next rod')
         first, why = select_next(s, 'xp_grind_1', [rod], {}, ModelContext(DATA), ROUTE, PRICES)
         self.assertEqual((first.kind, first.name, first.level, first.for_rod), ('upgrade', 'Salesman', 6, 'Alloy Rod'))
         self.assertIn('before Alloy Rod', why)
+
+    def test_better_dailies_is_the_first_forced_step_in_every_phase(self):
+        for phase_name in ('xp_grind_1', 'charm_grind_1', 'xp_grind_2'):
+            actions = candidates(state(), phase_name, ROUTE, PRICES, DATA)
+            first = actions[0]
+            self.assertEqual((first.kind, first.name, first.level, first.price, first.forced),
+                             ('upgrade', 'Better Dailies', 3, 25_000, True), phase_name)
+            self.assertEqual(first.reason, 'Better Dailies: bigger daily rewards')
+            self.assertEqual(sum(a.name == 'Better Dailies' for a in actions), 1)
+        chosen, why = select_next(state(), 'xp_grind_1', candidates(state(), 'xp_grind_1', ROUTE, PRICES, DATA), {},
+                                  ModelContext(DATA), ROUTE, PRICES)
+        self.assertEqual((chosen.name, chosen.level, why), ('Better Dailies', 3, 'Better Dailies: bigger daily rewards'))
+
+    def test_better_dailies_is_absent_at_max_level(self):
+        s = state()
+        s.account.upgrades['Better Dailies'] = 10
+        for phase_name in ('xp_grind_1', 'charm_grind_1'):
+            self.assertFalse([a for a in candidates(s, phase_name, ROUTE, PRICES, DATA) if a.name == 'Better Dailies'])
+
+    def test_worker_motivation_is_still_not_planned(self):
+        self.assertFalse([a for a in candidates(state(), 'xp_grind_1', ROUTE, PRICES, DATA)
+                          if a.name == 'Worker Motivation'])
 
     def test_no_rod_salesman_or_band_rod_in_a_charm_grind(self):
         s = state(level=110)
@@ -67,7 +90,7 @@ class CandidateTests(unittest.TestCase):
         actions = candidates(s, 'charm_grind_1', ROUTE, PRICES, DATA)
         self.assertFalse([a for a in actions if a.name == 'Salesman' and a.forced])
         self.assertFalse([a for a in actions if a.kind == 'rod'])
-        self.assertTrue(all(a.money_first for a in actions if a.forced))   # only the entry steps are forced
+        self.assertTrue(all(a.money_first for a in actions if a.forced and a.name != DAILIES))   # only the entry steps (and Better Dailies) are forced
 
     def test_salesman_19_comes_just_before_the_superium_rod(self):
         s = state(level=200)
@@ -84,7 +107,7 @@ class CandidateTests(unittest.TestCase):
 
     def test_no_salesman_step_once_it_is_past_the_rod_need(self):
         actions = candidates(state(), 'xp_grind_1', ROUTE, PRICES, DATA)
-        self.assertFalse([a for a in actions if a.forced])
+        self.assertFalse([a for a in actions if a.forced and a.name != DAILIES])
 
     def test_rods_follow_the_supporter_band(self):
         names = [a.name for a in candidates(state(), 'xp_grind_1', ROUTE, PRICES, DATA) if a.kind == 'rod']
@@ -111,9 +134,9 @@ class CandidateTests(unittest.TestCase):
     def test_golden_rod_is_forced_in_the_first_xp_grind_from_level_100(self):
         s = state(level=100)
         s.rods.add('Alloy Rod')
-        forced = [a for a in candidates(s, 'xp_grind_1', ROUTE, PRICES, DATA) if a.forced]
+        forced = [a for a in candidates(s, 'xp_grind_1', ROUTE, PRICES, DATA) if a.forced and a.name != DAILIES]
         self.assertEqual([(a.kind, a.name) for a in forced], [('rod', 'Golden Rod')])
-        self.assertFalse([a for a in candidates(state(level=99), 'xp_grind_1', ROUTE, PRICES, DATA) if a.forced])
+        self.assertFalse([a for a in candidates(state(level=99), 'xp_grind_1', ROUTE, PRICES, DATA) if a.forced and a.name != DAILIES])
 
     def test_mrp(self):
         self.assertAlmostEqual(mrp(1000, 1.25), 5000)
@@ -124,7 +147,7 @@ class SelectTests(unittest.TestCase):
     def test_forced_action_wins(self):
         s = state()
         s.account.upgrades['Salesman'] = 5
-        actions = candidates(s, 'xp_grind_1', ROUTE, PRICES, DATA)
+        actions = [a for a in candidates(s, 'xp_grind_1', ROUTE, PRICES, DATA) if a.name != DAILIES]
         action, why = select_next(s, 'xp_grind_1', actions, {'money': 1e6}, ModelContext(DATA), ROUTE, PRICES)
         self.assertEqual((action.name, action.level), ('Salesman', 6))
 

@@ -320,6 +320,83 @@ class AutomationWebTests(unittest.TestCase):
         self.assertIn('That boost order was not understood.', page)
         self.handler.automation = None
 
+    def test_daily_vote_and_reserve_lines(self):
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc)
+
+        def iso(**delta):
+            return (now + timedelta(**delta)).isoformat()
+        base = {'claim': True, 'last_claim': None, 'next_due': None, 'streak': None, 'due': False, 'note': ''}
+        vote = {'voted_at': None, 'next_at': None, 'available': True}
+
+        def page(daily=None, vote=vote, reserve=None, duplicator=None):
+            boosts = {**self.boosts_status(), 'reserve': reserve, 'duplicator': duplicator}
+            return render_panel(self.run_status(boosts=boosts, daily=daily, vote=vote))
+        due = page({**base, 'due': True})
+        self.assertIn('Daily: due', due)
+        self.assertIn('Stop claiming daily', due)
+        self.assertNotIn('>Claim daily<', due)
+        done = page({**base, 'last_claim': iso(minutes=-125), 'next_due': iso(hours=20), 'streak': 9})
+        self.assertIn('Daily: claimed 2h 5m ago (streak 9)', done)
+        self.assertIn('Daily: next in 21h 14m', page({**base, 'next_due': iso(hours=21, minutes=14, seconds=30)}))
+        off = page({**base, 'claim': False, 'due': True})
+        self.assertIn('Claim daily', off)
+        self.assertNotIn('Stop claiming daily', off)
+        self.assertIn('Daily: not claimed by the run', off)
+        self.assertNotIn('Daily: due', off)
+        self.assertIn('Daily: claimed 2h 5m ago', page(
+            {**base, 'claim': False, 'last_claim': iso(minutes=-125), 'next_due': iso(hours=20), 'streak': 9}))
+        self.assertIn('Waiting for the next level', page({**base, 'note': 'Waiting for the next level'}))
+        self.assertIn('Daily failed: &lt;b&gt;', page({**base, 'note': 'Daily failed: <b>'}))
+        self.assertIn('Vote: available', due)
+        self.assertIn('I voted', due)
+        self.assertIn('Vote on top.gg in the charm setup: vote crates are half charms.', due)
+        waiting = page(base, vote={'voted_at': iso(hours=-5), 'next_at': iso(hours=7, minutes=12, seconds=30),
+                                   'available': False})
+        self.assertIn('Vote: in 7h 12m', waiting)
+        self.assertNotIn('I voted', waiting)
+        self.assertNotIn('Saving', due)
+        self.assertIn('Saving 250 Emerald Fish for Duplicator 3', page(base, reserve={'emerald': 250, 'level': 3}))
+        self.assertNotIn('turn on Follow the plan', page(base, reserve={'emerald': 250, 'level': 3}))
+        hint = page(base, duplicator={'emerald': 250, 'level': 3})
+        self.assertIn('Duplicator 3 costs 250 Emerald Fish: turn on Follow the plan to buy it', hint)
+        self.assertNotIn('Saving', hint)
+        today = now.date().isoformat()
+        unclear = page({**base, 'unknown_day': today, 'next_due': iso(hours=5, minutes=3, seconds=30)})
+        self.assertIn('Daily: reply unclear, next try in 5h 3m', unclear)
+        self.assertNotIn('reply unclear', page({**base, 'unknown_day': '2020-01-01',
+                                                 'next_due': iso(hours=5, minutes=3, seconds=30)}))
+        self.assertNotIn('reply unclear', page({**base, 'unknown_day': today, 'claim': False,
+                                                 'next_due': iso(hours=5)}))
+
+    def test_run_tab_without_daily_vote_or_reserve(self):
+        page = render_panel(self.run_status(boosts=self.boosts_status()))
+        self.assertNotIn('Daily:', page)
+        self.assertNotIn('Saving', page)
+        self.assertNotIn('Duplicator', page)
+
+    def test_daily_and_voted_post_actions(self):
+        calls = []
+
+        class Fake:
+            def set_claim_daily(self, on):
+                calls.append(('daily', on))
+
+            def mark_voted(self):
+                calls.append(('voted',))
+
+            def status(self):
+                return AutomationWebTests.run_status()
+
+            def __getattr__(self, name):
+                return lambda *args, **kwargs: None
+        self.handler.automation = Fake()
+        self.post(action='daily', on='1')
+        self.post(action='daily', on='0')
+        self.post(action='voted')
+        self.assertEqual(calls, [('daily', True), ('daily', False), ('voted',)])
+        self.handler.automation = None
+
     def test_a_stale_resume_never_ends_a_newer_pause(self):
         # A resume sent again later (a reload, a restored tab) belongs to an earlier pause: the run stays paused.
         self.post(action='start', mode='simulation', max_trips='1000', max_minutes='5')

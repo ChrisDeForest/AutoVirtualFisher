@@ -383,8 +383,14 @@ class DiscordTransport:
                     if target is not None:
                         self.driver.click(target, self.cancelled.is_set)
                         return DispatchReceipt(intent.action_id, self.utc().isoformat(), 'Sell button clicked')
-                    self.driver.dispatch_action(command_line(action), action.amount if action.act == 'buy' else None,
-                                                self.cancelled.is_set, before=before)
+                    line = command_line(action)
+                    if ' ' not in line:
+                        # No option to fill (/daily): sent like a read, so Enter waits for VF's own picker row and
+                        # a miss refuses with nothing sent.
+                        self.driver.dispatch(line, self.cancelled.is_set, before=before)
+                    else:
+                        self.driver.dispatch_action(line, action.amount if action.act == 'buy' else None,
+                                                    self.cancelled.is_set, before=before)
                     return DispatchReceipt(intent.action_id, self.utc().isoformat(), 'Action command submitted')
                 self.driver.dispatch(COMMANDS[intent.kind], self.cancelled.is_set, before=before)
                 return DispatchReceipt(intent.action_id, self.utc().isoformat(), 'UI command submitted')

@@ -159,7 +159,8 @@ def candidates(state, phase_name, route, prices, data):
     boat = _next_boat(state, prices)
     if boat:
         pool.append(boat)
-    return forced + pool
+    dailies = _upgrade(state, 'Better Dailies', prices, None, 'Better Dailies: bigger daily rewards', True)
+    return ([dailies] if dailies else []) + forced + pool
 
 
 def apply(state, action, data):

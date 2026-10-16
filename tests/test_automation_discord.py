@@ -318,6 +318,15 @@ class DiscordTests(unittest.TestCase):
         replies = self.transport.poll() or self.transport.poll()
         self.assertEqual([(r.correlation, r.text) for r in replies], [('b1', 'v You switched to the Lava Rod.')])
 
+    def test_a_daily_is_sent_like_a_read_through_the_verified_picker(self):
+        # Final review: an option-less action must wait for VF's picker row, never the option-box check.
+        from src.actions import Action
+        self.intent = ActionIntent('b1', 'act', self.transport.context_id, self.now.isoformat(), 'action',
+                                   arguments=(Action('daily').to_dict(),))
+        self.driver.dispatch_action = lambda *args, **kwargs: self.fail('dispatch_action used for /daily')
+        self.send()
+        self.assertEqual(self.driver.sent, ['/daily'])
+
     def test_a_sell_is_answered_only_once_the_catch_says_it_was_sold(self):
         # Live 2026-10-14: the Sell click restyled the catch's buttons, and that catch was taken as the reply.
         from src.actions import Action

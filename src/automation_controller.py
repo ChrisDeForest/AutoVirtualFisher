@@ -28,6 +28,7 @@ from .automation_policy import next_action
 from .automation_state import AutomationState, apply_observation
 from .boost_policy import BOOSTS, COST, DEFAULT_ORDER, LABEL, buys, clean_order, seconds_from_note, wanted
 from .catch_check import load_fish_reference
+from .daily_policy import DailyState, apply as daily_apply, due as daily_due, held_for_level
 from .fishing_sessions import load_sessions
 from .game_model import cooldown
 from .game_model_data import GameDataError, load_game_data
@@ -110,6 +111,12 @@ FISHING_FOR = 1800
 # Follow the plan: plans are otherwise only asked for after a read, so something that became affordable while
 # fishing would wait for the next resync (100 trips). PlanRunner's 30 s spacing still applies.
 FOLLOW_PLAN_TRIPS = 10
+# The vote reminder (part 8): top.gg allows a vote every 12 hours.
+VOTE_EVERY = timedelta(hours=12)
+# Seconds before a daily held for a milestone level is checked again (each check deep-copies the dashboard).
+DAILY_HOLD_RECHECK = 30
+# Duplicator's unlock level when the plan's price table does not give it (prices.json special.Duplicator.unlock).
+DUPLICATOR_UNLOCK = 500
 
 
 _REFERENCES = []
@@ -222,15 +229,30 @@ def _good_plan(plan):
 
 
 def _load_settings(path):
-    """The run settings left for this account (Follow the plan, Keep boosts running, the boost order); the defaults
-    when never set or unreadable."""
+    """The run settings left for this account (Follow the plan, Keep boosts running, the boost order, Claim daily
+    and the daily's state, the last vote); the defaults when never set or unreadable. Claim daily is on by default."""
     try:
         saved = json.loads(Path(path).read_text(encoding='utf-8')) if path else {}
         order = saved.get('boost_order')
+        daily = saved.get('daily')
         return {'follow_plan': bool(saved.get('follow_plan')), 'keep_boosts': bool(saved.get('keep_boosts')),
-                'boost_order': clean_order(order if isinstance(order, list) else ())}
+                'boost_order': clean_order(order if isinstance(order, list) else ()),
+                # Off only when saved off: bool('false') would read a hand-edited "false" as on.
+                'claim_daily': saved.get('claim_daily') not in (False, 'false'),
+                'daily': DailyState.from_dict(daily) if isinstance(daily, dict) else DailyState(),
+                'voted_at': _moment(saved.get('voted_at'))}
     except (OSError, ValueError, AttributeError, TypeError):
-        return {'follow_plan': False, 'keep_boosts': False, 'boost_order': DEFAULT_ORDER}
+        return {'follow_plan': False, 'keep_boosts': False, 'boost_order': DEFAULT_ORDER, 'claim_daily': True,
+                'daily': DailyState(), 'voted_at': None}
+
+
+def _moment(text):
+    """A saved UTC time; None when missing, unreadable or without a time zone."""
+    try:
+        moment = datetime.fromisoformat(text) if isinstance(text, str) else None
+    except ValueError:
+        return None
+    return moment if moment is not None and moment.tzinfo is not None else None
 
 
 class AutomationController:
@@ -275,6 +297,10 @@ class AutomationController:
         self.emerald, self.emerald_at = None, None    # Emerald Fish on hand, and when it was read
         self.boosts_read_at = None
         self.boost_note = ''           # why the keeper last failed
+        # /daily and the vote reminder (part 8), saved beside the other settings so a restart never claims twice.
+        self.claim_daily, self.daily, self.voted_at = settings['claim_daily'], settings['daily'], settings['voted_at']
+        self.daily_note = ''           # why claiming the daily last failed or waits
+        self.daily_hold_until = 0.0    # monotonic: the level hold is not checked again before then
         self.boost_asked = {}          # read -> when the keeper (or the run's start) last queued it
         self.start_reads = set()       # the run start's reads still to come in
         self.quests, self.quests_read_at = QuestTracker(), None
@@ -511,6 +537,7 @@ class AutomationController:
                                  'held': [{'label': label, 'until': until} for label, until in self.held.items()
                                           if until > self.state.trips]},
                     'boosts': self._boost_status(), 'quests': self._quest_status(),
+                    'daily': self._daily_status(), 'vote': self._vote_status(),
                     'startup': {'failures': dict(self.startup_failures),
                                 'problems': dict(self.startup_problems),
                                 'confirmed_fields': dict(self.state.startup_observed_at)}}
@@ -631,6 +658,11 @@ class AutomationController:
                 self._keep_boosts()
             except Exception as error:   # the boost keeper never stops a run
                 self.boost_note = f'Boosts failed: {error}'
+            try:
+                self.daily_note = ''
+                self._claim_daily()
+            except Exception as error:   # claiming the daily never stops a run
+                self.daily_note = f'Daily failed: {error}'
             if self.paused:
                 return
             # A queued action goes in the gap between trips, without waiting for the fishing cooldown; after one
@@ -818,13 +850,27 @@ class AutomationController:
             self.boost_order = clean_order(order)
             self._save_settings()
 
+    def set_claim_daily(self, on):
+        """Turn Claim daily on or off; saved for this account. A /daily already queued stays queued."""
+        with self.lock:
+            self.claim_daily = bool(on)
+            self._save_settings()
+
+    def mark_voted(self):
+        """The person voted on top.gg: the reminder comes back VOTE_EVERY later. Saved for this account."""
+        with self.lock:
+            self.voted_at = self.utc()
+            self._save_settings()
+
     def _save_settings(self):
         """Every run setting at once, so saving one never drops another."""
         if self.executor_path:
             try:
                 write_json_atomically(self.executor_path.parent, self.executor_path.stem,
                                       {'follow_plan': self.follow_plan, 'keep_boosts': self.keep_boosts,
-                                       'boost_order': list(self.boost_order)})
+                                       'boost_order': list(self.boost_order), 'claim_daily': self.claim_daily,
+                                       'daily': self.daily.to_dict(),
+                                       'voted_at': self.voted_at.isoformat() if self.voted_at else None})
             except OSError as error:
                 self._safe_event('state_not_saved', None, reason=str(error))
 
@@ -914,6 +960,8 @@ class AutomationController:
         self._log_action(label, result, note)
         if action.shop == 'boosts':
             self._boost_result(action, result, note)    # the keeper's own holds, never Follow the plan's
+        elif action.act == 'daily':
+            self._daily_result(result, note)            # its own schedule, never Follow the plan's holds
         else:
             self.recent[label] = self.state.trips     # Follow the plan leaves it a while, whatever the reads show
             if result in ('failed', 'unknown') and action.act != 'sell':
@@ -1196,9 +1244,87 @@ class AutomationController:
         held = {name for name, until in self.boost_held.items() if until > now}
         held |= {name for name, at in self.boost_bought.items() if (now - at).total_seconds() < BUY_SPACING}
         expiries = {name: end.timestamp() for name, end in self.boost_expiry.items()}
-        for name in buys(self._boosts_wanted(now), self.boost_order, expiries, now.timestamp(), self.emerald, held):
+        # Saving for the next Duplicator level (part 8): boosts spend only the Emerald Fish above its price. Only
+        # while following the plan: nothing else buys Duplicator.
+        reserve = self._duplicator_reserve() if self.follow_plan else None
+        emerald = self.emerald if reserve is None else max(0, self.emerald - reserve[0])
+        for name in buys(self._boosts_wanted(now), self.boost_order, expiries, now.timestamp(), emerald, held):
             self._enqueue(f'Boost: {LABEL[name]}', [{'act': 'buy', 'name': name, 'shop': 'boosts',
                                                      'price': COST[name]}])
+
+    def _duplicator_reserve(self):
+        """(price, level) of the next Duplicator level, from /shop special, or from the plan's special price table
+        when its price was not read; None when Duplicator is not listed or is maxed, or when the synced profile is
+        below its unlock level (500): the /shop special read from before a prestige still lists it. When the level is
+        not known yet, a listed Duplicator keeps its reserve."""
+        values = ((self.account.get('sections') or {}).get('shop_special') or {}).get('values') or {}
+        item = (values.get('items') or {}).get('Duplicator')
+        if not item or item.get('level') is None:
+            return None
+        table = (((self.plan_data or {}).get('prices') or {}).get('special') or {}).get('Duplicator') or {}
+        profile_level = self._synced()['profile'].get('level')
+        if profile_level is not None and profile_level < (table.get('unlock') or DUPLICATOR_UNLOCK):
+            return None
+        level, top, price = item['level'], item.get('max'), item.get('price')
+        if top is not None and level >= top:
+            return None
+        if price is None:
+            prices = table.get('prices') or []
+            if level >= len(prices):
+                return None
+            price = prices[level]
+        return price, level + 1
+
+    def _claim_daily(self):
+        """Queue /daily in a gap between trips once it is due: nothing else queued, pending or uncertain, the run's
+        start reads in, and no milestone level (20, 50, 100) within a few minutes."""
+        if not self.claim_daily or 'act' not in self.config.capabilities or not self.running or self.paused \
+                or self.captcha or self.prestige_ready:
+            return
+        if self.queue or self.state.pending is not None or self.state.uncertain or self.start_reads:
+            return
+        if not daily_due(self.daily, self.utc()):
+            return
+        # The hold needs an XP rate, so it cannot apply at the run's start (no trips yet): a daily due then is sent.
+        # Once held, the dashboard (a deep copy) is not worked out again for DAILY_HOLD_RECHECK seconds.
+        if self.monotonic() < self.daily_hold_until:
+            self.daily_note = 'Waiting for the next level'
+            return
+        dashboard = self._dashboard()     # only once due
+        if held_for_level(dashboard['profile'].get('level') or 0, dashboard.get('next_level_in_seconds')):
+            self.daily_hold_until = self.monotonic() + DAILY_HOLD_RECHECK
+            self.daily_note = 'Waiting for the next level'
+            return
+        self._enqueue('Claim daily', [{'act': 'daily'}])
+
+    def _daily_result(self, result, note):
+        """A /daily reply (or none): when it is due next. Saved at once, so a restart never claims twice."""
+        try:
+            # A claim counts from when /daily was sent: a reply read just after 00:00 UTC is the day before's.
+            sent = _moment(self.sent_at[1]) if self.sent_at is not None else None
+            self.daily = daily_apply(self.daily, result, note, self.utc(), sent_at=sent)
+        except Exception as error:   # never stops a run
+            self.daily_note = f'Daily failed: {error}'
+            return
+        self._save_settings()
+
+    def _daily_status(self):
+        try:
+            is_due = daily_due(self.daily, self.utc())
+        except Exception as error:   # never breaks the page
+            is_due = False
+            self.daily_note = self.daily_note or f'Daily failed: {error}'
+        daily = self.daily
+        return {'claim': self.claim_daily, 'last_claim': daily.last_claim.isoformat() if daily.last_claim else None,
+                'next_due': daily.next_due.isoformat() if daily.next_due else None, 'streak': daily.streak,
+                'due': is_due, 'note': self.daily_note or '',
+                'unknown_day': daily.unknown_day.isoformat() if daily.unknown_day else None}
+
+    def _vote_status(self):
+        next_at = self.voted_at + VOTE_EVERY if self.voted_at else None
+        return {'voted_at': self.voted_at.isoformat() if self.voted_at else None,
+                'next_at': next_at.isoformat() if next_at else None,
+                'available': next_at is None or self.utc() >= next_at}
 
     def _due(self, kind, now=None):
         """Queue a read the keeper needs: only one the run can make, not already queued or set aside (retried by
@@ -1324,6 +1450,11 @@ class AutomationController:
         except Exception as error:   # never breaks the page
             want, per_hour = set(), None
             self.boost_note = self.boost_note or f'Boosts failed: {error}'
+        try:
+            next_level = self._duplicator_reserve()
+        except Exception as error:   # never breaks the page
+            next_level = None
+            self.boost_note = self.boost_note or f'Boosts failed: {error}'
         return {'keep': self.keep_boosts, 'order': list(self.boost_order),
                 'running': {name: int((end - now).total_seconds()) for name, end in self.boost_expiry.items()
                             if end > now},
@@ -1331,7 +1462,12 @@ class AutomationController:
                 'held': [name for name in self.boost_order if name not in self.boost_poor
                          and self.boost_held.get(name) is not None and self.boost_held[name] > now],
                 'emerald': self.emerald, 'per_hour': None if per_hour is None else round(per_hour, 1),
-                'wanted': [name for name in self.boost_order if name in want], 'note': self.boost_note or ''}
+                'wanted': [name for name in self.boost_order if name in want], 'note': self.boost_note or '',
+                'reserve': {'emerald': next_level[0], 'level': next_level[1]}
+                if next_level is not None and self.follow_plan else None,
+                # Buyable but not saved for: Follow the plan is off, so nothing would buy it.
+                'duplicator': {'emerald': next_level[0], 'level': next_level[1]}
+                if next_level is not None and not self.follow_plan else None}
 
     def _quest_status(self):
         try:

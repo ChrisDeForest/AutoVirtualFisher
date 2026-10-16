@@ -76,6 +76,7 @@ class SimulationTransport:
         self.next_allowed = float('-inf')
         self.totals = {'trips': 0, 'catches': {}, 'xp': 0}
         self.boosts = {}                # emerald boost -> monotonic time it ends (shown by /boosts)
+        self.daily_ready, self.daily_streak = float('-inf'), 0   # when /daily can be claimed again; its streak
 
     def inspect_context(self) -> ContextStatus:
         return self.context
@@ -180,6 +181,14 @@ class SimulationTransport:
                     'Use /bait to see all bait you currently have.')
         if action.act == 'buy':
             return f'v You just bought {action.name}' + (f' level {action.level}!' if action.level else '!')
+        if action.act == 'daily':
+            now = self.monotonic()
+            if now < self.daily_ready:
+                left = int(self.daily_ready - now)
+                return f':x: Daily reward on cooldown! ({left // 3600}h {left % 3600 // 60}m {left % 60}s)'
+            self.daily_ready, self.daily_streak = now + 86400, self.daily_streak + 1
+            return ('Daily reward\nMedium Exotic crate!\nYou gained:\n+38 :diamond_fish:\n\n'
+                    f'Streak: {self.daily_streak}\nBest streak: {self.daily_streak}')
         if action.act == 'sell':
             return f'{self.identity.username}\nv You sold your entire inventory for $1,000.\nYou now have $2,000!'
         if action.act == 'rod':

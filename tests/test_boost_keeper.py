@@ -48,6 +48,7 @@ class BoostKeeperTests(unittest.TestCase):
         self.controller = AutomationController(self.sim, config, AutomationJournal(self.journal_root), self.fishing,
                                                self.review, monotonic=self.clock.monotonic, utc=self.clock.utc,
                                                state_path=self.state_path, plan_spawn=lambda work: None)
+        self.controller.claim_daily = False    # /daily (on by default) is tested in test_daily_controller
         return self.controller
 
     def run_for(self, seconds):
@@ -400,7 +401,7 @@ class BoostKeeperTests(unittest.TestCase):
         status = self.make().status()
         self.assertEqual(status['boosts'], {'keep': False, 'order': ['Fish20m', 'Treasure20m', 'Auto30m'],
                                             'running': {}, 'held': [], 'emerald': None, 'per_hour': None,
-                                            'wanted': [], 'note': ''})
+                                            'wanted': [], 'note': '', 'reserve': None, 'duplicator': None})
         self.assertEqual(status['quests'], {'daily': [], 'special': [], 'resets_in': None, 'boost_minutes': 0,
                                             'read_at': None})
 

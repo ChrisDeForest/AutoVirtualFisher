@@ -540,6 +540,10 @@ class Handler(BaseHTTPRequestHandler):
                 current.set_follow(fields.get('on', ['0'])[0] == '1')
             elif action == 'boosts' and current:
                 current.set_boosts(fields.get('on', ['0'])[0] == '1')
+            elif action == 'daily' and current:
+                current.set_claim_daily(fields.get('on', ['0'])[0] == '1')
+            elif action == 'voted' and current:
+                current.mark_voted()
             elif action == 'boost_order' and current:
                 from .boost_policy import BOOSTS
                 order = [name for name in fields.get('order', [''])[0].split(',') if name in BOOSTS]

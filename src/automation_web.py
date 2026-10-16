@@ -1178,12 +1178,65 @@ def _boosts_box(boosts):
     line = ('Emerald Fish: not read yet' if emerald is None else f'Emerald Fish: {emerald:,}'
             + (f' · {rate:,.1f} an hour' if rate is not None else ''))
     wanted = [BOOST_LABEL.get(name, name) for name in boosts.get('wanted') or ()]
+    reserve = boosts.get('reserve')
+    duplicator = boosts.get('duplicator')
     body = (f'<div class="actions">{toggle}</div>'
             f'<ol class="boost-order" data-key="boost-order">{"".join(_boost_tile(n, order, boosts) for n in order)}</ol>'
             f'<p class="note">{escape(line)}</p>'
             + (f'<p class="note">Wanted now: {escape(", ".join(wanted))}</p>' if wanted else '')
-            + (f'<p class="note">{escape(boosts["note"])}</p>' if boosts.get('note') else ''))
+            + (f'<p class="note">{escape(boosts["note"])}</p>' if boosts.get('note') else '')
+            + (f'<p class="note">Saving {reserve["emerald"]:,} Emerald Fish for Duplicator {reserve["level"]}</p>'
+               if reserve else '')
+            + (f'<p class="note">Duplicator {duplicator["level"]} costs {duplicator["emerald"]:,} Emerald Fish: turn on '
+               'Follow the plan to buy it</p>' if duplicator else ''))
     return _box('Boosts', body, note='Drag a tile, or use the arrows, to set which boost is bought first.')
+
+
+def _seconds_until(stamp, now):
+    try:
+        moment = datetime.fromisoformat(stamp)
+    except (TypeError, ValueError):
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return (moment - now).total_seconds()
+
+
+def _daily_line(daily, now):
+    claimed = _seconds_until(daily.get('last_claim'), now)
+    until = _seconds_until(daily.get('next_due'), now)
+    streak = f' (streak {daily["streak"]})' if daily.get('streak') is not None else ''
+    since = f'claimed {_hours_minutes(-claimed)} ago{streak}' if claimed is not None else None
+    if not daily.get('claim'):
+        return f'Daily: {since or "not claimed by the run"}'
+    if daily.get('due'):
+        return 'Daily: due'
+    if daily.get('unknown_day') == now.date().isoformat() and until is not None and until > 0:
+        return f'Daily: reply unclear, next try in {_hours_minutes(until)}'
+    if since and (until is None or until > 0):
+        return f'Daily: {since}'
+    if until is not None and until > 0:
+        return f'Daily: next in {_hours_minutes(until)}'
+    return 'Daily: not read yet'
+
+
+def _daily_vote_box(daily, vote):
+    now = datetime.now(timezone.utc)
+    parts = []
+    if daily:
+        toggle = (_button('daily', 'Stop claiming daily', secondary=True, extra={'on': '0'}) if daily.get('claim')
+                  else _button('daily', 'Claim daily', extra={'on': '1'}))
+        parts.append(f'<div class="actions">{toggle}</div><p class="note">{escape(_daily_line(daily, now))}</p>')
+        if daily.get('note'):
+            parts.append(f'<p class="note">{escape(daily["note"])}</p>')
+    if vote:
+        wait = _seconds_until(vote.get('next_at'), now)
+        if vote.get('available') or wait is None or wait <= 0:
+            parts.append(f'<div class="actions">{_button("voted", "I voted")}</div><p class="note">Vote: available</p>')
+        else:
+            parts.append(f'<p class="note">Vote: in {_hours_minutes(wait)}</p>')
+        parts.append('<p class="note">Vote on top.gg in the charm setup: vote crates are half charms.</p>')
+    return _box('Daily and vote', ''.join(parts)) if parts else ''
 
 
 def _quests_box(quests):
@@ -1285,12 +1338,13 @@ def _run_tab(status, mode):
                      if recent else '<p class="empty">No trips yet.</p>')
 
     boosts_box = _boosts_box(status['boosts']) if status.get('boosts') else ''
+    daily_box = _daily_vote_box(status.get('daily'), status.get('vote'))
     quests_box = _quests_box(status['quests']) if status.get('quests') else ''
     run_tab = (f'{_level_line(profile, dashboard)}'
                f'<div class="boxes">{profile_box}{buffs_box}{run_box}'
                # Rewards takes a narrow share of its row so the finds tables (charms most of all) fit without scrolling.
                f'<div class="rewards-row">{rewards_box}{_finds_box(dashboard.get("finds") or {}, dashboard.get("charms"))}'
-               f'</div>{_pets_box(status.get("account"), profile)}{boosts_box}{quests_box}{inventory_box}{trips_box}'
+               f'</div>{_pets_box(status.get("account"), profile)}{boosts_box}{daily_box}{quests_box}{inventory_box}{trips_box}'
                f'{_account_box(status.get("account"))}</div>')
     return run_tab
 
