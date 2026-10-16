@@ -56,6 +56,11 @@ from .review_queue import add_item
 COOLDOWN_REPLY = re.compile(r'You must wait\s+([\dOIl|.,]+)\s*(?:s|seconds?)\b\.?\s*before fishing again', re.I)
 
 
+# The same reply states the cooldown: "Your cooldown: 2.0s" (live, 2026-10-16). The game's own number corrects one
+# read too short from /buffs. Only as the game writes it, with the decimal point (see startup_fields).
+COOLDOWN_STATED = re.compile(r'Your cooldown:\s*(\d+\.\d+)\s*s\b', re.I)
+
+
 def _cooldown_wait(match):
     """Seconds the game still asked to wait, with OCR's O for 0 and I, l or | for 1; 0 when unreadable."""
     try:
@@ -1017,6 +1022,11 @@ class AutomationController:
         now = self.monotonic()
         if result == 'cooldown':
             self.ready_at = now + _cooldown_wait(wait) + self.config.cooldown_margin + self.jitter
+            told = COOLDOWN_STATED.search(observation.text)
+            if told and float(told[1]) > 0 and float(told[1]) != self.state.cooldown_seconds:
+                self._safe_event('cooldown_corrected', action_id, previous=self.state.cooldown_seconds,
+                                 cooldown=float(told[1]))
+                self.state = replace(self.state, cooldown_seconds=float(told[1]))
         elif result == 'unreadable' and (kind in ACCOUNT_READS or kind in PAGE_TWO):
             # Fishing never waits on it; the whole read (both pages) is tried again later.
             self.state = replace(self.state, refresh_due=tuple(k for k in self.state.refresh_due if k != kind))
