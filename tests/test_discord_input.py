@@ -195,6 +195,18 @@ class NativeDispatchTests(unittest.TestCase):
                          [('text', '/buy magic bait'), ('key', 9), ('key', 9), ('key', 9), ('text', '500'), ('key', 13)])
 
     @patch('src.discord_input.time.sleep')
+    def test_an_option_read_with_digit_lookalikes_still_counts(self, sleep):
+        # Live (2026-10-16): OCR read the box's "auto30m" as "aut030m" (and "aut030ml") at every zoom, so every
+        # /buy auto30m was cleared; fish20m and treasure20m have no o beside a digit and went through.
+        driver = self.driver([
+            {'boxes': [box('Message @Virtual Fisher', 800)]},
+            {'boxes': [box('[buy item aut030ml', 800)]},
+            {'boxes': [box('Message @Virtual Fisher', 800)]},
+        ])
+        driver.dispatch_action('/buy auto30m', None, lambda: False)
+        self.assertEqual(driver.events[-1], ('key', 13))
+
+    @patch('src.discord_input.time.sleep')
     def test_an_unfilled_option_is_cleared_and_never_sent(self, sleep):
         driver = self.driver([{'boxes': [box('Message @Virtual Fisher', 800)]}] + [{'boxes': [box('/buy', 800)]}] * 5)
         with self.assertRaises(NotDispatched): driver.dispatch_action('/buy salesman', None, lambda: False)

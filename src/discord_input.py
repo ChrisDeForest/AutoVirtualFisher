@@ -17,6 +17,13 @@ EXTRA_ENTERS = 2
 # /fish has no options and keeps its pace (the user's choice): shorter gaps and one Enter more at most.
 FISH_GAP = 0.3
 FISH_EXTRA_ENTERS = 1
+# OCR confuses o with 0 and l, I, | with 1 in the option box (live, 2026-10-16: "auto30m" read as "aut030m" at every
+# zoom, so every /buy auto30m was cleared). Typed value and screen are compared with these read as one.
+_LOOKALIKES = str.maketrans({'o': '0', 'l': '1', 'i': '1', '|': '1'})
+
+
+def _lookalike(text):
+    return text.casefold().translate(_LOOKALIKES)
 
 
 class WindowsDiscordDriver:
@@ -274,8 +281,8 @@ class WindowsDiscordDriver:
             filled = False
             for _ in range(5):
                 time.sleep(0.3)
-                shown = ' '.join(b['text'] for b in self._frame(cancelled).get('boxes', [])).casefold()
-                filled = value.casefold() in shown and (not amount or str(amount) in shown)
+                shown = _lookalike(' '.join(b['text'] for b in self._frame(cancelled).get('boxes', [])))
+                filled = _lookalike(value) in shown and (not amount or _lookalike(str(amount)) in shown)
                 if filled:
                     break
             if not filled:
