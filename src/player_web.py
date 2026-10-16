@@ -752,6 +752,24 @@ def greeting(port, account=None, hour=None, tip=None):
     ))
 
 
+def warm_recovery(live_root, account):
+    """Read the saved account's journal once in the background, so the first Start finds it cached (a cold read
+    took 6.4 s live on 2026-10-16). A Start meanwhile waits for this read instead of repeating it."""
+    if not account:
+        return None
+    journal = AutomationJournal(Path(live_root) / account_key(account) / 'journal')
+
+    def warm():
+        try:
+            journal.recover()
+        except Exception:
+            pass   # the Start reads it then
+
+    thread = threading.Thread(target=warm, name='journal warm-up', daemon=True)
+    thread.start()
+    return thread
+
+
 def main():
     parser = argparse.ArgumentParser(description='Open the local player logbook')
     parser.add_argument('--port', type=int, default=8765)
@@ -771,6 +789,7 @@ def main():
                 encoding='utf-8')).get('account')
         except (OSError, ValueError, AttributeError):
             account = None   # the greeting goes without a name
+        warm_recovery(Handler.automation_live_root, account)
         print(greeting(server.server_port, account), flush=True)
         try:
             server.serve_forever()

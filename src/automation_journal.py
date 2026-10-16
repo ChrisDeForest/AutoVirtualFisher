@@ -5,6 +5,7 @@ tells the controller which actions were never handed over (safe to forget), whic
 recorded outcome (uncertain: never resent automatically), and which were acknowledged but not yet copied into
 the logbook (re-projected idempotently).
 """
+import copy
 import json
 import os
 from pathlib import Path
@@ -20,6 +21,9 @@ STATUS = {'intent': 'intended', 'dispatching': 'dispatching', 'dispatched': 'dis
           'acknowledged': 'acknowledged', 'projected': 'projected', 'uncertain': 'uncertain',
           'abandoned': 'abandoned', 'resolved': 'resolved'}
 UNRESOLVED = ('dispatching', 'dispatched', 'uncertain')
+# journal root -> run name -> (its files' names, sizes and times, its share of recover()); rebuilt when they change.
+_RECOVERY = {}
+_RECOVERY_LOCK = threading.Lock()
 
 
 class AutomationJournal:
@@ -97,10 +101,20 @@ class AutomationJournal:
             events.append(event)
         return events, warnings
 
-    def recover(self) -> dict:
-        events, warnings = self.events()
-        actions = {}
-        for event in events:
+    def _fold_run(self, folder):
+        """One run's share of recover(): per action, its last status and the fields its events set, in order."""
+        actions, checked, warnings, count = {}, set(), [], 0
+        for path in sorted(folder.glob('*.json'), key=lambda path: path.name):
+            try:
+                event = json.loads(path.read_text(encoding='utf-8'))
+                if event.get('schema_version') != JOURNAL_SCHEMA_VERSION or not event.get('type'):
+                    raise ValueError('not a journal event')
+            except (OSError, json.JSONDecodeError, ValueError) as error:
+                warnings.append(f'{path.parent.name}/{path.name}: {error}')
+                continue
+            count += 1
+            if event['type'] == 'journal_damage_resolved':
+                checked.update(event.get('files', []))
             action_id = event.get('action_id')
             if not action_id or event['type'] not in STATUS:
                 continue
@@ -109,12 +123,44 @@ class AutomationJournal:
             for field in ('intent', 'result', 'tally', 'reason', 'outcome', 'observation_id', 'sent_at'):
                 if field in event:
                     action[field] = event[field]
+        return {'actions': actions, 'checked': checked, 'warnings': warnings, 'events': count}
+
+    def recover(self) -> dict:
+        """What every action's events add up to, over all runs in order. A run whose files are unchanged (names,
+        sizes, modification times) is taken from the last recovery in this process instead of read again: every
+        Start read the whole journal (90,374 events, 8.9 s live on 2026-10-16, longer each day)."""
+        runs = []
+        if self.root.exists():
+            with os.scandir(self.root) as scan:
+                folders = sorted((entry.name, entry.path) for entry in scan if entry.is_dir())
+            with _RECOVERY_LOCK:
+                cache = _RECOVERY.setdefault(str(self.root.resolve()), {})
+                for name, path in folders:
+                    with os.scandir(path) as scan:
+                        signature = tuple(sorted((entry.name, entry.stat().st_size, entry.stat().st_mtime_ns)
+                                                 for entry in scan if entry.name.endswith('.json')))
+                    cached = cache.get(name)
+                    if cached is None or cached[0] != signature:
+                        cached = cache[name] = (signature, self._fold_run(Path(path)))
+                    runs.append(cached[1])
+                for name in set(cache) - {name for name, _ in folders}:
+                    del cache[name]
+        actions, checked, warnings, count = {}, set(), [], 0
+        for run in runs:
+            for action_id, info in run['actions'].items():
+                action = actions.setdefault(action_id, {'run_id': info['run_id']})
+                action.update({key: value for key, value in info.items() if key != 'run_id'})
+            checked |= run['checked']
+            warnings += run['warnings']
+            count += run['events']
         by_status = lambda *statuses: [action for action, info in actions.items() if info['status'] in statuses]
         # Unreadable records not yet checked by a person. Until they are, nothing in them can be ruled out.
-        checked = {name for event in events if event['type'] == 'journal_damage_resolved'
-                   for name in event.get('files', [])}
         damaged = [warning.split(':', 1)[0] for warning in warnings if warning.split(':', 1)[0] not in checked]
+        # Cached values are shared between recoveries: callers get their own copies of what they act on (never sent,
+        # unresolved, unprojected); the rest, only read, share their values.
+        acted = set(by_status('intended', 'acknowledged', *UNRESOLVED))
+        actions = {action_id: copy.deepcopy(info) if action_id in acted else info for action_id, info in actions.items()}
         return {'actions': actions, 'damaged': damaged, 'never_sent': by_status('intended'), 'unresolved': by_status(*UNRESOLVED),
                 'unprojected': [action for action in by_status('acknowledged')
                                 if actions[action].get('result') == 'trip'],
-                'events': len(events), 'warnings': warnings}
+                'events': count, 'warnings': warnings}
